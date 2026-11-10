@@ -1,0 +1,27 @@
+# .github/workflows/pr-evidence.yml (proposed; seconds, no checkout)
+# Checks the PR body has the classification block and an evidence table; posts nothing, just fails the check.
+name: pr-evidence
+on: { pull_request: { types: [opened, edited, synchronize, reopened] } }
+permissions: { pull-requests: read }
+jobs:
+  pr-evidence:
+    name: pr-evidence
+    # Runner class SMALL (D9, 0.1.21): the variable RUNS_ON_SMALL__<login of the person who triggered or re-ran the run> (JSON list
+    # of labels; repository level, or organization level where the plan shares it with private repos) places the job. No
+    # variable for that person = the job is SKIPPED (never a GitHub-hosted fallback), and merge.sh refuses a PR whose
+    # pr-evidence / policy-drift check was skipped: a placed person re-runs it (or edits/reopens the PR) to place it.
+    # A person who may use GitHub-hosted runners sets their variable to ["ubuntu-24.04"] explicitly.
+    if: ${{ vars[format('RUNS_ON_SMALL__{0}', github.triggering_actor)] != '' }}
+    runs-on: ${{ fromJSON(vars[format('RUNS_ON_SMALL__{0}', github.triggering_actor)] || '["unplaced"]') }}
+    timeout-minutes: 2
+    steps:
+      - env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          ok=1; B=$(printf '%s' "$BODY" | tr -d '\r')
+          [ "$(printf '%s\n' "$B" | grep -cE '^- Tier: (low|standard|high|emergency)[[:space:]]*$')" = 1 ] || { echo "::error::PR body must state exactly one tier: '- Tier: low|standard|high|emergency'"; ok=0; }
+          printf '%s\n' "$B" | grep -qE '^\| *Check *\| *Result' || { echo "::error::PR body lacks the evidence table"; ok=0; }
+          printf '%s\n' "$B" | grep -qiE 'head: `?[0-9a-f]{7,}' || { echo "::error::PR body lacks head SHA"; ok=0; }
+          printf '%s\n' "$B" | grep -qE '^## Acceptance criteria' || { echo "::error::PR body lacks '## Acceptance criteria' (core R11)"; ok=0; }
+          printf '%s\n' "$B" | grep -qE '^## Resources left' || { echo "::error::PR body lacks '## Resources left' (core R10)"; ok=0; }
+          test $ok = 1

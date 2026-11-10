@@ -1,0 +1,40 @@
+# .github/workflows/policy-drift.yml (proposed; ~1 minute on the smallest runner, no build)
+# Integrity check for the pinned policy, run ONLY when policy files change (ordinary PRs pay nothing). Fails when: the
+# manifest line is missing or its digest does not match the in-repo core copy; placeholders remain; an overlay tries to
+# override an R-rule or permits pushing to the default branch; PROFILE.md lacks required sections; a workflow's `runs-on` is
+# not a runner class or lacks its placement gate (D9: provider or machine label, `-latest`, a hosted default, a matrix-carried runner). It does NOT prove the
+# copy matches the published core (a PR can edit both); that is detected by `agent-rules/scripts/pin.py --check` from
+# the agent-rules checkout, which is part of the re-pin procedure.
+name: policy-drift
+on:
+  pull_request:
+    paths: ['AGENTS.md', '**/AGENTS.md', 'CLAUDE.md', '**/CLAUDE.md', 'GEMINI.md', '**/GEMINI.md', 'PROFILE.md', '.claude/**', '.codex/**', '.cursor/**', '.github/**', '.agent-rules/**', '.githooks/**']   # the set merge.sh requires policy-drift for
+permissions: { contents: read }
+concurrency:
+  group: drift-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  policy-drift:
+    name: policy-drift
+    # Runner class SMALL (D9, 0.1.21): the variable RUNS_ON_SMALL__<login of the person who triggered or re-ran the run> (JSON list
+    # of labels; repository level, or organization level where the plan shares it with private repos) places the job. No
+    # variable for that person = the job is SKIPPED (never a GitHub-hosted fallback), and merge.sh refuses a PR whose
+    # pr-evidence / policy-drift check was skipped: a placed person re-runs it (or edits/reopens the PR) to place it.
+    # A person who may use GitHub-hosted runners sets their variable to ["ubuntu-24.04"] explicitly.
+    if: ${{ vars[format('RUNS_ON_SMALL__{0}', github.triggering_actor)] != '' }}
+    runs-on: ${{ fromJSON(vars[format('RUNS_ON_SMALL__{0}', github.triggering_actor)] || '["unplaced"]') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }   # read-only job; no token left in .git/config
+      - name: Core present
+        run: |
+          # The core is materialized in the repo by agent-rules/scripts/pin.py. Private mirrors cannot be fetched with
+          # GITHUB_TOKEN from another repo, so the in-repo copy is the reference and its digest is checked against the
+          # manifest. Re-pinning (pin.py) is how a newer core arrives.
+          test -f .agent-rules/core.md || { echo "::error::.agent-rules/core.md missing: run agent-rules/scripts/pin.py"; exit 1; }
+          grep -qE 'policy: agent-rules/core@[0-9.x]+' AGENTS.md || { echo "::error::AGENTS.md has no policy manifest line"; exit 1; }
+      - name: Check digest, placeholders, sections, runner classes
+        env:
+          REPO_PRIVATE: ${{ github.event.repository.private }}   # GitHub's own visibility: a private repository may not claim `public: GitHub-hosted` (D9)
+        run: python3 -I .agent-rules/check.py --core .agent-rules/core.md --agents AGENTS.md --profile PROFILE.md --workflows .github/workflows
