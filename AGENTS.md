@@ -6,31 +6,40 @@ policy: agent-rules/core@0.1.x   ·   profile: PROFILE.md   ·   core-digest: 6e
 Read, in this order: (1) `.agent-rules/core.md` — the shared standard this repository follows; (2) `PROFILE.md`; (3) the sections below. Then classify the change (core R2) before editing anything.
 
 ## This repo
-{{ONE_OR_TWO_LINES: what it is and what an agent cannot learn from the README}}
+Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
+idea and research stage: the repository holds only documents (`README.md`, `docs/`), no code, build or tests yet.
+`docs/vision.md` lists the open decisions (core language, CRDT library, license); they are the owner's to make.
 
 ## Commands
 ```sh
-{{BUILD_CMD}}            # build
-{{TEST_CMD}}             # all tests (escalation only; see PROFILE.md › Check selection)
-{{TEST_ONE_CMD}}         # one test / one crate / one package
-{{LINT_CMD}}             # lint (fails on warnings)
-{{FORMAT_CHECK_CMD}}     # format check
+# build: none yet (no code)
+# all tests: none yet
+# one test: none yet
+# lint: none configured
+# format check: none configured
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
 ```
+When code arrives, the PR that adds it also adds the build, test, lint and format commands here and a matching
+`Check selection` row in `PROFILE.md`.
 
 ## Layout
-{{NON_OBVIOUS_OWNERSHIP_AND_BOUNDARIES}}
+- `README.md`: what Everink is and the planned packages (`everink-core`, `everink-sync`, `everink-native`, `everink-web`).
+- `docs/vision.md`: goals, non-goals, architecture sketch, candidate stacks, open questions, next steps.
+- `docs/landscape.md`: existing projects and libraries, with sources; says which claims were not re-verified.
+- `docs/naming.md`: why the name, and the availability check.
 
 ## Gotchas
-{{GENERATED_FILES, REQUIRED_SERVICES, INTENTIONAL_ODDITIES}}
+- The package names in `README.md` are intentions only. Nothing is published on crates.io or npm; publishing is an
+  owner decision.
+- `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions
-<!-- Rules that ADD to the core. Each gets an id so reviewers and the drift check can cite it. -->
-- **A1** {{...}}
+- none.
 
 ## Overrides
-<!-- Only D-rules may be overridden. Format: id, replacement, why, authority (owner), scope. Delete if none. -->
-- overrides: {{Dn}} — {{replacement}} — why: {{...}} — authority: {{owner}} — scope: {{paths or whole repo}}
+- none.
 
 ## Owner decisions
-<!-- Ask, don't decide: releases, publishing, dependency majors, schema changes, {{...}} -->
+<!-- Ask, don't decide: releases, publishing, dependency majors, schema changes -->
+None recorded yet. Ask, do not decide: the core language (Rust or C++), the CRDT library, the license, making the
+repository public, publishing or reserving package names, and registering domains.
