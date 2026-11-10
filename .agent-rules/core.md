@@ -13,7 +13,7 @@ with rule id, rationale, authority, scope and expiry.
 - **R2 Classify first.** Before changing code, write the change classification (playbook `classification.md`):
   risk tier (low / standard / high / emergency), affected surfaces, triggered reviews, and the checks that will serve
   as evidence. Re-classify when scope changes. Put it in the PR body.
-- **R3 Pull request only.** Nothing reaches `chore/agent-rules-pin-0.1.25` except through a PR from an up-to-date base.
+- **R3 Pull request only.** Nothing reaches `main` except through a PR from an up-to-date base.
   No force-push to shared branches. One topic per PR.
 - **R4 Independent review.** Every PR gets a review by a reviewer that did not author it (agent or human), given the
   PR number and the classification, not the author's conclusions. For High-risk PRs the reviewer also confirms the

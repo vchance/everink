@@ -30,7 +30,19 @@
       "Bash(gh api *merge)",
       "Bash(gh api *merge *)",
       "Bash(gh api *merges*)",
-      "Bash(gh api *mergePullRequest*)"
+      "Bash(gh api *mergePullRequest*)",
+      "Bash(git push origin main)",
+      "Bash(git push origin main *)",
+      "Bash(git push -u origin main)",
+      "Bash(git push -u origin main *)",
+      "Bash(git push origin HEAD:main)",
+      "Bash(git push origin HEAD:main *)",
+      "Bash(git push origin HEAD:refs/heads/main)",
+      "Bash(git push origin HEAD:refs/heads/main *)",
+      "Bash(git push origin *:main)",
+      "Bash(git push origin *:main *)",
+      "Bash(git push origin *:refs/heads/main)",
+      "Bash(git push origin *:refs/heads/main *)"
     ]
   }
 }
