@@ -26,6 +26,7 @@ When code arrives, the PR that adds it also adds the build, test, lint and forma
 ## Layout
 - `README.md`: what Everink is and the planned packages (`everink-core`, `everink-sync`, `everink-native`, `everink-web`).
 - `docs/vision.md`: goals, non-goals, architecture sketch, candidate stacks, open questions, next steps.
+- `docs/design.md`: the high-level design (a proposal until the owner accepts it) and the decisions it needs.
 - `docs/landscape.md`: existing projects and libraries, with sources; says which claims were not re-verified.
 - `docs/naming.md`: why the name, and the availability check.
 - `LICENSE-MIT`, `LICENSE-APACHE`: the two licenses; everything here is under either, at the user's option.

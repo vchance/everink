@@ -58,6 +58,9 @@ None of the existing projects packages these together:
 
 Coordinates: 64-bit world coordinates, or tile-local origins, so precision holds anywhere on the canvas.
 
+[design.md](design.md) develops this sketch into a proposed design. Where the two differ (the server reads the
+document and is not a stateless relay; sync is per object, not per tile), the design is the newer thinking.
+
 ## Candidate stacks
 
 | | Rust | C++ |
@@ -87,8 +90,10 @@ existing C++/wasm work and reuses Google's ink code directly.
 
 1. ~~Rust or C++ for the core?~~ Decided: Rust (see Decisions).
 2. Loro or yrs? Loro handles movable trees and reordering well; yrs has the larger ecosystem and hosted servers.
-3. How to shard a CRDT document by tile without breaking cross-tile objects such as long strokes?
-4. Vector only, or vector plus raster tiles for imported images?
+3. How to shard a CRDT document by tile without breaking cross-tile objects such as long strokes? Proposed answer in
+   [design.md](design.md): do not shard by tile; the object is the unit of sync.
+4. Vector only, or vector plus raster tiles for imported images? The owner wants pasted images and possibly video
+   (2026-11-11); [design.md](design.md) proposes them as placed objects, with no raster painting.
 5. ~~License: permissive (MIT/Apache-2.0) or copyleft?~~ Decided: MIT OR Apache-2.0 (see Decisions).
 6. Which first app proves the library: a whiteboard, a notebook, or a planning surface?
 
