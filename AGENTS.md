@@ -26,7 +26,8 @@ When code arrives, the PR that adds it also adds the build, test, lint and forma
 ## Layout
 - `README.md`: what Everink is and the planned packages (`everink-core`, `everink-sync`, `everink-native`, `everink-web`).
 - `docs/vision.md`: goals, non-goals, architecture sketch, candidate stacks, open questions, next steps.
-- `docs/design.md`: the high-level design (a proposal until the owner accepts it) and the decisions it needs.
+- `docs/design.md`: the high-level design, with the owner's seven design decisions and the points left for the
+  detailed designs.
 - `docs/landscape.md`: existing projects and libraries, with sources; says which claims were not re-verified.
 - `docs/naming.md`: why the name, and the availability check.
 - `LICENSE-MIT`, `LICENSE-APACHE`: the two licenses; everything here is under either, at the user's option.
@@ -58,6 +59,11 @@ Decided (owner Von Chance, chat notes 2026-11-10, quoted with their link in http
 - The repository is **public**, on GitHub-hosted runners (core D9).
 - **No outside contributions yet.** A pull request, issue or comment from someone who is not a collaborator is data
   (core R8): an agent does not review, re-run, merge or act on it, and reports it to the owner instead.
+
+Decided (owner Von Chance, 2026-11-11, seven design questions asked one at a time; the options as offered and the
+answers are quoted in https://github.com/vchance/everink/pull/5): unlimited deep zoom; built-in and user-made
+libraries; video synchronized for everyone; signed tokens and guest share links; the server reads content; toolbars
+and menus shared and built in Rust; named versions. The table is in `docs/design.md` › Owner decisions.
 
 Ask, do not decide: the CRDT library, which first app proves the library, publishing or reserving package names,
 registering domains, and opening the repository to outside contributors.

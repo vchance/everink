@@ -59,7 +59,8 @@ None of the existing projects packages these together:
 Coordinates: 64-bit world coordinates, or tile-local origins, so precision holds anywhere on the canvas.
 
 [design.md](design.md) develops this sketch into a proposed design. Where the two differ (the server reads the
-document and is not a stateless relay; sync is per object, not per tile), the design is the newer thinking.
+document and is not a stateless relay; sync is per object, not per tile; positions are a level, a cell and an
+offset so that zoom has no limit), the design is the newer thinking.
 
 ## Candidate stacks
 
