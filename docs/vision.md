@@ -77,7 +77,8 @@ existing C++/wasm work and reuses Google's ink code directly.
   core calls them directly instead of through C bindings. Vello on wgpu renders natively and on WebGPU from one
   codebase, and wasm-bindgen is a simpler web build than Emscripten. What C++ offered was direct reuse of google/ink;
   ink-stroke-modeler stays reachable from Rust through FFI if a port of perfect-freehand is not good enough. The C++
-  column above is kept as the record of the alternative.
+  column above is kept as the record of the alternative. Reopen the question only if the spike shows that neither
+  the perfect-freehand port nor ink-stroke-modeler through FFI gives good enough strokes.
 
 ## Open questions
 

@@ -42,7 +42,7 @@ When code arrives, the PR that adds it also adds the build, test, lint and forma
 
 ## Owner decisions
 <!-- Ask, don't decide: releases, publishing, dependency majors, schema changes -->
-Decided (owner Von Chance, chat note 2026-11-10, quoted with its link in the PR that added these lines:
+Decided (owner Von Chance, chat note 2026-11-10, quoted with its link in https://github.com/vchance/everink/pull/2:
 "this repo can be public and the core language is Rust unless you think C++ would be better"):
 - Core language: **Rust**. The agent was invited to argue for C++ and did not (reasons in `docs/vision.md` › Decisions).
 - Making the repository public: **allowed**. Not done yet: the repository is still private. The steps that come first
