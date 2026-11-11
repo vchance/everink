@@ -89,9 +89,9 @@ object can be larger than a cell.
 **Which level.** A view is on level L when one unit of L covers between 1 and 1024 screen pixels; that number is
 the zoom within the level. Zooming past 1024 moves the view to level L+1, where one unit is one pixel again. An
 object is created on the level of the view it was drawn in, so on its own level it is normally between a thousandth
-of a unit and about two thousand units across: one pixel to one screen, at either end of the zoom range. If an
-object is later scaled by more than 1024 times in either direction it moves to the neighboring level and keeps its
-id.
+of a unit and about two thousand units across: one pixel to one screen about two thousand pixels wide, at either
+end of the zoom range. An object that is scaled, pasted or placed far outside that band moves to the level that
+suits its new size and keeps its id.
 
 **Arithmetic.** Two positions are compared (how far is this object from the camera, does it cross the view) with
 whole-number arithmetic of whatever length is needed. Every offset is an exact binary fraction, so that comparison
@@ -100,8 +100,15 @@ is exact however many levels apart the two are. Only the answer, a distance from
 view or the camera crosses into another cell, not for every point on every frame. A curve that belongs to a level
 far above the view is first cut down, exactly, to the piece near the view.
 
-The cost is bytes: a position takes about twenty more bits for each level deeper than level 0. The only limit is
-memory.
+**The same outline on every machine.** Exact comparison is only useful if every client starts from the same
+numbers. An object's drawable outline (the edge of a stroke, the curve of an ellipse, a rotated shape) is worked
+out once, on the object's own level, using only basic arithmetic that gives the same answer on every processor and
+in WebAssembly. Rotation and scale are stored as the numbers of the transform, not as an angle, and no platform
+math function is used. That outline is what the exact step cuts. Offsets that are not finite numbers are refused.
+
+The cost is bytes: a position takes about twenty more bits for each level deeper than level 0. So that one
+hostile change cannot exhaust memory, every surface has a cap on how deep and how far out a position may be. The
+default is far beyond anything a person can reach by hand, and the server refuses changes past it.
 
 **Bounded surfaces** are the same engine with limits set: a rectangle the content must stay inside, a range of
 levels the camera may visit, or both. The camera stops at a limit and the server refuses changes beyond it.
@@ -138,7 +145,8 @@ tools make and edit them.
 
 **Text looks the same everywhere** only if every client lays it out with the same fonts and the same layout code.
 The core does the layout, and fonts are files shipped with Everink or stored in the blob store, never whatever the
-operating system happens to have. Shipped fonts carry their own licenses, which are checked when they are added.
+operating system happens to have. Shipped fonts carry their own licenses, which are checked when they are added. A font a user uploads is
+untrusted data like any other file and is read only by a memory-safe parser.
 
 ## How concurrent edits merge
 
@@ -165,16 +173,18 @@ A **view** is a level, a rectangle on that level and the zoom within the level. 
 copy** of the surface: the objects it has been sent.
 
 1. The client sends its view, padded by half a screen on each side so panning does not show holes.
-2. The server keeps a spatial index of every object: for each level, the cells that hold objects and the objects
-   whose outline touches each cell, and for each cell whether anything lies in the levels beneath it. From the
-   index it sends **every object, on any level, that crosses the view and would cover at least a pixel on screen**:
+2. The server keeps a spatial index of every object: for each level, the cells that hold objects, the objects
+   whose outline touches each cell with their sizes, and for each cell the size of the largest object in it and
+   whether anything lies in the levels beneath it. From the index it sends **every object, on any level, that
+   crosses the view and would cover at least a pixel on screen**:
    - **The view's level and the one below** hold the ordinary content of the view.
-   - **Deeper levels** are sent only down to the first level whose largest object is under a pixel. With a ratio
-     of 1024 that is at most two levels below the view.
-   - **Levels above** always pass the size test. One or two levels up are large things such as a backdrop or a
-     frame around the work. From further up, objects are so large that the view is usually inside one of them or
-     clear of all of them. The index records which levels and cells are occupied, so the server visits only
-     occupied cells on the way up, however many empty levels lie between.
+   - **Deeper levels** are searched only while the index records something there large enough to cover a pixel.
+     For objects of normal size that is at most two levels below the view; the recorded sizes, not that figure,
+     decide.
+   - **Levels above** are tested the same way. Ordinary objects one or two levels up are large things such as a
+     backdrop or a frame around the work. From further up they are so large that the view is usually inside one
+     of them or clear of all of them. The index records which levels and cells are occupied, so the server visits
+     only occupied cells on the way up, however many empty levels lie between.
 3. While the view stays put, the server forwards changes to those objects and anything that moves or is created
    inside the view.
 4. When the view moves or changes level, the client sends the new view and the server sends the difference. The
@@ -303,7 +313,7 @@ carries the full review; its open points are listed at the end.
 | Who | Trusted to | Not trusted to |
 |---|---|---|
 | Server operator | read and store every surface (decision 5) | — |
-| Embedding app | say who a user is and what role they have, by signing tokens | — |
+| Embedding app | say who a user is and what role they have on its own surfaces, by signing tokens | issue tokens for another app's surfaces |
 | Owner, editor | change the surface within their role | exceed the role, flood the room |
 | Viewer | read | change anything |
 | Guest (share link) | act within the link's role | be who their typed name says they are |
@@ -315,15 +325,27 @@ What the design does about the ways these can go wrong:
   caps, more strictly for guests. A client is never believed about who it is or what it may do.
 - **A guest's name is a label, not an identity.** Guests are marked as guests on their banner.
 - **Share links** are long random values, grant one role, and can be turned off; turning one off disconnects the
-  guests who came through it.
-- **Tokens** expire. How they are signed, rotated and revoked is for the detailed design.
+  guests who came through it. A link is a secret inside an address, and addresses leak through browser history
+  and logs, so the secret sits in the part of the address a browser does not send onward and is exchanged for a
+  session at once.
+- **Tokens** expire and are bound to one tenant (one embedding app) and one surface. The server trusts one signing
+  key per tenant, so one app's tokens are worthless on another's surfaces. How keys are rotated and tokens revoked
+  is for the detailed design.
+- **The blob store believes no one about a file's name.** The server computes the hash of what was uploaded
+  itself. A file is read only through a surface the reader may see, by a short-lived signed address. Identical
+  files are shared only within one tenant, so no one can learn from an upload whether a file exists elsewhere.
 - **Pasted media is data from strangers:** decoded by memory-safe decoders, limited in size and dimensions, never
   executed. Text is plain runs, never markup. Files are served from the blob store as downloads, not as pages.
-- **Presence cannot be used to watch someone:** a client receives only cursors inside its own view, and views are
-  never sent to other clients.
+- **Presence gives away little by default:** a client receives only cursors inside its own view, and views are
+  never sent to other clients. The list of people and "jump to this person" are the exception: they reveal, on
+  request, where someone is working, and repeated jumps amount to following them. That is accepted for people
+  sharing a surface; whether a person can opt out is for the detailed design.
+- **Local copies stay on the machine.** The cache and offline changes are on disk or in browser storage. Signing
+  out or leaving a guest session clears them.
 
-Left open and accepted: the operator can read everything, and a person with an editor link can deface a surface
-until the link is turned off. Versions are the remedy for the second.
+Left open and accepted: the operator can read everything; anyone on a surface can find out where anyone else on it
+is working; and a person with an editor link can deface a surface until the link is turned off. Versions are the
+remedy for the last.
 
 ## When things fail
 
@@ -415,10 +437,14 @@ Still open from `vision.md`: the CRDT library, and which first app proves the li
 
 Not owner decisions yet; each detailed design settles its own and raises what the owner should choose.
 
-- **Positions:** the level ratio (1024 here); the exact-arithmetic representation and its cost; how a view that
-  straddles a level boundary is drawn and subscribed to; the rule for moving a scaled object between levels.
-- **Identity and security:** how tokens are signed, rotated, expired and revoked; the length and lifetime of share
-  links; what guests may do by default and what they may upload; limits on media size and type.
+- **Positions:** the level ratio (1024 here); the exact-arithmetic representation and its cost; the arithmetic
+  allowed when an outline is worked out, so native and WebAssembly agree to the last bit; how a view that straddles
+  a level boundary is drawn and subscribed to; the size band and the rule for moving an object between levels; the
+  default cap on position depth.
+- **Identity and security:** how tokens are signed, rotated, expired and revoked; tenants and their keys; the
+  length and lifetime of share links and how the secret is exchanged for a session; what guests may do by default
+  and what they may upload; limits on media size and type; blob read authorization and the scope of file sharing;
+  whether a person can opt out of being jumped to.
 - **Controls:** the library for the shared controls, and how far the accessibility mirror goes in the first version.
 - **Versions:** how long automatic snapshots are kept, and what a restore does to people who are editing at that
   moment.
