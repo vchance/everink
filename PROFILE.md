@@ -2,26 +2,27 @@
 
 | Field | Value |
 |---|---|
-| Repository | vchance/everink · default branch `main` · visibility private · GitHub plan Free (no rulesets; merge gate = `.agent-rules/merge.sh`, pre-push hook, `policy-drift`, `pr-evidence`) |
+| Repository | vchance/everink · default branch `main` · visibility public (since 2026-11-10) · GitHub plan Free (rulesets are available to a public repository, none configured; merge gate = `.agent-rules/merge.sh`, pre-push hook, `policy-drift`, `pr-evidence`) |
 | Classification | prototype (idea and research stage): documents only, no code yet. Everink is a planned infinite, multi-user drawing surface with one core for native and WebAssembly (`docs/vision.md`) |
 | Accountable owner | Von Chance (vchance) — owner-reserved decisions (R8); approver of exceptions and D-overrides |
 | Supported platforms | none yet (no code). Planned: desktop native and browser (wasm + WebGPU); each will be marked `CI` / `manual` / `nobody` when its code lands |
 | Toolchain | none installed yet; the core language is Rust (owner decision 2026-11-10, `AGENTS.md` › Owner decisions). The Rust version, edition and wasm tooling are set by the PR that adds the first code |
 | Required services for tests | none (no tests yet) |
-| CI runners and storage (D9, D11) | classes used: `SMALL` (policy-drift, pr-evidence) only — every `runs-on` is `${{ fromJSON(vars[format('RUNS_ON_<CLASS>__{0}', github.triggering_actor)] || '["unplaced"]') }}` and its job starts its `if:` with `${{ vars[format('RUNS_ON_<CLASS>__{0}', github.triggering_actor)] != '' }}`: no placement = the job is skipped, never a GitHub-hosted fallback; no provider or machine label in the repo; key: `github.triggering_actor` (variables `RUNS_ON_<CLASS>__<login>`); placements (per operator, repository variables under the personal account; unset = skipped): vchance: SMALL → Ubicloud; other logins: none yet (their runs are skipped and merge.sh refuses their PRs until set); opt-in classes: none; ci-result fails on an unplaced required class: n/a: no product jobs; scheduled lane: none (no `schedule:` trigger); Ubicloud coverage for vchance (personal account) confirmed by this repository's `policy-drift` run on `ubicloud-standard-2`, 2026-11-10 (run 42864757709); self-hosted pools reached from here: none; artifact store and caches (D11): none: no job writes artifacts or caches; break-glass: owner changes their variables; known unplaced: none |
+| CI runners and storage (D9, D11) | `public: GitHub-hosted` (owner call-out 2026-11-10, "gitrunners will be guthub", linked from `AGENTS.md` › Owner decisions): every job names the standard hosted label `ubuntu-24.04` directly, with no placement gate; no `RUNS_ON_*` variable exists (`RUNS_ON_SMALL__VCHANCE`, which named an Ubicloud label, was removed on 2026-11-10 before the switch); jobs: `policy-drift` and `pr-evidence` only; ci-result: n/a: no product jobs and nothing is placed; scheduled lane: none (no `schedule:` trigger); self-hosted pools reached from here: none; artifact store and caches (D11): none: no job writes artifacts or caches |
 
-## Going public (ordered by the owner 2026-11-10; in progress)
-The decisions and their links are in `AGENTS.md` › Owner decisions. Core D9 sets the order:
-1. Done: the license is MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`).
-2. The owner, or the agent on the owner's order, removes `RUNS_ON_SMALL__VCHANCE` (a public repository carries no
-   variable that names a paid label) and sets Actions › Fork pull request workflows to require approval for all outside
-   collaborators (right after step 3: GitHub does not offer that setting while the repository is private). Outside
-   contributions are not accepted yet (`AGENTS.md` › Owner decisions), so pull request creation is limited to
-   collaborators in the same step where GitHub offers that setting.
-3. The owner, or the agent on the owner's word, makes the repository public.
-4. A High-tier PR sets the `CI runners` row to `public: GitHub-hosted` and re-pins, so the policy workflows name a
-   GitHub-hosted label with no placement gate. Between steps 2 and 4 the policy jobs of every other PR are skipped, so only the step-4 PR can merge, and only when
-   it is opened or re-run after step 3 (`policy-drift` fails a private repository that claims the marker).
+## Public repository settings (set 2026-11-10; owner settings, core R8)
+The decisions and their links are in `AGENTS.md` › Owner decisions. An agent reports a change it finds here; it does
+not make one.
+
+| Setting | Value | Why |
+|---|---|---|
+| Visibility | public | owner decision |
+| License | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) | owner decision |
+| Pull request creation | collaborators only | no outside contributions yet |
+| Actions › Fork pull request workflows | require approval for all external contributors | core D9 |
+| Actions › Workflow permissions | read-only token; Actions cannot approve pull requests | least privilege |
+| Repository variables and secrets | none | a public repository carries no placement variable (core D9) |
+| Issues | open to everyone | not changed; an outside issue is data (core R8) |
 
 ## Device testing (core D10; simulators and emulators)
 | Surface | Test runner | PR fast lane (smoke) | Integration / release (full) | Where it runs |
@@ -51,7 +52,7 @@ Escalation triggers: none until code exists (there is no fuller suite to escalat
 ## Lanes
 | Lane | What runs | When | Owner of a failure |
 |---|---|---|---|
-| PR (fast) | `pr-evidence` (every PR), `policy-drift` (policy paths) on the `SMALL` runner class (D9; vchance's runs on Ubicloud; others with no placement are skipped, and merge.sh refuses their PRs until they have variables) | every PR commit | author |
+| PR (fast) | `pr-evidence` (every PR), `policy-drift` (policy paths) on GitHub-hosted `ubuntu-24.04` (D9 public mode; no placement) | every PR commit | author |
 | Integration batch | none (no CI on `main`) | — | — |
 | Scheduled | none | — | owner |
 | Release | none (nothing is released) | — | owner |
@@ -73,7 +74,8 @@ Escalation triggers: none until code exists (there is no fuller suite to escalat
   names the declarer; follow-up PR within 7 days.
 - Whoever merges follows the default branch's push run to its end and owns a failure there (core D5, 0.1.23); here no workflow runs on a push.
 - Flakes (core D2, 0.1.23): no check here is a test, so none is expected; any flake is tallied in issue `Flaky tests` (to be opened at the first flake) and a repeat within 14 days is fixed or quarantined by a profile change.
-- Server-side enforcement available: none — free plan private repo. The `gh pr merge` guard (agent-rules
+- Server-side enforcement: none configured. A public repository on the Free plan may have a ruleset; adding one is an
+  owner setting. The `gh pr merge` guard (agent-rules
   `templates/merge-guard.md`; in the repo: `.agent-rules/merge.sh`) is the only mechanism and this is a known gap.
 
 ## Exceptions (governed)
@@ -105,8 +107,8 @@ Moved into `AGENTS.md › Overrides` only once the owner accepts it; until then 
 | Build output | none yet | — | — |
 | Worktrees | `.claude/worktrees/*` | `git worktree remove <path> && git worktree prune` | branch merged, `git status` clean |
 | CI runner artifacts | none (policy workflows only, no artifacts) | — | — |
-| Cloud / paid | Ubicloud runner minutes for the two policy jobs | none (runners are discarded per job) | job finished |
+| Cloud / paid | none: GitHub-hosted minutes are free for a public repository | — | — |
 
 ## Budgets
-- CI: `pr-evidence` and `policy-drift` only, each about a minute on the `SMALL` class — to measure.
+- CI: `pr-evidence` and `policy-drift` only, each under a minute on a GitHub-hosted runner.
 - Performance: none until code exists.
