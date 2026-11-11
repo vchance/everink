@@ -27,3 +27,13 @@ See [docs/vision.md](docs/vision.md).
 | `everink-web` | Browser shell (wasm + WebGPU). |
 
 Names are reserved in intent only; nothing is published.
+
+## License
+
+Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at
+your option.
+
+## Contributing
+
+Everink is not accepting outside contributions yet: pull requests from people who are not collaborators will not
+be reviewed or merged. This may change later; it will be announced here.

@@ -79,6 +79,9 @@ existing C++/wasm work and reuses Google's ink code directly.
   ink-stroke-modeler stays reachable from Rust through FFI if a port of perfect-freehand is not good enough. The C++
   column above is kept as the record of the alternative. Reopen the question only if the spike shows that neither
   the perfect-freehand port nor ink-stroke-modeler through FFI gives good enough strokes.
+- **License: MIT OR Apache-2.0** (owner decision, 2026-11-10). It is what most Rust libraries use, so people embedding
+  Everink already know its terms, and the Apache half carries a patent grant. Copyleft would have kept forks open
+  but works against goal 4 (library first).
 
 ## Open questions
 
@@ -86,7 +89,7 @@ existing C++/wasm work and reuses Google's ink code directly.
 2. Loro or yrs? Loro handles movable trees and reordering well; yrs has the larger ecosystem and hosted servers.
 3. How to shard a CRDT document by tile without breaking cross-tile objects such as long strokes?
 4. Vector only, or vector plus raster tiles for imported images?
-5. License: permissive (MIT/Apache-2.0) or copyleft?
+5. ~~License: permissive (MIT/Apache-2.0) or copyleft?~~ Decided: MIT OR Apache-2.0 (see Decisions).
 6. Which first app proves the library: a whiteboard, a notebook, or a planning surface?
 
 ## Next steps
