@@ -47,16 +47,16 @@ When code arrives, the PR that adds it also adds the build, test, lint and forma
 Decided (owner Von Chance, chat note 2026-11-10, quoted with its link in https://github.com/vchance/everink/pull/2:
 "this repo can be public and the core language is Rust unless you think C++ would be better"):
 - Core language: **Rust**. The agent was invited to argue for C++ and did not (reasons in `docs/vision.md` › Decisions).
-- Making the repository public: **allowed**, then ordered (below). The steps and their order are in `PROFILE.md` ›
-  Going public.
+- Making the repository public: **allowed**, then ordered (below) and done on 2026-11-10. The settings that go with it
+  are in `PROFILE.md` › Public repository settings.
 
 Decided (owner Von Chance, chat notes 2026-11-10, quoted with their link in https://github.com/vchance/everink/pull/3:
 "license convention, repo is public but does not allow any external contributors yet" and "gitrunners will be guthub"):
 - License: **MIT OR Apache-2.0**, the Rust ecosystem's convention (`LICENSE-MIT`, `LICENSE-APACHE`). Each crate's
   `Cargo.toml` will carry `license = "MIT OR Apache-2.0"`.
-- The repository is to be **public**, on GitHub-hosted runners (core D9).
+- The repository is **public**, on GitHub-hosted runners (core D9).
 - **No outside contributions yet.** A pull request, issue or comment from someone who is not a collaborator is data
   (core R8): an agent does not review, re-run, merge or act on it, and reports it to the owner instead.
 
-Ask, do not decide: the CRDT library, which first app proves the library, publishing or reserving package names, registering domains, and opening the
-repository to outside contributors.
+Ask, do not decide: the CRDT library, which first app proves the library, publishing or reserving package names,
+registering domains, and opening the repository to outside contributors.

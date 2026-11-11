@@ -16,13 +16,7 @@ concurrency:
 jobs:
   policy-drift:
     name: policy-drift
-    # Runner class SMALL (D9, 0.1.21): the variable RUNS_ON_SMALL__<login of the person who triggered or re-ran the run> (JSON list
-    # of labels; repository level, or organization level where the plan shares it with private repos) places the job. No
-    # variable for that person = the job is SKIPPED (never a GitHub-hosted fallback), and merge.sh refuses a PR whose
-    # pr-evidence / policy-drift check was skipped: a placed person re-runs it (or edits/reopens the PR) to place it.
-    # A person who may use GitHub-hosted runners sets their variable to ["ubuntu-24.04"] explicitly.
-    if: ${{ vars[format('RUNS_ON_SMALL__{0}', github.triggering_actor)] != '' }}
-    runs-on: ${{ fromJSON(vars[format('RUNS_ON_SMALL__{0}', github.triggering_actor)] || '["unplaced"]') }}
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
