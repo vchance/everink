@@ -71,9 +71,17 @@ Coordinates: 64-bit world coordinates, or tile-local origins, so precision holds
 The Rust stack is the most coherent single toolchain for native plus wasm. The C++ stack fits alongside
 existing C++/wasm work and reuses Google's ink code directly.
 
+## Decisions
+
+- **Core language: Rust** (owner decision, 2026-11-10). Both CRDT candidates (Loro, yrs) are Rust libraries, so the
+  core calls them directly instead of through C bindings. Vello on wgpu renders natively and on WebGPU from one
+  codebase, and wasm-bindgen is a simpler web build than Emscripten. What C++ offered was direct reuse of google/ink;
+  ink-stroke-modeler stays reachable from Rust through FFI if a port of perfect-freehand is not good enough. The C++
+  column above is kept as the record of the alternative.
+
 ## Open questions
 
-1. Rust or C++ for the core?
+1. ~~Rust or C++ for the core?~~ Decided: Rust (see Decisions).
 2. Loro or yrs? Loro handles movable trees and reordering well; yrs has the larger ecosystem and hosted servers.
 3. How to shard a CRDT document by tile without breaking cross-tile objects such as long strokes?
 4. Vector only, or vector plus raster tiles for imported images?
@@ -82,6 +90,6 @@ existing C++/wasm work and reuses Google's ink code directly.
 
 ## Next steps
 
-1. Decide questions 1 and 2 with a small spike: one stroke type, two clients, a relay, native and web.
+1. Decide question 2 with a small Rust spike: one stroke type, two clients, a relay, native and web.
 2. Write requirements with acceptance criteria for the spike.
 3. Measure: stroke latency, merge time, and memory for 100k strokes.
