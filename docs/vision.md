@@ -58,9 +58,14 @@ None of the existing projects packages these together:
 
 Coordinates: 64-bit world coordinates, or tile-local origins, so precision holds anywhere on the canvas.
 
-[design.md](design.md) develops this sketch into a proposed design. Where the two differ (the server reads the
-document and is not a stateless relay; sync is per object, not per tile; positions are a level, a cell and an
-offset so that zoom has no limit), the design is the newer thinking.
+[design.md](design.md) develops this sketch into a proposed design. Where the two differ, the design is the newer
+thinking:
+
+- The server reads the document and keeps an index of it; it is not a stateless relay. "Relay" in this document
+  means that server.
+- Sync is per object, not per tile.
+- Positions are a level, a cell and an offset, so that zoom has no limit.
+- Layers are not a separate part of the document model at first; order and groups cover them.
 
 ## Candidate stacks
 
@@ -100,6 +105,6 @@ existing C++/wasm work and reuses Google's ink code directly.
 
 ## Next steps
 
-1. Decide question 2 with a small Rust spike: one stroke type, two clients, a relay, native and web.
+1. Decide question 2 with a small Rust spike: one stroke type, two clients, a server, native and web.
 2. Write requirements with acceptance criteria for the spike.
 3. Measure: stroke latency, merge time, and memory for 100k strokes.

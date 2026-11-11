@@ -6,7 +6,8 @@ that later documents break down part by part. Numbers in it are starting values 
 
 ## What the product does
 
-The owner's description (2026-11-11), restated as requirements:
+The owner's description (2026-11-11), restated as requirements. Where a requirement was sharpened by one of the
+seven decisions, the decision is named.
 
 1. **One surface, many users.** Several people use the same surface at the same time.
 2. **Draw anything.** Freehand ink and any other graphics (shapes, lines, paths).
@@ -15,11 +16,11 @@ The owner's description (2026-11-11), restated as requirements:
 5. **Paste images and video** onto the surface.
 6. **Cursors.** Each user appears as a floating cursor with a name banner, in a color unique to them.
 7. **Cursor visibility follows the view.** If your cursor is inside the area another user is looking at, they see
-   it, and the same holds the other way round.
+   it, and the same rule applies the other way round.
 8. **Each user has their own view.** Only what is in a user's view is displayed. They can pan across the whole
-   surface and zoom in and out without limit.
-9. **Infinite by default, bounded by choice.** A surface has no edges and no zoom limit unless it is created with
-   them.
+   surface and zoom in and out. Decision 1 makes the zoom unlimited.
+9. **Infinite by default, bounded by choice.** A surface has no edges, and by decision 1 no zoom limit, unless it is
+   created with limits.
 
 The goals in `vision.md` still hold: one core for native and WebAssembly, library first, good ink.
 
@@ -60,7 +61,7 @@ Four ideas carry the design:
    video and placed library items differ only in their kind. Moving, grouping, ordering, selecting and undo are
    written once.
 2. **A position is a level, a cell and an offset.** That one structure gives a surface with no edges and zoom with
-   no limit, in both directions, with exact arithmetic.
+   no limit, in both directions, without losing precision.
 3. **The view drives everything.** The client tells the server what it is looking at. The server sends the objects
    that touch that view and the cursors inside it, and nothing else. Opening a surface costs the same whether it
    holds a hundred objects or ten million.
@@ -69,8 +70,9 @@ Four ideas carry the design:
 
 ## Positions: no edges and no zoom limit
 
-Ordinary numbers cannot do this. A 64-bit number carries about sixteen digits, so after enough zooming two
-neighboring points become the same number. Everink therefore does not use one coordinate system.
+One ordinary number per axis cannot do this. A 64-bit floating-point number carries about sixteen digits, so after
+enough zooming two neighboring points become the same number. Everink therefore does not use one coordinate
+system.
 
 - The surface is a stack of **levels**, numbered by an integer. Level 0 is where a new surface starts. Each level
   is 1024 times finer than the one before it: level 1 is what you reach by zooming in 1024 times, level -1 by
@@ -78,15 +80,28 @@ neighboring points become the same number. Everink therefore does not use one co
 - Each level is a grid of square **cells**, 1024 units on a side. One cell is exactly one unit of the level above,
   so every cell has one parent cell and 1024 by 1024 children. A cell is named by two whole numbers that may have
   as many digits as needed.
-- A **position** is a level, a cell and an **offset** inside the cell (two ordinary 64-bit numbers).
+- A **position** is a level, a cell and an **offset** inside the cell: two 64-bit floating-point numbers, each of
+  which is an exact binary fraction.
 
-Every calculation the engine does (where is this object relative to the camera, do these two things overlap) is
-between things on the same or neighboring levels, where the numbers are small and exact. Nothing ever needs a
-number larger than a cell. The cost is that a position deep in the stack takes more bytes: about twenty bits per
-level away from level 0. The only limit is memory.
+An object is anchored at a position. Its own points are distances from that anchor in units of its level, so an
+object can be larger than a cell.
 
-An object lives on the level that suits its size. A sketch drawn while zoomed in by a factor of a million lives two
-levels down, and stays exactly as precise as one drawn at level 0.
+**Which level.** A view is on level L when one unit of L covers between 1 and 1024 screen pixels; that number is
+the zoom within the level. Zooming past 1024 moves the view to level L+1, where one unit is one pixel again. An
+object is created on the level of the view it was drawn in, so on its own level it is normally between a thousandth
+of a unit and about two thousand units across: one pixel to one screen, at either end of the zoom range. If an
+object is later scaled by more than 1024 times in either direction it moves to the neighboring level and keeps its
+id.
+
+**Arithmetic.** Two positions are compared (how far is this object from the camera, does it cross the view) with
+whole-number arithmetic of whatever length is needed. Every offset is an exact binary fraction, so that comparison
+is exact however many levels apart the two are. Only the answer, a distance from the camera, becomes an ordinary
+64-bit number for drawing, and near the camera that number is small. The exact step runs when an object comes into
+view or the camera crosses into another cell, not for every point on every frame. A curve that belongs to a level
+far above the view is first cut down, exactly, to the piece near the view.
+
+The cost is bytes: a position takes about twenty more bits for each level deeper than level 0. The only limit is
+memory.
 
 **Bounded surfaces** are the same engine with limits set: a rectangle the content must stay inside, a range of
 levels the camera may visit, or both. The camera stops at a limit and the server refuses changes beyond it.
@@ -108,6 +123,13 @@ style, and who created it.
 | Video | as image, plus a poster frame, duration and shared playback state | See [Video](#video). |
 | Group | child objects | Moves and scales as one. |
 
+**Order** is one sequence across all levels. A large backdrop drawn from far out can sit behind or in front of
+small things drawn deep inside it, as its order key says.
+
+**Layers,** which `vision.md` lists in the document model, are not a separate concept at first: order and groups
+cover what they do. A layer can be added later as a named top-level group that can be locked or hidden, without
+changing the model.
+
 **Libraries of pre-drawn objects.** A library is a named collection of templates; a template is a group of ordinary
 objects or an image. Everink ships a small built-in set (basic shapes, arrows, notes), and users save their own
 drawings as templates in libraries they can share. Placing a template copies it onto the surface as normal,
@@ -116,7 +138,7 @@ tools make and edit them.
 
 **Text looks the same everywhere** only if every client lays it out with the same fonts and the same layout code.
 The core does the layout, and fonts are files shipped with Everink or stored in the blob store, never whatever the
-operating system happens to have.
+operating system happens to have. Shipped fonts carry their own licenses, which are checked when they are added.
 
 ## How concurrent edits merge
 
@@ -139,25 +161,29 @@ one object and is sent to anyone whose view touches any part of it. Nothing is e
 
 ## Views and what gets sent
 
-A **view** is a level, a rectangle on that level and a zoom within the level. Each client holds a **partial copy**
-of the surface: the objects it has been sent.
+A **view** is a level, a rectangle on that level and the zoom within the level. Each client holds a **partial
+copy** of the surface: the objects it has been sent.
 
 1. The client sends its view, padded by half a screen on each side so panning does not show holes.
-2. The server keeps a spatial index of every object: for each level, the cells that hold objects and the objects in
-   each, and for each cell whether anything lies in the levels beneath it. From the index it sends:
-   - objects on the view's own level that touch the rectangle;
-   - objects from the two levels below that are large enough to see;
-   - objects from the levels above that cross the view. Seen from below these are enormous, so there are few: the
-     view is usually either inside one of them or clear of all of them.
+2. The server keeps a spatial index of every object: for each level, the cells that hold objects and the objects
+   whose outline touches each cell, and for each cell whether anything lies in the levels beneath it. From the
+   index it sends **every object, on any level, that crosses the view and would cover at least a pixel on screen**:
+   - **The view's level and the one below** hold the ordinary content of the view.
+   - **Deeper levels** are sent only down to the first level whose largest object is under a pixel. With a ratio
+     of 1024 that is at most two levels below the view.
+   - **Levels above** always pass the size test. One or two levels up are large things such as a backdrop or a
+     frame around the work. From further up, objects are so large that the view is usually inside one of them or
+     clear of all of them. The index records which levels and cells are occupied, so the server visits only
+     occupied cells on the way up, however many empty levels lie between.
 3. While the view stays put, the server forwards changes to those objects and anything that moves or is created
    inside the view.
 4. When the view moves or changes level, the client sends the new view and the server sends the difference. The
    client keeps recently seen objects in a cache and drops the oldest when memory runs short.
 
-**Content too small to see.** Anything more than two levels below the view is smaller than a pixel. It is not sent.
-Because the index knows which cells have content beneath them, the client can mark "there is more here if you zoom
-in". A later step adds **overview pictures**: small pre-rendered images of everything beneath a cell, produced by a
-headless copy of the same core, so a dense region seen from far above is a few images, not a million strokes.
+**Content too small to see** is not sent. Because the index knows which cells have content beneath them, the
+client can mark "there is more here if you zoom in". A later step adds **overview pictures**: small pre-rendered
+images of everything beneath a cell, produced by a headless copy of the same core, so a dense region seen from far
+above is a few images, not a million strokes.
 
 The server must know where every object is, so it reads the document (owner decision 5). It is not a blind relay,
 which changes the "stateless fan-out" line in the `vision.md` sketch. Content is encrypted in transit and may be
@@ -169,10 +195,13 @@ Each client sends, about 30 times a second while something changes: cursor posit
 tool in use, and the points of any stroke still being drawn.
 
 - The server gives each user a **color** that no one else present on that surface has, and passes on their
-  **name**.
-- **Routing follows requirement 7 exactly:** user A receives user B's cursor only while B's cursor position is
-  inside A's view. Zoom depth does not matter. If B is working a thousand times deeper at a spot inside A's view, A
-  sees B's cursor at that spot, drawn at normal size with a note of how much deeper B is.
+  **name**. The palette is finite; past its size colors repeat and the name banner tells people apart.
+- **Routing follows requirement 7 exactly, in each direction separately:** user A receives user B's cursor only
+  while B's cursor position is inside A's view, and B receives A's only while A's cursor is inside B's view. The
+  test is the exact position comparison, so zoom depth does not matter. If B is working a thousand times deeper at
+  a spot inside A's view, A sees B's cursor there at normal size, with a note of how much deeper B is; B sees A's
+  cursor only if it happens to fall inside B's much smaller view. A person zoomed far out moves their pointer in
+  steps larger than a deep view, so their cursor seldom lands in one.
 - Clients smooth cursor motion between updates. If a connection is slow the server sends only the newest state.
 - Ink appears on other screens while it is being drawn, through presence. When the pen lifts, the finished stroke
   is sent once as an object and replaces the preview.
@@ -181,10 +210,11 @@ tool in use, and the points of any stroke still being drawn.
 ## Rendering
 
 Every frame: ask the local index what touches the view, order it, and draw it with a GPU vector renderer (Vello on
-wgpu is the candidate; it runs natively and on WebGPU). Positions are converted to distances from the camera before
-anything reaches the GPU, so the graphics card only ever sees small numbers, at any depth. Layers, back to front:
+wgpu is the candidate; it runs natively and on WebGPU). Positions are turned into distances from the camera by the
+exact arithmetic above before anything reaches the GPU, so the graphics card only ever sees small numbers, at any
+depth. Layers, back to front:
 
-1. **Content:** the objects, from the levels above the view down to the smallest visible.
+1. **Content:** the visible objects from every level, in their one order.
 2. **Live ink:** the local user's stroke in progress, drawn with input prediction on the shortest path to the
    screen, because this is where latency is felt.
 3. **Overlay:** selection handles, other users' selections and cursors with their name banners.
@@ -265,14 +295,67 @@ replayed stroke by stroke.
 **Offline.** A client keeps working on the objects it has. Its changes are saved locally and sent on reconnect,
 where they merge by the rules above.
 
-**Untrusted input.** The server checks every change (size, kind, bounds, rate), more strictly for guests. Images
-and video are data from strangers: decoded by memory-safe decoders, limited in size, never executed. Text is plain
-runs, never markup.
+## Security
+
+A first assessment, at the depth of this document. The detailed design of the server and of identity (step 2)
+carries the full review; its open points are listed at the end.
+
+| Who | Trusted to | Not trusted to |
+|---|---|---|
+| Server operator | read and store every surface (decision 5) | — |
+| Embedding app | say who a user is and what role they have, by signing tokens | — |
+| Owner, editor | change the surface within their role | exceed the role, flood the room |
+| Viewer | read | change anything |
+| Guest (share link) | act within the link's role | be who their typed name says they are |
+| Anyone on the network | nothing | read or alter traffic |
+
+What the design does about the ways these can go wrong:
+
+- **Every change is checked by the server** against the sender's role, the surface's limits, and size and rate
+  caps, more strictly for guests. A client is never believed about who it is or what it may do.
+- **A guest's name is a label, not an identity.** Guests are marked as guests on their banner.
+- **Share links** are long random values, grant one role, and can be turned off; turning one off disconnects the
+  guests who came through it.
+- **Tokens** expire. How they are signed, rotated and revoked is for the detailed design.
+- **Pasted media is data from strangers:** decoded by memory-safe decoders, limited in size and dimensions, never
+  executed. Text is plain runs, never markup. Files are served from the blob store as downloads, not as pages.
+- **Presence cannot be used to watch someone:** a client receives only cursors inside its own view, and views are
+  never sent to other clients.
+
+Left open and accepted: the operator can read everything, and a person with an editor link can deface a surface
+until the link is turned off. Versions are the remedy for the second.
+
+## When things fail
+
+| Failure | What happens |
+|---|---|
+| A client loses its connection | It keeps working on what it has; changes queue locally and merge on reconnect. Its cursor disappears for others after a few seconds. |
+| A room process crashes | Clients reconnect and resend unacknowledged changes; the room rebuilds from the last snapshot and the change log. Changes are acknowledged only once logged. |
+| The spatial index disagrees with the document | The index is derived data: it is rebuilt from the document, on demand and on every room start. |
+| The blob store is down | Drawing, text and cursors carry on. New media shows as a placeholder marked as not yet uploaded, and uploads retry. |
+| Video clocks drift | Each client re-measures its clock offset regularly and nudges playback; a large error is corrected by a seek. |
+| Someone floods changes or presence | Per-connection rate caps; presence beyond the cap is dropped, changes beyond it are refused, and repeat offenders are disconnected. |
+| A restore happens while others are editing | Their in-flight changes apply on top of the restored state by the normal merge rules. The detailed design decides whether to warn them first. |
+
+## What proves it
+
+Each rule the design depends on has a test that fails if the rule is broken, written in the step that introduces it.
+
+| Rule | Proved by | Step |
+|---|---|---|
+| A point drawn at any depth is found at exactly the same place later, on every client | round-trip tests over random positions and levels; two clients compare | 0 |
+| A shape from many levels up has its edge at the same pixel on every client | exact-arithmetic tests against a reference big-number implementation | 1 |
+| Concurrent changes converge to the same state on every client | randomized tests applying the same changes in different orders | 0 |
+| Delete and a concurrent edit agree | the same randomized tests, with deletes | 0 |
+| Undo reverses only your own changes, also after someone else moved the object | scripted two-user scenarios | 1, 2 |
+| A client is sent exactly the objects that cross its view and are at least a pixel | compare the server's answer with a brute-force scan | 3 |
+| A cursor is delivered exactly when it is inside the receiver's view | scripted scenarios across levels | 3 |
+| A role cannot be exceeded | a negative test per role and change type | 2, 5 |
 
 ## Packages
 
-The README plans four. This design adds three and sharpens the roles; the README changes when the design is
-accepted.
+The README plans four. This design adds three and sharpens the roles; the README table changes when the packages
+are created.
 
 | Package | Role |
 |---|---|
@@ -290,8 +373,8 @@ Proposed, not measured:
 
 - Pen to visible ink: under 20 ms of software latency.
 - 60 frames per second with 10,000 objects in view, at level 0 and at level 100 alike.
-- Zooming continuously through a level boundary shows no jump, and a point drawn at any depth is found at exactly
-  the same place after zooming away and back.
+- Zooming continuously through a level boundary shows no jump.
+- The exact position arithmetic costs under a millisecond per frame while panning at level 100.
 - Opening a surface: first content in under one second, whatever the surface's total size.
 - Cursor updates 30 times a second; a remote cursor lags by no more than 100 ms on a good connection.
 - Two viewers of a playing video are within 100 ms of each other.
@@ -332,8 +415,11 @@ Still open from `vision.md`: the CRDT library, and which first app proves the li
 
 Not owner decisions yet; each detailed design settles its own and raises what the owner should choose.
 
-- The level ratio (1024 here) and how an object's level is chosen and changed when it is scaled.
-- How a view that straddles a level boundary is drawn and subscribed to.
-- The library for the shared controls, and how far the accessibility mirror goes in the first version.
-- How long automatic snapshots are kept, and what a restore does to people who are editing at that moment.
-- What guests may do by default, and limits on what they can upload.
+- **Positions:** the level ratio (1024 here); the exact-arithmetic representation and its cost; how a view that
+  straddles a level boundary is drawn and subscribed to; the rule for moving a scaled object between levels.
+- **Identity and security:** how tokens are signed, rotated, expired and revoked; the length and lifetime of share
+  links; what guests may do by default and what they may upload; limits on media size and type.
+- **Controls:** the library for the shared controls, and how far the accessibility mirror goes in the first version.
+- **Versions:** how long automatic snapshots are kept, and what a restore does to people who are editing at that
+  moment.
+- **Presence:** the size of the color palette and what happens in very large rooms.
