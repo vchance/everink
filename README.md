@@ -35,5 +35,5 @@ your option.
 
 ## Contributing
 
-Everink is not accepting outside contributions yet: pull requests from people who are not collaborators will be
-closed without review. This will change once there is code to build on.
+Everink is not accepting outside contributions yet: pull requests from people who are not collaborators will not
+be reviewed or merged. This may change later; it will be announced here.
