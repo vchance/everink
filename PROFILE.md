@@ -10,14 +10,14 @@
 | Required services for tests | none (no tests yet) |
 | CI runners and storage (D9, D11) | classes used: `SMALL` (policy-drift, pr-evidence) only — every `runs-on` is `${{ fromJSON(vars[format('RUNS_ON_<CLASS>__{0}', github.triggering_actor)] || '["unplaced"]') }}` and its job starts its `if:` with `${{ vars[format('RUNS_ON_<CLASS>__{0}', github.triggering_actor)] != '' }}`: no placement = the job is skipped, never a GitHub-hosted fallback; no provider or machine label in the repo; key: `github.triggering_actor` (variables `RUNS_ON_<CLASS>__<login>`); placements (per operator, repository variables under the personal account; unset = skipped): vchance: SMALL → Ubicloud; other logins: none yet (their runs are skipped and merge.sh refuses their PRs until set); opt-in classes: none; ci-result fails on an unplaced required class: n/a: no product jobs; scheduled lane: none (no `schedule:` trigger); Ubicloud coverage for vchance (personal account) confirmed by this repository's `policy-drift` run on `ubicloud-standard-2`, 2026-11-10 (run 42864757709); self-hosted pools reached from here: none; artifact store and caches (D11): none: no job writes artifacts or caches; break-glass: owner changes their variables; known unplaced: none |
 
-## Going public (allowed by the owner 2026-11-10, not done)
-The repository stays private until the owner orders the switch (the decision and its link: `AGENTS.md` › Owner
-decisions). Core D9 sets the order:
-1. The owner picks a license, or accepts publishing without one (`docs/vision.md` › Open questions 5). Without a license
-   nobody else may use or contribute to the code.
-2. The owner removes `RUNS_ON_SMALL__VCHANCE` (a public repository carries no variable that names a paid label) and sets
-   Actions › Fork pull request workflows to require approval for all outside collaborators (right after step 3 if
-   GitHub does not offer that setting while the repository is private).
+## Going public (ordered by the owner 2026-11-10; in progress)
+The decisions and their links are in `AGENTS.md` › Owner decisions. Core D9 sets the order:
+1. Done: the license is MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`).
+2. The owner, or the agent on the owner's order, removes `RUNS_ON_SMALL__VCHANCE` (a public repository carries no
+   variable that names a paid label) and sets Actions › Fork pull request workflows to require approval for all outside
+   collaborators (right after step 3: GitHub does not offer that setting while the repository is private). Outside
+   contributions are not accepted yet (`AGENTS.md` › Owner decisions), so pull request creation is limited to
+   collaborators in the same step where GitHub offers that setting.
 3. The owner, or the agent on the owner's word, makes the repository public.
 4. A High-tier PR sets the `CI runners` row to `public: GitHub-hosted` and re-pins, so the policy workflows name a
    GitHub-hosted label with no placement gate. Between steps 2 and 4 the policy jobs of every other PR are skipped, so only the step-4 PR can merge, and only when
@@ -33,7 +33,7 @@ Web surfaces: none yet. When the browser shell lands, its in-repo e2e suite is t
 ## Components and critical paths
 | Component (path glob) | Owner | Critical? | Tests that cover it (command) | Consumers (transitive) |
 |---|---|---|---|---|
-| `README.md`, `docs/**` | owner | no | none | people |
+| `README.md`, `docs/**`, `LICENSE-MIT`, `LICENSE-APACHE` | owner | no | none | people |
 | `AGENTS.md`, `CLAUDE.md`, `PROFILE.md`, `.agent-rules/**`, `.claude/**`, `.githooks/**`, `.github/**` | owner | yes (agent policy, R9) | `policy-drift` | agents working here |
 
 ## Check selection (impact-based; core D2)
@@ -42,7 +42,7 @@ yet. The PR that adds the first code also adds its CI workflow and the rows for 
 
 | Changed paths | Checks that run on the PR | Evidence recorded as |
 |---|---|---|
-| `**/*.md` (`AGENTS.md`/`PROFILE.md`/`CLAUDE.md` excluded, R9) | `pr-evidence`; doc checks: none configured | `docs: n/a: none configured`; build/test `n/a: no code` |
+| `**/*.md` (`AGENTS.md`/`PROFILE.md`/`CLAUDE.md` excluded, R9), `LICENSE-MIT`, `LICENSE-APACHE` | `pr-evidence`; doc checks: none configured | `docs: n/a: none configured`; build/test `n/a: no code` |
 | `AGENTS.md`, `CLAUDE.md`, `PROFILE.md`, `.claude/**`, `.github/**`, `.agent-rules/**`, `.githooks/**` | `policy-drift` + `pr-evidence`; no product job exists, and core 0.1.22 makes `.github/**` and the agent-policy set select none | per check (CI) |
 | Uncertain mapping | `policy-drift` + `pr-evidence` | per check (CI) |
 
