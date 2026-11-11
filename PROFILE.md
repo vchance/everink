@@ -6,9 +6,22 @@
 | Classification | prototype (idea and research stage): documents only, no code yet. Everink is a planned infinite, multi-user drawing surface with one core for native and WebAssembly (`docs/vision.md`) |
 | Accountable owner | Von Chance (vchance) — owner-reserved decisions (R8); approver of exceptions and D-overrides |
 | Supported platforms | none yet (no code). Planned: desktop native and browser (wasm + WebGPU); each will be marked `CI` / `manual` / `nobody` when its code lands |
-| Toolchain | none yet; the core language (Rust or C++) is an open owner decision (`docs/vision.md` › Open questions) |
+| Toolchain | none installed yet; the core language is Rust (owner decision 2026-11-10, `AGENTS.md` › Owner decisions). The Rust version, edition and wasm tooling are set by the PR that adds the first code |
 | Required services for tests | none (no tests yet) |
 | CI runners and storage (D9, D11) | classes used: `SMALL` (policy-drift, pr-evidence) only — every `runs-on` is `${{ fromJSON(vars[format('RUNS_ON_<CLASS>__{0}', github.triggering_actor)] || '["unplaced"]') }}` and its job starts its `if:` with `${{ vars[format('RUNS_ON_<CLASS>__{0}', github.triggering_actor)] != '' }}`: no placement = the job is skipped, never a GitHub-hosted fallback; no provider or machine label in the repo; key: `github.triggering_actor` (variables `RUNS_ON_<CLASS>__<login>`); placements (per operator, repository variables under the personal account; unset = skipped): vchance: SMALL → Ubicloud; other logins: none yet (their runs are skipped and merge.sh refuses their PRs until set); opt-in classes: none; ci-result fails on an unplaced required class: n/a: no product jobs; scheduled lane: none (no `schedule:` trigger); Ubicloud coverage for vchance (personal account) confirmed by this repository's `policy-drift` run on `ubicloud-standard-2`, 2026-11-10 (run 42864757709); self-hosted pools reached from here: none; artifact store and caches (D11): none: no job writes artifacts or caches; break-glass: owner changes their variables; known unplaced: none |
+
+## Going public (allowed by the owner 2026-11-10, not done)
+The repository stays private until the owner orders the switch (the decision and its link: `AGENTS.md` › Owner
+decisions). Core D9 sets the order:
+1. The owner picks a license, or accepts publishing without one (`docs/vision.md` › Open questions 5). Without a license
+   nobody else may use or contribute to the code.
+2. The owner removes `RUNS_ON_SMALL__VCHANCE` (a public repository carries no variable that names a paid label) and sets
+   Actions › Fork pull request workflows to require approval for all outside collaborators (right after step 3 if
+   GitHub does not offer that setting while the repository is private).
+3. The owner, or the agent on the owner's word, makes the repository public.
+4. A High-tier PR sets the `CI runners` row to `public: GitHub-hosted` and re-pins, so the policy workflows name a
+   GitHub-hosted label with no placement gate. Between steps 2 and 4 the policy jobs of every other PR are skipped, so only the step-4 PR can merge, and only when
+   it is opened or re-run after step 3 (`policy-drift` fails a private repository that claims the marker).
 
 ## Device testing (core D10; simulators and emulators)
 | Surface | Test runner | PR fast lane (smoke) | Integration / release (full) | Where it runs |
