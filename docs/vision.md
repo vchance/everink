@@ -58,6 +58,15 @@ None of the existing projects packages these together:
 
 Coordinates: 64-bit world coordinates, or tile-local origins, so precision holds anywhere on the canvas.
 
+[design.md](design.md) develops this sketch into a proposed design. Where the two differ, the design is the newer
+thinking:
+
+- The server reads the document and keeps an index of it; it is not a stateless relay. "Relay" in this document
+  means that server.
+- Sync is per object, not per tile.
+- Positions are a level, a cell and an offset, so that zoom has no limit.
+- Layers are not a separate part of the document model at first; order and groups cover them.
+
 ## Candidate stacks
 
 | | Rust | C++ |
@@ -87,13 +96,15 @@ existing C++/wasm work and reuses Google's ink code directly.
 
 1. ~~Rust or C++ for the core?~~ Decided: Rust (see Decisions).
 2. Loro or yrs? Loro handles movable trees and reordering well; yrs has the larger ecosystem and hosted servers.
-3. How to shard a CRDT document by tile without breaking cross-tile objects such as long strokes?
-4. Vector only, or vector plus raster tiles for imported images?
+3. How to shard a CRDT document by tile without breaking cross-tile objects such as long strokes? Proposed answer in
+   [design.md](design.md): do not shard by tile; the object is the unit of sync.
+4. Vector only, or vector plus raster tiles for imported images? The owner wants pasted images and possibly video
+   (2026-11-11); [design.md](design.md) proposes them as placed objects, with no raster painting.
 5. ~~License: permissive (MIT/Apache-2.0) or copyleft?~~ Decided: MIT OR Apache-2.0 (see Decisions).
 6. Which first app proves the library: a whiteboard, a notebook, or a planning surface?
 
 ## Next steps
 
-1. Decide question 2 with a small Rust spike: one stroke type, two clients, a relay, native and web.
+1. Decide question 2 with a small Rust spike: one stroke type, two clients, a server, native and web.
 2. Write requirements with acceptance criteria for the spike.
 3. Measure: stroke latency, merge time, and memory for 100k strokes.
