@@ -14,7 +14,8 @@ See [docs/vision.md](docs/vision.md).
 ## Docs
 
 - [docs/vision.md](docs/vision.md): goals, non-goals, the gap Everink fills, candidate stacks, open questions.
-- [docs/design.md](docs/design.md): the proposed high-level design: objects, views, sync, presence, server.
+- [docs/design.md](docs/design.md): the high-level design: objects, views, sync, presence, server.
+- [docs/design/](docs/design/README.md): the detailed design in eight sections, with the questions still open.
 - [docs/landscape.md](docs/landscape.md): existing apps, SDKs and libraries, and what each covers.
 - [docs/naming.md](docs/naming.md): why "Everink", and the names that were checked.
 
