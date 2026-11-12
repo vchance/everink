@@ -7,8 +7,8 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
-spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with one crate
-(`crates/everink-core`). Nothing is released or published.
+spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with two crates
+(`crates/everink-core`, `crates/everink-sync`). Nothing is released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
@@ -20,6 +20,8 @@ cargo test -p everink-core --test positions <name>                  # one test
 cargo clippy --workspace --all-targets --locked -- -D warnings      # lint
 cargo fmt --all --check                                             # format check
 cargo run --release --example bench_positions                       # timing run (spike question 1)
+cargo test -p everink-sync --test object_map <name>                 # one test of the object map
+cargo run --release --example bench_object_map [objects] [depth]    # size and timing run (spike question 7)
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
@@ -41,6 +43,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   file per slice.
 - `crates/everink-core`: positions and the camera (spike slice 1). `tests/golden/positions.txt` is the
   cross-platform golden file.
+- `crates/everink-sync`: the server-ordered object map (spike slice 2a): objects and their registers, the
+  server's room, a client's copy, order keys, packed stroke points, canonical bytes. Depends on `everink-core`
+  only.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).

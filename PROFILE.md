@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Repository | vchance/everink · default branch `main` · visibility public (since 2026-11-10) · GitHub plan Free (rulesets are available to a public repository, none configured; merge gate = `.agent-rules/merge.sh`, pre-push hook, `policy-drift`, `pr-evidence`) |
-| Classification | prototype (spike stage): design documents and the first spike code (`crates/everink-core`). Nothing is released. Everink is a planned infinite, multi-user drawing surface with one core for native and WebAssembly (`docs/vision.md`) |
+| Classification | prototype (spike stage): design documents and the first spike code (`crates/everink-core`, `crates/everink-sync`). Nothing is released. Everink is a planned infinite, multi-user drawing surface with one core for native and WebAssembly (`docs/vision.md`) |
 | Accountable owner | Von Chance (vchance) — owner-reserved decisions (R8); approver of exceptions and D-overrides |
 | Supported platforms | Linux x86-64: `CI` (build, lint, tests). macOS aarch64: `manual` (the owner's Mac; the golden file is written there). wasm32 and Windows: `nobody` yet; wasm32 arrives with spike slice 3 |
 | Toolchain | Rust 1.97.1, pinned in `rust-toolchain.toml` with `rustfmt` and `clippy`; edition 2024; one Cargo workspace (`Cargo.toml`, `Cargo.lock` committed). Dependencies: `num-bigint` 0.5.1 and `num-traits` 0.2.19; for tests only, `dashu-int` 0.6.2 as a second big-integer library to check against. Licenses: all MIT OR Apache-2.0, except two crates that `dashu-int` brings in for tests, `num-modular` and `num-order`, which are Apache-2.0 only (compatible; test-only, never distributed). Crates are `publish = false`: publishing is an owner decision |
@@ -47,7 +47,7 @@ head still needs a full run. A path that matches no row, or a file list that is 
 |---|---|---|
 | `README.md`, `docs/**`, `LICENSE-MIT`, `LICENSE-APACHE`, `.gitignore` | `pr-evidence`; `changes` and `ci-result`; doc checks: none configured | `docs: n/a: none configured`; `lint` and `test`: `n/a: not selected (D2)` |
 | `AGENTS.md`, `CLAUDE.md`, `PROFILE.md`, `.claude/**`, `.github/**`, `.agent-rules/**`, `.githooks/**` | `policy-drift` + `pr-evidence`; `changes` and `ci-result`; these paths select no product job (core 0.1.22) | per check (CI); `lint` and `test`: `n/a: not selected (D2)` |
-| `crates/**`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml` | `lint` (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`) and `test` (`cargo test --workspace --locked`, then the timing example) | per check (CI), with the test count |
+| `crates/**`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml` | `lint` (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`) and `test` (`cargo test --workspace --locked`, then the two timing examples) | per check (CI), with the test count |
 | Any other path, or an uncertain mapping | every job | per check (CI) |
 
 Escalation triggers: with one component, `lint` and `test` are already the full suite; `workflow_dispatch` and the
@@ -70,7 +70,7 @@ scheduled lane run every job.
 | technical-design | any decision recorded in `docs/vision.md` (core language, CRDT, document model, sync protocol) |
 | architecture | new service, storage or major dependency; the first code layout |
 | security | `.github/**`, `.githooks/**`, permissions, anything that adds a network service or a dependency |
-| performance | a change to `crates/everink-core` arithmetic that the timing example covers; figures and the machine they were measured on are in `docs/spike/` |
+| performance | a change to `crates/everink-core` arithmetic or to the `crates/everink-sync` object map that a timing example covers; figures and the machine they were measured on are in `docs/spike/` |
 | observability | n/a (no runtime) |
 
 ## Merge authority
@@ -116,4 +116,4 @@ Moved into `AGENTS.md › Overrides` only once the owner accepts it; until then 
 
 ## Budgets
 - CI: `pr-evidence` and `policy-drift` under a minute each; `ci` a few minutes (no build cache, by core D11) — to measure on the first runs.
-- Performance: one budget so far, per-frame position work for 10,000 objects under 0.05 ms at any depth (measured 0.004 ms on an Apple M4, native; `docs/spike/results-1-positions.md`). A re-base is not yet inside a per-frame budget at depth: 1.3 ms at 100 levels on that machine, more on slower ones. WebAssembly is not measured. CI machines are not a benchmark reference.
+- Performance: one budget so far, per-frame position work for 10,000 objects under 0.05 ms at any depth (measured 0.004 ms on an Apple M4, native; `docs/spike/results-1-positions.md`). A re-base is not yet inside a per-frame budget at depth: 1.3 ms at 100 levels on that machine, more on slower ones. The object map has no budget yet; its first figures (about 1.3 KB of memory per stroke, 0.14 s to open 100,000 strokes, server work per change under a microsecond at depth 0 and 1 to 3 microseconds at 100 to 1,000 levels, same machine) are in `docs/spike/results-2a-object-map.md`. WebAssembly is not measured. CI machines are not a benchmark reference.
