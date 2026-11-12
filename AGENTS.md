@@ -26,8 +26,10 @@ When code arrives, the PR that adds it also adds the build, test, lint and forma
 ## Layout
 - `README.md`: what Everink is and the planned packages (`everink-core`, `everink-sync`, `everink-native`, `everink-web`).
 - `docs/vision.md`: goals, non-goals, architecture sketch, candidate stacks, open questions, next steps.
-- `docs/design.md`: the high-level design, with the owner's seven design decisions and the points left for the
-  detailed designs.
+- `docs/design.md`: the high-level design, with the owner's seven design decisions.
+- `docs/design/`: the detailed design. `README.md` is the index: how the eight sections fit, what the spike must
+  answer, and the decisions that need the owner. Sections `01` to `08` each cover one part and list their sources
+  and the claims they could not verify.
 - `docs/landscape.md`: existing projects and libraries, with sources; says which claims were not re-verified.
 - `docs/naming.md`: why the name, and the availability check.
 - `LICENSE-MIT`, `LICENSE-APACHE`: the two licenses; everything here is under either, at the user's option.
