@@ -869,8 +869,9 @@ state; it is still the cheapest by far (the figure in the table). A server canno
    library to detect it), remote updates taken for local ones in undo (apply them with an origin), the unit of
    length (count in the unit of the limit), and updates that wait for unseen changes (refuse them). One the
    adapter cannot contain and the application must avoid: two values of one mark on overlapping ranges merging
-   badly in yrs. Failures of size and speed (Loro and Automerge against yrs) cannot be contained. yrs was chosen on
-   that evidence, so the bar is read as "no failure that the adapter and the application cannot contain". For B to
+   badly in yrs. Failures of size and speed (Loro and Automerge against yrs) cannot be contained. The bar is not
+   changed: yrs fails it on damaged bytes, and was chosen by the owner with that known, because its failures are
+   ones the adapter and the application can contain. For B to
    displace D, it must open a view of 5,000 objects in under 1 second and keep memory per
    object within 3x of D's, while still giving the server a per-operation check.
 

@@ -931,8 +931,9 @@ The who list is a panel (section 07); its data comes from here.
 - **What the bound means for the 200 ms target.** At RTT 60 ms and 30 Hz the cursor already takes about 153 ms
   (previous section), leaving 47 ms for queueing. The 40 ms bound fits: the spike measured at most 39 ms, so **the
   200 ms target is met from about 2 Mbit/s up and missed at 1 Mbit/s** (64 ms in the model, about 217 ms for the
-  whole path, and 135 ms over loopback sockets). The target holds during a bulk load above
-  about 1.4 Mbit/s (below that the 4 KiB floor dominates: `65,536 bit / 0.047 s`; the 1.6 Mbit/s of the previous
+  whole path, and 135 ms over loopback sockets). By the arithmetic the target holds during a bulk load above
+  about 1.4 Mbit/s; the spike measured at 1 and 2 Mbit/s and not between, so "from about 2 Mbit/s" is what was
+  measured and 1.4 is where the arithmetic puts the edge (below that the 4 KiB floor dominates: `65,536 bit / 0.047 s`; the 1.6 Mbit/s of the previous
   paragraph is where the floor starts to apply). The 40 ms drain rule would give 80 ms and hold the target only
   above 13.9 Mbit/s, which is why 20 ms was chosen. The cost of a smaller unsent queue matters for throughput only
   if the drain-rate estimate is poor, since the congestion window, not the unsent counter, governs how much is in
@@ -942,7 +943,8 @@ The who list is a panel (section 07); its data comes from here.
 - **What would bring 1 Mbit/s inside the target.** Counting every unsent byte in one place, the writer's and the
   system's together ("one queue" in the spike), gave 33 ms in place of 64 at 1 Mbit/s in the model, which is the
   difference between missing the 200 ms target there and meeting it. It needs the system's own count of unsent
-  bytes, which this design does not use, and it is not adopted. The limit must also start at the floor, 4 KiB, until
+  bytes, which this design does not use, and it is not adopted here; the owner decides what to do about 1 Mbit/s
+  after a real-network test (question 4). The limit must also start at the floor, 4 KiB, until
   the first estimate of the link (section 03): at 16 KiB the first cursors waited 230 ms at 1 Mbit/s.
 - **Fallback trigger: a second WebSocket.** **Status (2026-11-12): the trigger was not reached in the spike, and
   the owner will decide after a test on a real network.** The spike measured a model and loopback sockets, which have

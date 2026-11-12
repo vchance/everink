@@ -134,8 +134,10 @@ as offered and the answers are quoted in https://github.com/vchance/everink/pull
 - **The 1 Mbit/s case stays open the same way.** The spike found the 200 ms cursor target met from about
   2 Mbit/s up and missed at 1 Mbit/s; whether to accept that or meet it is decided after the real-network test.
 - **`spike/text-trial` is kept until the yrs adapter exists**, then its yrs tests move there and it is removed.
-- **The hourly scheduled run of `ci` has never fired** (first seen 2026-11-12). The owner's answer was to leave
-  it for now: an agent does not investigate or change it until asked, and says so when it reports CI evidence.
+- **The hourly scheduled run of `ci` does not keep its hour.** When the owner was asked, it had not fired in the
+  seven hours and more since the schedule reached `main`; it then fired once (run 43263766909, 2026-11-12
+  16:54 UTC, every job passed on `6f28f05`) and not again that day. The owner's answer was to leave it for now: an
+  agent does not investigate or change it until asked.
 
 Ask, do not decide: the controls toolkit (after the spike), dropping or keeping the presence fallback and the
 1 Mbit/s target (after a real-network test), whether to use, name or

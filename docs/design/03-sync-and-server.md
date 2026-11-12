@@ -726,15 +726,21 @@ change. Presence and `Pong` are never held for the commit.
 keeps, per `ClientId`, the highest `ClientChangeId` it has logged and the `(ClientChangeId, Seq)` pairs of the
 changes that client has not yet confirmed receiving an `Ack` for. Every `Submit` and every `Hello` carries
 `acked_upto`, the highest id the client has seen acknowledged, and the room drops the pairs at or below it, so
-the list holds at most the unacknowledged budget in section 08's table and is normally a handful. A frame with `id
-<= highest` is
-not applied again and is answered with its original pair in an `Ack` while that pair is still held (not yet
-confirmed by `acked_upto`). The spike's room kept only the highest `ClientChangeId` and its pair, and so answered a
-resend of an older change with the pair of the newest one (`../spike/results-2a-object-map.md`, "Smaller points").
-That is enough for a client that only needs to know its change was applied; if the original pair is needed for
-every resend, keep the pairs as written here. A change that was refused is not remembered: sent again it is checked
-again, so a change refused for a passing reason (a parent that was deleted and is then restored) can succeed on a
-resend. The map is saved in every snapshot and
+the list holds at most the unacknowledged budget in section 08's table and is normally a handful. The rule for a frame, by its id:
+
+- `id <= highest` and its pair is still held (not yet confirmed by `acked_upto`): not applied again, answered
+  with its own pair in an `Ack`.
+- `id <= highest` and its pair is no longer held: not applied again, answered with the newest pair of that client.
+  The client has already confirmed it, so it needs only to know the change is not pending.
+- `id > highest`: checked and, if accepted, applied.
+
+Only an accepted change raises `highest`. A refused change is therefore not remembered: sent again with the same
+id it is checked again while no later change of that client has been accepted, so a change refused for a passing
+reason (a parent that was deleted and is then restored) can succeed on a resend. Once a later change has been
+accepted, the refused id is below `highest` and a resend of it is answered as a duplicate and never applied; a
+client that still wants the change sends it again under a new id. The spike's room kept only the highest
+`ClientChangeId` and its pair, which is the second case for every resend
+(`../spike/results-2a-object-map.md`, "Smaller points"). The map is saved in every snapshot and
 rebuilt from the log tail, so it survives a crash. It is trimmed for clients idle 30 days. An idle client costs
 about 40 bytes (4 MB for 100,000 devices); a client that vanished with a full window of unconfirmed changes costs
 up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so at once (an estimate).
@@ -765,7 +771,7 @@ up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so
   the 47 ms left of the 200 ms cursor budget. The 4 KiB floor takes over below about 1.6 Mbit/s (4 KiB drains in
   20 ms at 1.64 Mbit/s); there the wait is two floors' drain time, 66 ms at 1 Mbit/s and 660 ms at 100 kbit/s.
   On such links the server sends fewer objects first by raising `eff_min_px` for the opening fill, so less bulk
-  data is queued. 20 ms is the first value the spike tries. The bound counts bytes unsent on this host; bytes
+  data is queued. 20 ms was the first value the spike tried, and it stays (below). The bound counts bytes unsent on this host; bytes
   already queued in the network (a router in front of a slow last hop) are not modelled, so such a link can add
   delay beyond the figures here. Examples: 5 Mbit/s gives a limit of 12.5 KB, 13 Mbit/s
   gives 32 KB, and 26 Mbit/s or more gives 64 KiB.
@@ -779,14 +785,16 @@ up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so
   29 ms at 20, of which about 10 KiB held in the test's own buffers is 82 ms, 16 ms and 4 ms. Without the rule
   (1 MiB unsent) the delay was 8.4 s at 1 Mbit/s in the model (no cursor arrived over sockets), 1.7 s at 5 and
   0.42 s at 20. So the 200 ms target is met from about 2 Mbit/s up and missed at 1 Mbit/s, which the design
-  expected (it held above about 1.4 Mbit/s). The limit follows a change in speed within 51 ms at every speed tried
-  (the design asked for 500 ms). A 40 ms rule doubles the delay between 2 and 10 Mbit/s and changes nothing
+  expected (it held above about 1.4 Mbit/s). The limit settles within 51 ms of the start of a load at every speed
+  tried (the design asked for 500 ms); how fast it follows a later change of speed was tested only in made-up
+  time, with no figure. A 40 ms rule doubles the delay between 2 and 10 Mbit/s and changes nothing
   elsewhere, so 20 ms stays. Below about 2 Mbit/s the floor, not the rule, sets the delay (a 4 KiB floor is 131 ms
   of sending at 0.25 Mbit/s). Not measured: a real network, a WebSocket and TLS, many connections, and how long an
   accepted change waits behind bulk chunks.
   **What would bring 1 Mbit/s inside the target:** counting every unsent byte in one place, the writer's and the
   system's together ("one queue" in the spike), gave 33 ms in place of 64 at 1 Mbit/s in the model. It needs the
-  system's own count of unsent bytes, which this design does not use. It is not adopted here.
+  system's own count of unsent bytes, which this design does not use. It is not adopted here; what to do about
+  1 Mbit/s is the owner's to decide after a real-network test (section 04, question 4).
   With tokio it is done in two layers. First, the accepted `TcpStream` gets `TCP_NOTSENT_LOWAT` through the
   `socket2` crate before the WebSocket upgrade, set to the current limit (and set again when the limit changes);
   the kernel then reports the socket writable only when its unsent queue is below it, so `poll_write` returns
@@ -797,8 +805,8 @@ up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so
   estimate fell to a third of the truth, and the 95th percentile was 2.3 s. The safe `socket2` 0.6.5 wrapper
   exposes the option on Linux and Android only; macOS has the option but `socket2` and `libc` do not expose it, and
   the workspace forbids the `unsafe` call that would. The server is Linux, so that is enough for the product; a
-  development machine on macOS shows different behaviour unless it makes that call. Second, as the
-  rule that works where the option is missing or when TLS or a proxy sits between, the writer task keeps its own
+  development machine on macOS shows different behaviour unless it makes that call. Second, and as well as the
+  option, not instead of it, the writer task keeps its own
   count of bytes handed to the WebSocket sink and not yet flushed, and takes a class A or B chunk only when the
   count plus the chunk is under the limit; it flushes after each chunk. The writer is one task per connection that
   loops: take from P, else C, else (if under the limit) A or B, `feed`, `flush`.
@@ -815,7 +823,8 @@ up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so
   bytes in a queue of its own, handing over a chunk whenever that queue was under the current limit; this bounds
   the same bytes as setting the option to the current limit and changing it with the limit, and the socket figures
   above are for that arrangement. Behind a TLS-terminating proxy the option only covers the hop to the proxy and the estimate
-  then measures that hop; the second layer still holds.
+  then measures that hop; what the writer's own count is worth there is unverified (the spike measured neither a
+  WebSocket nor TLS).
 - *A slow client:* when its write queue exceeds 4 MiB or 2 s of backlog, the server throws away the queued class A
   messages, adds their ordinals to `dirty`, and when the socket drains sends the current body of each dirty
   object as `Enter` (state-based merge makes the latest state enough). Memory is therefore bounded by the bitmap.
@@ -1234,7 +1243,8 @@ Derived:
 
 The measured rows come from `../spike/results-2a-object-map.md` (Apple M4, native, release build, strokes of 200
 points). The storage and sending parts of the work per change, and the spatial index, are still estimates until
-slices 5 and 3. Memory grows with depth because positions are stored whole: positions are 73% of the state at
+slices 5 and 3 (the results file says "2c and 5"; slice 2c measured the pacing of sending and not its cost
+per change, so sending stays an estimate until the server exists). Memory grows with depth because positions are stored whole: positions are 73% of the state at
 1,000 levels, which is the second measurement (after the speed of section 01) saying that positions should be stored
 and sent as differences from a base.
 
@@ -1366,8 +1376,9 @@ all exact:
 a
 `Reg<T>` stamped with the per-surface `Seq`, so each object's state merges in any order; the server accepts or
 rejects a whole change; a CRDT library is used only inside text objects behind `TextDoc`. This is decided (owner
-decision, 2026-11-12). Which library edits text (Loro, yrs or another) is still open and the spike compares them;
-the spike also still checks the finding that no library syncs part of a document. Used:
+decision, 2026-11-12). The library that edits text is yrs (owner decision, 2026-11-12, on the spike's trial,
+`../spike/results-2b-text-libraries.md`), and the trial confirmed the finding that no library syncs part of a
+document. Used:
 
 - `Doc::apply(&Change, &ApplyCtx { seq, author, ext }) -> Result<Applied, ApplyError>`, where
   `Applied { effects: Vec<ObjectEffect>, skipped }` and `ObjectEffect { id, ordinal, old_box, new_box, deleted,

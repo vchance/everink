@@ -95,9 +95,8 @@ existing C++/wasm work and reuses Google's ink code directly.
 ## Open questions
 
 1. ~~Rust or C++ for the core?~~ Decided: Rust (see Decisions).
-2. Loro or yrs? Loro handles movable trees and reordering well; yrs has the larger ecosystem and hosted servers.
-   Narrowed on 2026-11-12: Everink holds its own object map, so the library is needed only for the text inside
-   text objects. Which one is still open; the spike compares them.
+2. ~~Loro or yrs?~~ Decided on 2026-11-12: yrs, and only for the text inside text objects, because Everink holds
+   its own object map (see `docs/spike/results-2b-text-libraries.md` for the trial of Loro, yrs and Automerge).
 3. How to shard a CRDT document by tile without breaking cross-tile objects such as long strokes? Proposed answer in
    [design.md](design.md): do not shard by tile; the object is the unit of sync.
 4. Vector only, or vector plus raster tiles for imported images? The owner wants pasted images and possibly video
