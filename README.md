@@ -2,7 +2,8 @@
 
 An infinite, multi-user drawing surface that runs the same core natively and in the browser (WebAssembly).
 
-Status: idea and research. No code yet.
+Status: design done, spike under way. The first code is `crates/everink-core` (positions and the camera); nothing
+is released.
 
 ## Why
 
@@ -16,6 +17,7 @@ See [docs/vision.md](docs/vision.md).
 - [docs/vision.md](docs/vision.md): goals, non-goals, the gap Everink fills, candidate stacks, open questions.
 - [docs/design.md](docs/design.md): the high-level design: objects, views, sync, presence, server.
 - [docs/design/](docs/design/README.md): the detailed design in eight sections, with the questions still open.
+- [docs/spike/](docs/spike/README.md): the spike: its questions, the slices, and measured results.
 - [docs/landscape.md](docs/landscape.md): existing apps, SDKs and libraries, and what each covers.
 - [docs/naming.md](docs/naming.md): why "Everink", and the names that were checked.
 
