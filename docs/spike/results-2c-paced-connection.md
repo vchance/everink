@@ -11,27 +11,32 @@ during a bulk load on one connection?
 
 No, with the design's 20 ms rule, from about 2 Mbit/s up; and yes, badly, without it.
 
-The design leaves 47 ms for queueing inside its 200 ms target for a cursor's whole path (section 04).
+The design leaves 47 ms for queueing inside its 200 ms target for a cursor's whole path (section 04). Every
+figure in this table is a 95th percentile.
 
 | | 1 Mbit/s | 5 Mbit/s | 20 Mbit/s |
 |---|---|---|---|
-| With the rule, in the model (95th percentile) | 64 ms: over | 39 ms: within | 26 ms: within |
-| With the rule, over real sockets on Linux (95th percentile) | 125 ms: over | 52 ms: just over | 29 ms: within |
+| With the rule, in the model | 64 ms: over | 39 ms: within | 26 ms: within |
+| With the rule, over real sockets on Linux | 135 ms: over | 52 ms: 5 ms over | 29 ms: within |
 | Without it (a megabyte unsent), model and sockets | 8.4 s; over sockets no cursor arrived | 1.7 s | 0.42 s |
 
-- **With the rule** the model gives 23 to 30 ms (median) and at most 39 ms (95th percentile) at 2 Mbit/s and
-  above while bulk data is sent without a pause. It reproduces the design's own table to within 6 ms at every
-  speed.
-- **Over real sockets** the figures are the model's plus what the two socket buffers of the test hold, about
-  10 KiB: 4 ms at 20 Mbit/s, 16 ms at 5, 82 ms at 1.
+- **With the rule** the model gives at most 39 ms at 2 Mbit/s and above while bulk data is sent without a
+  pause (39 ms at 2 and 5 Mbit/s, falling to 7 ms at 100). It reproduces the design's own table to within 6 ms
+  at every speed.
+- **Over real sockets** the figures are the model's plus what the test's own socket buffers hold, about 10 KiB:
+  4 ms at 20 Mbit/s, 16 ms at 5, 82 ms at 1. That part is the test's own (Finding 8); without it the 5 Mbit/s
+  figure is inside the budget, so it is not counted against the rule.
 - **At 1 Mbit/s the target is missed,** by a little in the model (about 217 ms for the whole path) and by more
   over sockets. The design expected the target to hold above about 1.4 Mbit/s, which the model bears out.
-  Counting every unsent byte in one place would bring 1 Mbit/s inside it (Finding 4).
+  Counting every unsent byte in one place would bring 1 Mbit/s inside it (Finding 5).
 - **Without the rule** a cursor message waits for the whole send buffer.
 - **The second connection for presence is not called for** on this evidence. Section 04 keeps it as a fallback
-  if cursor lag still passes 200 ms above about 1.6 Mbit/s with the rule; at 2 Mbit/s and above it does not.
-- **Two corrections to the design** came out of it: the limit must start small, and the rule only works if the
-  operating system is also kept from holding unsent bytes. See [Findings](#findings).
+  if cursor lag still passes 200 ms above about 1.6 Mbit/s with the rule; in the model it does not from
+  2 Mbit/s up.
+- **A gap in the protocol was found on the way:** while a view is being filled, a change can overtake the object
+  it writes to, and the client then loses it (Finding 1).
+- **Two more corrections to the design:** the limit must start small, and the rule only works if the operating
+  system is also kept from holding unsent bytes.
 
 ## What was built
 
@@ -54,8 +59,9 @@ server. What is tested here is everything that crosses the connection and the or
 
 A cursor message handed to a connection waits behind every byte handed over before it that has not left. So the
 writer never hands over much more than the connection can send soon. Cursors and control messages go first and
-ignore the limit; the stream of accepted changes and the bulk stream are cut into chunks that fit under it, and
-take turns of eight chunks.
+ignore the limit; the stream of accepted changes and the bulk stream are cut into chunks that fit under it.
+Accepted changes go before bulk; after eight chunks of them in a row one chunk of bulk goes, so a load is never
+starved.
 
 ## Measurements in the model
 
@@ -107,67 +113,72 @@ The limit itself settles within 51 ms at every speed; the design asks for 500 ms
 
 ## Measurements over real sockets
 
-`cargo run --release --example paced_link <seconds>`. Three threads joined by TCP on the loopback interface. The
-server writer has 30,000 strokes (30.6 MB) to send to a client that has just joined, and a cursor to pass on 30
-times a second; the relay reads from it at the link's speed; the client decodes every object and times every
-cursor message. Cursor delay in milliseconds after the first second: median / 95th percentile / maximum.
+`cargo run --release --example paced_link <seconds> <runs>`. Three threads joined by TCP on the loopback
+interface. The server writer has 30,000 strokes (30.6 MB) to send to a client that has just joined, and a cursor
+to pass on 30 times a second; the relay reads from it at the link's speed; the client decodes every object and
+times every cursor message. Each arrangement is run five times for three seconds. Cursor delay in milliseconds
+after the first second: the middle run, with the least and the most over the five runs.
 
-### Linux (x86-64, a GitHub-hosted runner), 4 seconds per run
+### Linux (x86-64, a GitHub-hosted runner)
 
-From the `test` job of CI run [43192425662](https://github.com/vchance/everink/actions/runs/43192425662), revision
-43343df. The repository does not otherwise take timings from a CI runner; these are delays set by the relay's
-speed and not by the machine, and Linux is where the system's unsent bytes can be bounded
-(`TCP_NOTSENT_LOWAT`), so this is the run that answers the question.
+From the `test` job of CI run [43195119713](https://github.com/vchance/everink/actions/runs/43195119713)
+(its second attempt; GitHub did not keep the log of the first), revision 9b65ec8. The repository does not
+otherwise take timings from a CI runner; these are delays set by the relay's speed and not by the machine, and
+Linux is where the system's unsent bytes can be bounded (`TCP_NOTSENT_LOWAT`), so this is the run that answers
+the question. Two earlier runs of four seconds, one run each (CI runs 43192425662 and 43192991412), gave 125 and
+135 ms for the 95th percentile at 1 Mbit/s with the rule; five runs of three seconds give 132 to 136.
 
-| Mbit/s | 20 ms rule | Fixed 64 KiB | Fixed 1 MiB | Worst in the first second, with the rule | Most bytes ever held by the system |
+| Mbit/s | 20 ms rule: median | 20 ms rule: 95th percentile | Fixed 64 KiB: 95th percentile | Fixed 1 MiB: 95th percentile | Worst in the first second, with the rule | Held by the system |
+|---|---|---|---|---|---|---|
+| 1 | 102 (101 to 103) | 135 (132 to 136) | 721 (720 to 723) | none arrived | 238 (238 to 239) | 10 KiB |
+| 5 | 43 (43 to 43) | 52 (52 to 52) | 143 (142 to 143) | 1,715 (1,715 to 1,716) | 55 (55 to 56) | 11 KiB |
+| 20 | 26 (26 to 26) | 29 (29 to 29) | 35 (35 to 36) | 429 (429 to 429) | 32 (31 to 32) | 11 KiB |
+
+- The system held 10 to 11 KiB between the writer and the relay in every run (Finding 8). At the link's speed
+  that is 82 ms at 1 Mbit/s, 16 ms at 5 and 4 ms at 20, and the figures are the model's two-queue column plus
+  that.
+- The pacer's estimate of the link was right in every arrangement (0.97, 4.95 and 20.04 Mbit/s).
+- The first second at 1 Mbit/s, 238 ms, is the slow start the model shows (230 ms).
+- With a megabyte unsent at 1 Mbit/s, one cursor message arrived in three seconds.
+
+### macOS (Apple M4)
+
+| Mbit/s | 20 ms rule: median | 20 ms rule: 95th percentile | Fixed 64 KiB: 95th percentile | Fixed 1 MiB: 95th percentile | Held by the system |
 |---|---|---|---|---|---|
-| 1 | 114 / 125 / 135 | 659 / 725 / 736 | none arrived | 243 | 10 KiB |
-| 5 | 43 / 52 / 55 | 130 / 142 / 145 | 1,703 / 1,715 / 1,717 | 55 | 11 KiB |
-| 20 | 26 / 29 / 30 | 32 / 36 / 36 | 425 / 429 / 429 | 32 | 11 KiB |
-
-- The system held 10 to 11 KiB between the writer and the relay in every run: Linux gave socket buffers of
-  8,192 bytes where 4,096 were asked for. At the link's speed that is 82 ms at 1 Mbit/s, 16 ms at 5 and 4 ms at
-  20, and the figures are the model's two-queue column plus that. Part of it is the relay's receive buffer,
-  which a real path does not have in that form.
-- The pacer's estimate of the link was right in every run (0.98, 4.96 and 20.04 Mbit/s).
-- The first second at 1 Mbit/s, 243 ms, is the slow start the model shows (230 ms).
-- With a megabyte unsent at 1 Mbit/s, one cursor message arrived in four seconds.
-
-### macOS (Apple M4), 6 seconds per run
-
-| Mbit/s | 20 ms rule | Fixed 64 KiB | Fixed 1 MiB | Most bytes ever held by the system |
-|---|---|---|---|---|
-| 1 | 2,787 / 3,454 / 3,554 | 3,285 / 4,076 / 4,168 | none arrived | 479 KiB |
-| 5 | 34 / 44 / 45 | 122 / 134 / 138 | 1,696 / 1,748 / 1,792 | 60 to 65 KiB |
-| 20 | 24 / 27 / 27 | 30 / 34 / 65 | 423 / 426 / 427 | 48 to 50 KiB |
+| 1 | 1,744 (1,705 to 1,745) | 2,297 (2,157 to 2,319) | 2,481 (2,349 to 2,486) | none arrived | 478 KiB |
+| 5 | 33 (33 to 34) | 43 (41 to 45) | 133 (133 to 134) | 1,787 (1,756 to 1,792) | 61 to 66 KiB |
+| 20 | 24 (24 to 24) | 27 (27 to 35) | 33 (33 to 34) | 427 (427 to 427) | 49 to 51 KiB |
 
 At 5 and 20 Mbit/s the figures agree with the model within a few milliseconds, in all three columns. At 1 Mbit/s
-they do not, and the last column says why: the writer had asked for 4 KiB socket buffers at both ends, and the
-system held 479 KiB between the writer and the relay all the same. Those bytes are ahead of every cursor
-message and the pacer cannot see them; its estimate of the link fell to nothing, because once the system had
-swallowed that much it took almost nothing more for seconds. This is macOS on the loopback interface (it also
-re-sizes a receive buffer when a loopback connection is made); why it holds so much more at 1 Mbit/s than at 5
-was not found. It is recorded because it shows what the rule depends on.
+they do not, and the last column says why: the writer was given 4 KiB socket buffers at both ends, and the
+system held 478 KiB between the writer and the relay all the same. Those bytes are ahead of every cursor
+message and the pacer cannot see them; its estimate of the link fell to a third of the truth, because once the
+system had swallowed that much it took almost nothing more for seconds. This is macOS on the loopback interface
+(it also re-sizes a receive buffer when a loopback connection is made); why it holds so much more at 1 Mbit/s
+than at 5 was not found. It is recorded because it shows what the rule depends on.
 
 No object was damaged or lost in any run: every object the client received decoded, and the client's copy held
 exactly as many as arrived.
 
 ## What the tests show
 
-`cargo test -p everink-sync --test wire_and_pacing` runs 10 tests; with slice 2a's, the crate has 28.
+`cargo test -p everink-sync --test wire_and_pacing` runs 11 tests; with slice 2a's, the crate has 29.
 
 - **Bytes on the wire.** 3,000 random changes, accepted or not, and the answers to the accepted ones, decode to
   what was encoded. Every cut-off is refused. Of 12,000 single-bit changes, each is refused or decodes to a
   message whose bytes are exactly the changed bytes. A count of operations over the limit is refused from the
-  count alone.
+  count alone, and no room is set aside for more operations than the bytes left could hold.
 - **A server and two clients that talk only in bytes.** The first client makes 3,000 changes; the server decodes
-  each before it looks at it. The second joins after 1,000: it is sent the room as it is in the bulk stream
-  while changes keep arriving in the other stream and the first client's cursor is passed on. Both clients end
-  with the room's bytes. The second sees far fewer cursor messages than were made, in order, the last one last.
+  each before it looks at it. The second joins after 1,000, on a slow connection: the room as it was then goes
+  into the bulk stream, and takes many rounds to arrive while changes keep arriving in the other stream and the
+  first client's cursor is passed on. The test checks that the two streams really were mixed. Both clients end
+  with the room's bytes. The second sees fewer cursor messages than were made, in order, the last one last.
+- **The same run without the fix of Finding 1** ends with a second client whose objects differ from the room's.
 - **The pacer.** Presence and control go first whatever is unsent, and only the newest presence message of each
   sender is kept. A chunk never takes the unsent bytes to the limit and is never over 16 KiB, under four rules
-  and a connection that sends random amounts. The two streams take turns of eight. The limit follows the
-  connection's speed, ignores idle stretches, and stays between its floor and ceiling.
+  and a connection that sends random amounts. Accepted changes go before bulk, and bulk gets one chunk in nine
+  when both are long. The limit follows the connection's speed, ignores idle stretches, and stays between its
+  floor and ceiling.
 - **The model.** The three results above are asserted: the design's table within 6 ms, a megabyte of delay
   without pacing, and the slow start.
 
@@ -176,27 +187,43 @@ with every presence message kept instead of the newest, two failed.
 
 ## Findings
 
-1. **The limit must start small.** With the design's 16 KiB before the first estimate, the first cursor
+1. **While a view is being filled, a change can overtake the object it writes to, and is then lost.** The room
+   is sent to a joining client in the bulk stream; accepted changes go in their own stream and go first. A copy
+   drops a write to an object it does not hold (slice 2a, Finding 2: the object will come whole). During a fill
+   that is wrong: the object that arrives afterwards is as it was when the fill began, and the write is gone for
+   good. The first version of this slice's test did not show it, because its room fitted in one turn of the
+   pacer and arrived before any change; a reviewer made the streams interleave and it failed.
+   The prototype's fix is on the client: between `begin_fill` and `end_fill` a copy keeps writes to objects it
+   does not hold and merges them when the object arrives. The stamps decide, so a write the object already
+   contains changes nothing. Two other fixes are possible on the server: write each object's bytes when its
+   chunk is taken and not when it is queued, with the server holding back changes to an object that is partly
+   sent; or send a change for an object in the view only after the object. Section 03's rule for routing changes
+   to a connection during `SetView` has to say which.
+2. **The limit must start small.** With the design's 16 KiB before the first estimate, the first cursor
    messages after a load begins wait up to a second on a 0.25 Mbit/s link and 230 ms at 1 Mbit/s, over the
    200 ms target for the whole path. Starting at the 4 KiB floor removes it; the limit finds its place within
    one 50 ms window either way. `Pacer::with_first_limit` is there to try it.
-2. **The rule holds only if the operating system is also kept from holding unsent bytes.** The pacer counts what
+3. **The rule holds only if the operating system is also kept from holding unsent bytes.** The pacer counts what
    it has handed over; whatever the system then holds is delay it cannot see, and it also spoils the estimate of
    the link's speed, which is made from how fast the system takes bytes. The design names the right tool
    (`TCP_NOTSENT_LOWAT`); the macOS run above shows what happens without it. Two consequences for the design:
    the option is a requirement of the server's platform and not a tuning detail, and the estimate should be
    checked against something that cannot be fooled by a buffer (the acknowledged bytes the system reports).
-3. **The safe wrapper for that option is Linux and Android only** (`socket2` 0.6.5). The server is Linux, so
-   that is enough for the product; a development machine on macOS cannot reproduce the server's behaviour.
-4. **Counting all unsent bytes in one place would halve the delay on slow links** (the "one queue" column): 33 ms
+4. **The safe wrapper for that option is Linux and Android only.** macOS has the option; `socket2` 0.6.5 and
+   `libc` do not expose it there, and the workspace forbids the `unsafe` call that would. The server is Linux,
+   so that is enough for the product; a development machine on macOS shows different behaviour unless it makes
+   that call.
+5. **Counting all unsent bytes in one place would halve the delay on slow links** (the "one queue" column): 33 ms
    in place of 64 at 1 Mbit/s, which is the difference between missing the 200 ms target there and meeting it.
    It needs the system's own count of unsent bytes, which the design does not use.
-5. **A 40 ms rule buys nothing.** It doubles the delay between 2 and 10 Mbit/s and changes nothing elsewhere.
+6. **A 40 ms rule buys nothing.** It doubles the delay between 2 and 10 Mbit/s and changes nothing elsewhere.
    Section 03 says 20 ms is "the first value the spike tries"; it can stay.
-6. **Below about 2 Mbit/s the floor, not the rule, sets the delay.** At 0.25 Mbit/s a 4 KiB floor is 131 ms of
+7. **Below about 2 Mbit/s the floor, not the rule, sets the delay.** At 0.25 Mbit/s a 4 KiB floor is 131 ms of
    sending. A lower floor would help there and cost more, smaller frames; the design's range starts at 1 Mbit/s.
-7. **Socket buffers have their own floor.** Linux gave 8,192 bytes where 4,096 were asked for. On a slow link
-   that is tens of milliseconds the rule cannot remove.
+8. **What the test's own sockets hold is part of the socket figures.** About 10 KiB sat between the writer and
+   the relay on Linux in every run: the relay's receive buffer and the bytes in flight on the loopback interface.
+   (Linux reports a buffer as twice the size that was set, for its own bookkeeping; the 8,192 the run prints is
+   the 4,096 that was asked for.) A real path has no relay, so this part is the test's and not the rule's.
 
 ## What the measurements do not show
 
@@ -204,7 +231,7 @@ with every presence message kept instead of the newest, two failed.
   real path the speed changes and the rule's estimate has to follow it; only the model's step change was tested
   (`the_limit_follows_what_the_connection_sends`).
 - **A WebSocket and TLS.** The frames here are a class, a length and a payload on plain TCP. A WebSocket adds a
-  few bytes per frame; TLS adds records and its own buffering, which belongs with Finding 2.
+  few bytes per frame; TLS adds records and its own buffering, which belongs with Finding 3.
 - **Many connections.** One client loads; the server's cost per connection is not measured.
 - **The 33 ms tick and the receiver's smoothing.** Section 04 adds both to a cursor's path; only the queueing
   part is measured here.
@@ -217,16 +244,27 @@ with every presence message kept instead of the newest, two failed.
 2. **Frames and messages are hand-written bytes**, not postcard. Section 03 names postcard for the messages
    around the bodies; the bodies and changes are section 02's bytes either way.
 3. **A change's bytes carry no client id.** The connection knows who it is.
+4. **In the socket run the system's unsent limit is fixed at 4 KiB**, and the writer keeps the unsent bytes in a
+   queue of its own, handing over a chunk whenever that queue is under the limit. Section 03 sets
+   `TCP_NOTSENT_LOWAT` to the current limit and changes it with the limit. The two arrangements bound the same
+   bytes; the socket figures are for this one.
+5. **The client keeps writes during a fill** (Finding 1). Section 03 has no such rule.
+
+Apply latency during a load (how long an accepted change waits behind bulk chunks) is not measured. With
+accepted changes going first it is at most one bulk chunk; with the equal turns this slice first had, it would
+have been up to eight.
 
 ## What the design should change
 
-1. Section 03, "Flow control": the limit starts at the floor (Finding 1).
+1. Section 03, "Flow control": the limit starts at the floor (Finding 2).
 2. Sections 03 and 04: say that bounding the system's unsent bytes is required for the rule to mean anything,
-   name the platform limit, and add the check on the estimate (Findings 2 and 3).
+   name the platform limit, and add the check on the estimate (Findings 3 and 4).
 3. Section 03: say what a chunk cuts (departure 1).
 4. Section 04, "One connection": replace the table with the model's and the socket figures, say that the target
-   is met from about 2 Mbit/s and what would bring 1 Mbit/s inside it (Finding 4), and record that the fallback's
+   is met from about 2 Mbit/s and what would bring 1 Mbit/s inside it (Finding 5), and record that the fallback's
    own trigger is not reached (whether to drop the fallback is the owner's decision).
+5. Section 03, "On SetView" and routing: say what happens to a change for an object whose body has been queued
+   and not yet sent (Finding 1).
 
 These are recorded here and made in a separate change, with the corrections from slices 1, 2a and 2b.
 
