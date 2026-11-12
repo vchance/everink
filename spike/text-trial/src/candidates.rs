@@ -38,8 +38,10 @@ impl Candidate for Loro {
         Loro::edit(doc, |t| t.delete(at, len).expect("a range inside the text"))
     }
 
-    fn apply(doc: &mut Self::Doc, update: &[u8]) -> Result<(), String> {
-        doc.import(update).map(|_| ()).map_err(|e| e.to_string())
+    fn apply_whole(doc: &mut Self::Doc, update: &[u8]) -> Result<bool, String> {
+        doc.import(update)
+            .map(|status| status.pending.is_none())
+            .map_err(|e| e.to_string())
     }
 
     fn text(doc: &mut Self::Doc) -> String {
@@ -98,13 +100,14 @@ impl Candidate for Yrs {
         txn.encode_update_v1()
     }
 
-    fn apply(doc: &mut Self::Doc, update: &[u8]) -> Result<(), String> {
-        use yrs::Transact;
+    fn apply_whole(doc: &mut Self::Doc, update: &[u8]) -> Result<bool, String> {
         use yrs::updates::decoder::Decode;
+        use yrs::{ReadTxn, Transact};
         let update = yrs::Update::decode_v1(update).map_err(|e| e.to_string())?;
-        doc.transact_mut()
-            .apply_update(update)
-            .map_err(|e| e.to_string())
+        let mut txn = doc.transact_mut();
+        txn.apply_update(update).map_err(|e| e.to_string())?;
+        let store = txn.store();
+        Ok(store.pending_update().is_none() && store.pending_ds().is_none())
     }
 
     fn text(doc: &mut Self::Doc) -> String {
@@ -130,7 +133,7 @@ impl Candidate for Yrs {
         Ok(doc)
     }
 
-    /// yrs has no fork: a scratch copy is a new document loaded from the whole state.
+    /// yrs has no fork (and Loro's `fork` drops changes that are waiting; this copy keeps them): a scratch copy is a new document loaded from the whole state.
     fn scratch(doc: &mut Self::Doc) -> Self::Doc {
         let state = Yrs::snapshot(doc);
         Yrs::load(u64::from(u32::MAX), &state).expect("a document can load its own state")
@@ -198,13 +201,16 @@ impl Candidate for Am {
         doc.save_incremental()
     }
 
-    /// An update is one change. It is decoded here, which checks its checksum, and then applied.
+    /// An update is one change. It is decoded here and then applied. Decoding refuses most damaged bytes, not
+    /// all: see `tests/fuzz.rs`.
     /// `load_incremental` would take the same bytes, but it answers "ok" to bytes it cannot read and applies
     /// nothing (see the test `automerge_load_incremental_says_ok_to_bytes_it_cannot_read`), so a server could
     /// not tell a bad update from a good one.
-    fn apply(doc: &mut Self::Doc, update: &[u8]) -> Result<(), String> {
+    fn apply_whole(doc: &mut Self::Doc, update: &[u8]) -> Result<bool, String> {
         let change = automerge::Change::from_bytes(update.to_vec()).map_err(|e| e.to_string())?;
-        doc.apply_changes([change]).map_err(|e| e.to_string())
+        doc.apply_changes([change]).map_err(|e| e.to_string())?;
+        let heads = doc.get_heads();
+        Ok(doc.get_missing_deps(&heads).is_empty())
     }
 
     fn text(doc: &mut Self::Doc) -> String {

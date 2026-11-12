@@ -21,8 +21,14 @@ pub trait Candidate {
     fn insert(doc: &mut Self::Doc, at: usize, text: &str) -> Vec<u8>;
     /// Deletes characters, and returns the update to send to the others.
     fn delete(doc: &mut Self::Doc, at: usize, len: usize) -> Vec<u8>;
-    /// Applies an update from outside. Must not panic on any bytes.
-    fn apply(doc: &mut Self::Doc, update: &[u8]) -> Result<(), String>;
+    /// Applies an update from outside, and says whether all of it took effect. `Ok(false)` means the library
+    /// took the bytes and is holding some of them back, until changes they depend on arrive. Must not panic on
+    /// any bytes.
+    fn apply_whole(doc: &mut Self::Doc, update: &[u8]) -> Result<bool, String>;
+    /// Applies an update as one client takes another's: an update that has to wait is fine.
+    fn apply(doc: &mut Self::Doc, update: &[u8]) -> Result<(), String> {
+        Self::apply_whole(doc, update).map(|_| ())
+    }
     fn text(doc: &mut Self::Doc) -> String;
     /// The length in characters.
     fn len(doc: &mut Self::Doc) -> usize;
@@ -33,9 +39,16 @@ pub trait Candidate {
     fn scratch(doc: &mut Self::Doc) -> Self::Doc;
 
     /// The server's rule: try the update on a scratch copy, check the length limit, and only then keep it.
+    ///
+    /// An update that would have to wait for changes the server has not seen is refused. Without that, a client
+    /// could send its updates out of order: the later ones are parked unchecked, and the check then sees them
+    /// too late or, with a copy that drops what is parked, never (the test
+    /// `updates_sent_out_of_order_do_not_get_past_the_server`).
     fn checked_apply(doc: &mut Self::Doc, update: &[u8], max_chars: usize) -> Result<(), String> {
         let mut scratch = Self::scratch(doc);
-        Self::apply(&mut scratch, update)?;
+        if !Self::apply_whole(&mut scratch, update)? {
+            return Err("the update depends on changes the server has not seen".into());
+        }
         if Self::len(&mut scratch) > max_chars {
             return Err("the text would be longer than its limit".into());
         }

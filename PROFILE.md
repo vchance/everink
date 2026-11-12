@@ -36,7 +36,7 @@ Web surfaces: none yet. When the browser shell lands, its in-repo e2e suite is t
 |---|---|---|---|---|
 | `README.md`, `docs/**`, `LICENSE-MIT`, `LICENSE-APACHE`, `.gitignore` | owner | no | none | people |
 | `crates/**`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml` (component `rust`) | owner | yes (positions are the base of everything else) | `cargo test --workspace --locked` | the later spike slices |
-| `spike/text-trial/**` (component `text`; `rust-toolchain.toml` builds it too) | owner | no (a trial; nothing depends on it) | `cargo test --locked --manifest-path spike/text-trial/Cargo.toml` | the owner's choice of a text library |
+| `spike/text-trial/**` (component `text`; `rust-toolchain.toml`, `rustfmt.toml` and `clippy.toml` apply to it too) | owner | no (a trial; nothing depends on it) | `cargo test --locked --manifest-path spike/text-trial/Cargo.toml` | the owner's choice of a text library |
 | `AGENTS.md`, `CLAUDE.md`, `PROFILE.md`, `.agent-rules/**`, `.claude/**`, `.githooks/**`, `.github/**` | owner | yes (agent policy, R9) | `policy-drift` | agents working here |
 
 ## Check selection (impact-based; core D2)
@@ -48,9 +48,9 @@ head still needs a full run. A path that matches no row, or a file list that is 
 |---|---|---|
 | `README.md`, `docs/**`, `LICENSE-MIT`, `LICENSE-APACHE`, `.gitignore` | `pr-evidence`; `changes` and `ci-result`; doc checks: none configured | `docs: n/a: none configured`; `lint` and `test`: `n/a: not selected (D2)` |
 | `AGENTS.md`, `CLAUDE.md`, `PROFILE.md`, `.claude/**`, `.github/**`, `.agent-rules/**`, `.githooks/**` | `policy-drift` + `pr-evidence`; `changes` and `ci-result`; these paths select no product job (core 0.1.22) | per check (CI); `lint` and `test`: `n/a: not selected (D2)` |
-| `crates/**`, `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `clippy.toml` | `lint` (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`) and `test` (`cargo test --workspace --locked`, then the two timing examples) | per check (CI), with the test count |
+| `crates/**`, `Cargo.toml`, `Cargo.lock` | `lint` (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`) and `test` (`cargo test --workspace --locked`, then the two timing examples) | per check (CI), with the test count |
 | `spike/text-trial/**` | `text-trial` (format check, clippy, tests and the size and timing run, all with `--manifest-path spike/text-trial/Cargo.toml`) | per check (CI), with the test count |
-| `rust-toolchain.toml` | `lint`, `test` and `text-trial` | per check (CI) |
+| `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml` (read by both; the tools look in parent directories) | `lint`, `test` and `text-trial` | per check (CI) |
 | Any other path, or an uncertain mapping | every job | per check (CI) |
 
 Escalation triggers: `lint`, `test` and `text-trial` together are the full suite; `workflow_dispatch` and the

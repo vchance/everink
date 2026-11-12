@@ -104,6 +104,58 @@ fn the_server_can_refuse_an_update_and_keep_its_document_unchanged() {
     server_check::<Am>();
 }
 
+/// A client sends keystrokes 22 to 30 before keystroke 21. Each library takes the early ones without complaint
+/// and parks them. The server's rule has to refuse them, or its limit means nothing.
+fn out_of_order<C: Candidate>() -> (usize, usize) {
+    let (_, updates) = typed::<C>(1, 30);
+    // What the library does on its own: everything is "ok", and nothing shows until the missing one arrives.
+    let mut plain = C::new(100);
+    for u in &updates[..20] {
+        assert_eq!(C::apply_whole(&mut plain, u), Ok(true));
+    }
+    for u in &updates[21..] {
+        assert_eq!(C::apply_whole(&mut plain, u), Ok(false), "{}", C::NAME);
+    }
+    assert_eq!(C::len(&mut plain), 20);
+    // A scratch copy taken now, given the missing keystroke: does it see what was parked?
+    let mut copy = C::scratch(&mut plain);
+    C::apply(&mut copy, &updates[20]).unwrap();
+    let seen_by_copy = C::len(&mut copy);
+    C::apply(&mut plain, &updates[20]).unwrap();
+    let in_document = C::len(&mut plain);
+
+    // The server's rule, limit 21: the early ones are refused and leave nothing behind; the honest one passes.
+    let mut server = C::new(100);
+    for u in &updates[..20] {
+        C::checked_apply(&mut server, u, 21).unwrap();
+    }
+    let before = C::snapshot(&mut server);
+    for u in &updates[21..] {
+        assert!(C::checked_apply(&mut server, u, 21).is_err(), "{}", C::NAME);
+    }
+    assert_eq!(
+        C::snapshot(&mut server),
+        before,
+        "{}: a refused update left a trace",
+        C::NAME
+    );
+    C::checked_apply(&mut server, &updates[20], 21).unwrap();
+    assert_eq!(C::len(&mut server), 21);
+    assert!(C::checked_apply(&mut server, &updates[21], 21).is_err());
+    assert_eq!(C::len(&mut server), 21);
+    (seen_by_copy, in_document)
+}
+
+#[test]
+fn updates_sent_out_of_order_do_not_get_past_the_server() {
+    // In every library the document ends with all 30 characters once the missing keystroke arrives.
+    // Loro's `fork` drops what was parked, so a check on the copy alone would see 21 and pass. The copies of
+    // yrs and Automerge keep it and see 30.
+    assert_eq!(out_of_order::<Loro>(), (21, 30));
+    assert_eq!(out_of_order::<Yrs>(), (30, 30));
+    assert_eq!(out_of_order::<Am>(), (30, 30));
+}
+
 // -----------------------------------------------------------------------------------------------------------------
 // Question 5: can part of a document be synced?
 // -----------------------------------------------------------------------------------------------------------------
@@ -419,6 +471,136 @@ fn overlapping_marks_from_two_clients_converge() {
         };
         assert_eq!(marks(&mut one), marks(&mut two));
         assert_eq!(marks(&mut one), ["bold 4..15", "italic 10..19"]);
+    }
+}
+
+#[test]
+fn two_values_for_one_mark_end_as_one_value_everywhere() {
+    // An exclusive mark: a stretch of text has one colour. Two clients colour overlapping stretches differently
+    // at the same time. Both must end with the same colours, one per character.
+    // Loro
+    {
+        let (mut one, updates) = typed::<Loro>(1, 19);
+        let mut two = Loro::new(2);
+        for u in &updates {
+            Loro::apply(&mut two, u).unwrap();
+        }
+        // Loro wants a style declared before it is used; only a few names are known to it from the start.
+        for doc in [&one, &two] {
+            let mut styles = loro::StyleConfigMap::new();
+            styles.insert("colour".into(), loro::StyleConfig::new());
+            doc.config_text_style(styles);
+        }
+        let mark = |doc: &loro::LoroDoc, range: std::ops::Range<usize>, colour: &str| {
+            let before = doc.oplog_vv();
+            doc.get_text(TEXT).mark(range, "colour", colour).unwrap();
+            doc.commit();
+            doc.export(loro::ExportMode::updates(&before)).unwrap()
+        };
+        let (u1, u2) = (mark(&one, 4..15, "red"), mark(&two, 10..19, "blue"));
+        Loro::apply(&mut one, &u2).unwrap();
+        Loro::apply(&mut two, &u1).unwrap();
+        let (d1, d2) = (
+            format!("{:?}", one.get_text(TEXT).to_delta()),
+            format!("{:?}", two.get_text(TEXT).to_delta()),
+        );
+        assert_eq!(d1, d2);
+        assert!(d1.contains("red") && d1.contains("blue"), "{d1}");
+        assert_eq!(
+            one.get_text(TEXT).to_delta().len(),
+            3,
+            "plain, red, blue: {d1}"
+        );
+    }
+    // yrs
+    {
+        use std::sync::Arc;
+        use yrs::types::Attrs;
+        use yrs::{Any, Text, Transact};
+        let (mut one, updates) = typed::<Yrs>(1, 19);
+        let mut two = Yrs::new(2);
+        for u in &updates {
+            Yrs::apply(&mut two, u).unwrap();
+        }
+        let mark = |doc: &yrs::Doc, at: u32, len: u32, colour: &str| {
+            let text = doc.get_or_insert_text(TEXT);
+            let mut txn = doc.transact_mut();
+            let attrs = Attrs::from([(Arc::from("colour"), Any::from(colour))]);
+            text.format(&mut txn, at, len, attrs);
+            txn.encode_update_v1()
+        };
+        let (u1, u2) = (mark(&one, 4, 11, "red"), mark(&two, 10, 9, "blue"));
+        Yrs::apply(&mut one, &u2).unwrap();
+        Yrs::apply(&mut two, &u1).unwrap();
+        let runs = |doc: &yrs::Doc| {
+            let text = doc.get_or_insert_text(TEXT);
+            let diff = text.diff(&doc.transact(), yrs::types::text::YChange::identity);
+            diff.iter()
+                .map(|d| {
+                    format!(
+                        "{:?} {:?}",
+                        d.insert,
+                        d.attributes.as_ref().and_then(|a| a.get("colour"))
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(runs(&one), runs(&two));
+        // Both agree, but not on what either asked for: " fox", which only the second client coloured, ends
+        // with no colour. The end of the first client's red stretch also ends the blue one.
+        let got = runs(&one);
+        assert_eq!(got.len(), 4, "{got:?}");
+        assert!(
+            got[1].contains("quick ") && got[1].contains("red"),
+            "{got:?}"
+        );
+        assert!(
+            got[2].contains("brown") && got[2].contains("blue"),
+            "{got:?}"
+        );
+        assert!(
+            got[3].contains(" fox") && got[3].ends_with("None"),
+            "{got:?}"
+        );
+    }
+    // Automerge
+    {
+        use automerge::marks::{ExpandMark, Mark};
+        use automerge::transaction::Transactable;
+        use automerge::{ROOT, ReadDoc};
+        let (mut one, updates) = typed::<Am>(1, 19);
+        let mut two = Am::new(2);
+        for u in &updates {
+            Am::apply(&mut two, u).unwrap();
+        }
+        let mark = |doc: &mut automerge::AutoCommit, start: usize, end: usize, colour: &str| {
+            let (_, id) = doc.get(ROOT, TEXT).unwrap().unwrap();
+            Am::forget_unsent(doc);
+            doc.mark(
+                &id,
+                Mark::new("colour".to_string(), colour, start, end),
+                ExpandMark::None,
+            )
+            .unwrap();
+            doc.save_incremental()
+        };
+        let (u1, u2) = (mark(&mut one, 4, 15, "red"), mark(&mut two, 10, 19, "blue"));
+        Am::apply(&mut one, &u2).unwrap();
+        Am::apply(&mut two, &u1).unwrap();
+        let marks = |doc: &mut automerge::AutoCommit| {
+            let (_, id) = doc.get(ROOT, TEXT).unwrap().unwrap();
+            let mut m: Vec<String> = doc
+                .marks(&id)
+                .unwrap()
+                .iter()
+                .map(|m| format!("{}..{} {}", m.start, m.end, m.value()))
+                .collect();
+            m.sort();
+            m
+        };
+        assert_eq!(marks(&mut one), marks(&mut two));
+        // Two stretches that do not overlap and together cover 4 to 19.
+        assert_eq!(marks(&mut one).len(), 2, "{:?}", marks(&mut one));
     }
 }
 
