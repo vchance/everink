@@ -6,7 +6,7 @@
 | Classification | prototype (spike stage): design documents and the first spike code (`crates/everink-core`, `crates/everink-sync`, and the trial package `spike/text-trial`). Nothing is released. Everink is a planned infinite, multi-user drawing surface with one core for native and WebAssembly (`docs/vision.md`) |
 | Accountable owner | Von Chance (vchance) — owner-reserved decisions (R8); approver of exceptions and D-overrides |
 | Supported platforms | Linux x86-64: `CI` (build, lint, tests). macOS aarch64: `manual` (the owner's Mac; the golden file is written there). wasm32 and Windows: `nobody` yet; wasm32 arrives with spike slice 3 |
-| Toolchain | Rust 1.97.1, pinned in `rust-toolchain.toml` with `rustfmt` and `clippy`; edition 2024; one Cargo workspace (`Cargo.toml`, `Cargo.lock` committed). Dependencies: `num-bigint` 0.5.1 and `num-traits` 0.2.19; for tests only, `dashu-int` 0.6.2 as a second big-integer library to check against. Licenses: all MIT OR Apache-2.0, except two crates that `dashu-int` brings in for tests, `num-modular` and `num-order`, which are Apache-2.0 only (compatible; test-only, never distributed). The trial package `spike/text-trial` is outside the workspace with its own lock file: `loro` 1.17.1, `yrs` 0.28.1, `automerge` 0.12.0 and what they bring in (201 packages over all platforms; all offer MIT or Apache-2.0 except `im`, `bitmaps`, `sized-chunks` (MPL-2.0-or-later) and `xxhash-rust` (BSL-1.0) from Loro and `zlib-rs` (Zlib) from Automerge; trial-only, never distributed, read from crate metadata and not audited). Crates are `publish = false`: publishing is an owner decision |
+| Toolchain | Rust 1.97.1, pinned in `rust-toolchain.toml` with `rustfmt` and `clippy`; edition 2024; one Cargo workspace (`Cargo.toml`, `Cargo.lock` committed). Dependencies: `num-bigint` 0.5.1 and `num-traits` 0.2.19; for tests only, `dashu-int` 0.6.2 as a second big-integer library to check against; for one example only, `socket2` 0.6.5 (with `libc`), both MIT OR Apache-2.0. Licenses: all MIT OR Apache-2.0, except two crates that `dashu-int` brings in for tests, `num-modular` and `num-order`, which are Apache-2.0 only (compatible; test-only, never distributed). The trial package `spike/text-trial` is outside the workspace with its own lock file: `loro` 1.17.1, `yrs` 0.28.1, `automerge` 0.12.0 and what they bring in (201 packages over all platforms; all offer MIT or Apache-2.0 except `im`, `bitmaps`, `sized-chunks` (MPL-2.0-or-later) and `xxhash-rust` (BSL-1.0) from Loro and `zlib-rs` (Zlib) from Automerge; trial-only, never distributed, read from crate metadata and not audited). Crates are `publish = false`: publishing is an owner decision |
 | Required services for tests | none |
 | CI runners and storage (D9, D11) | `public: GitHub-hosted` (owner call-out 2026-11-10, "gitrunners will be guthub", linked from `AGENTS.md` › Owner decisions): every job names the standard hosted label `ubuntu-24.04` directly, with no placement gate; no `RUNS_ON_*` variable exists (`RUNS_ON_SMALL__VCHANCE`, which named an Ubicloud label, was removed on 2026-11-10 before the switch); jobs: `policy-drift`, `pr-evidence`, and in `ci`: `changes`, `lint`, `test`, `text-trial`, `ci-result`; ci-result: defined in `ci` and required by `merge.sh`; nothing is placed, so it checks job results only; scheduled lane: `ci` hourly at minute 23 (the integration lane; a public repository's jobs are not placed, so there is no operator placement to check); self-hosted pools reached from here: none; artifact store and caches (D11): none: no job writes artifacts or caches |
 
@@ -48,7 +48,7 @@ head still needs a full run. A path that matches no row, or a file list that is 
 |---|---|---|
 | `README.md`, `docs/**`, `LICENSE-MIT`, `LICENSE-APACHE`, `.gitignore` | `pr-evidence`; `changes` and `ci-result`; doc checks: none configured | `docs: n/a: none configured`; `lint` and `test`: `n/a: not selected (D2)` |
 | `AGENTS.md`, `CLAUDE.md`, `PROFILE.md`, `.claude/**`, `.github/**`, `.agent-rules/**`, `.githooks/**` | `policy-drift` + `pr-evidence`; `changes` and `ci-result`; these paths select no product job (core 0.1.22) | per check (CI); `lint` and `test`: `n/a: not selected (D2)` |
-| `crates/**`, `Cargo.toml`, `Cargo.lock` | `lint` (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`) and `test` (`cargo test --workspace --locked`, then the two timing examples) | per check (CI), with the test count |
+| `crates/**`, `Cargo.toml`, `Cargo.lock` | `lint` (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`) and `test` (`cargo test --workspace --locked`, then the timing examples and the paced-link run) | per check (CI), with the test count |
 | `spike/text-trial/**` | `text-trial` (format check, clippy, tests and the size and timing run, all with `--manifest-path spike/text-trial/Cargo.toml`) | per check (CI), with the test count |
 | `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml` (read by both; the tools look in parent directories) | `lint`, `test` and `text-trial` | per check (CI) |
 | Any other path, or an uncertain mapping | every job | per check (CI) |
@@ -73,7 +73,7 @@ scheduled lane run every job.
 | technical-design | any decision recorded in `docs/vision.md` (core language, CRDT, document model, sync protocol) |
 | architecture | new service, storage or major dependency; the first code layout |
 | security | `.github/**`, `.githooks/**`, permissions, anything that adds a network service or a dependency (the trial package's dependencies included) |
-| performance | a change to `crates/everink-core` arithmetic or to the `crates/everink-sync` object map that a timing example covers; figures and the machine they were measured on are in `docs/spike/` |
+| performance | a change to `crates/everink-core` arithmetic, to the `crates/everink-sync` object map or to its pacing rule that a timing example covers; figures and the machine they were measured on are in `docs/spike/` |
 | observability | n/a (no runtime) |
 
 ## Merge authority
@@ -106,7 +106,7 @@ Moved into `AGENTS.md › Overrides` only once the owner accepts it; until then 
 | Deploy targets | none |
 | Rollback | `git revert` on `main` |
 | Post-release watch | n/a |
-| Dependency cadence | none set yet: two dependencies in the workspace, pinned by `Cargo.lock`, and the trial's three candidates pinned exactly in `spike/text-trial/Cargo.toml` and its lock file; advisory checks (`cargo-deny`, `cargo-audit`) are planned in `docs/design/08-identity-and-security.md` and not yet configured |
+| Dependency cadence | none set yet: two dependencies in the workspace (and two more used by tests or one example), pinned by `Cargo.lock`, and the trial's three candidates pinned exactly in `spike/text-trial/Cargo.toml` and its lock file; advisory checks (`cargo-deny`, `cargo-audit`) are planned in `docs/design/08-identity-and-security.md` and not yet configured |
 | Deprecation policy | n/a (no public API) |
 
 ## Cleanup (core R10)
