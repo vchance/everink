@@ -8,8 +8,8 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
 spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with two crates
-(`crates/everink-core`, `crates/everink-sync`) and one trial package outside it (`spike/text-trial`). Nothing is
-released or published.
+(`crates/everink-core`, `crates/everink-sync`) and two trial packages outside it (`spike/text-trial`,
+`spike/render-trial`). Nothing is released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
@@ -34,6 +34,9 @@ cargo test --locked --manifest-path spike/text-trial/Cargo.toml     # the text-l
 cargo run --release --locked --manifest-path spike/text-trial/Cargo.toml   # its size and timing run (questions 5, 6)
 cargo clippy --manifest-path spike/text-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/text-trial/Cargo.toml --check       # its format check
+cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml [strokes]   # the renderer trial (question 10)
+cargo clippy --manifest-path spike/render-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
+cargo fmt --manifest-path spike/render-trial/Cargo.toml --check     # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
@@ -64,6 +67,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `spike/text-trial`: the trial of Loro, yrs and Automerge (spike slice 2b). A package of its own with its own
   `Cargo.lock`, outside the workspace, so the three libraries never enter the main build. The workspace commands
   above do not reach it; it has its own, and its own CI job (`text-trial`).
+- `spike/render-trial`: the trial of `vello_gpu` and `vello_cpu` on a scene of stroke outlines (spike slice 3b).
+  A package of its own with its own `Cargo.lock`, for the same reason. It builds `crates/everink-core` in, so a
+  change there runs its CI job (`render-trial`) too. It has no tests; its run checks itself.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
@@ -78,8 +84,8 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   difference between machines is a bug, not a reason to regenerate.
 - In `crates/everink-core`, `clippy` refuses every float method outside the allowed arithmetic (`mul_add`, the
   trigonometric, exponential and power functions, `min`/`max`/`clamp`; the list is `clippy.toml` there). It is a
-  list, so a method it does not name gets through: add to it when one is found. Do not allow one in shared geometry; an allowance is for a display value or a test,
-  with the reason beside it.
+  list, so a method it does not name gets through: add to it when one is found. Do not allow one in shared
+  geometry; an allowance is for a display value or a test, with the reason beside it.
 - Only `everink-core` is tested on wasm32. `everink-sync` has an example that opens sockets, which that target
   does not have.
 - Crates are `publish = false`. Do not remove that; publishing is an owner decision.
@@ -93,6 +99,8 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   damaged bytes). When one fails after a version change, the library changed: update
   `docs/spike/results-2b-text-libraries.md`, do not just flip the assertion. The owner chose yrs on
   2026-11-12; the trial stays until the yrs adapter exists.
+- `spike/render-trial` needs a GPU for its `vello_gpu` figures. A GitHub-hosted runner has none, so CI runs only
+  its processor renderer. Take renderer figures on a machine with a GPU and name it.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions

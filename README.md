@@ -3,7 +3,7 @@
 An infinite, multi-user drawing surface that runs the same core natively and in the browser (WebAssembly).
 
 Status: design done, spike under way. The first code is `crates/everink-core` (positions, the camera, stroke outlines and the cut) and
-`crates/everink-sync` (the object map and the paced connection), with a trial of text libraries in `spike/text-trial`; nothing is released.
+`crates/everink-sync` (the object map and the paced connection), with trials of text libraries and of the renderer in `spike/`; nothing is released.
 
 ## Why
 

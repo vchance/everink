@@ -4,8 +4,8 @@
 # Selection fails closed: an empty or unreadable file list, or a path that matches no pattern, selects everything.
 #
 # Usage: ci-changes.sh <event> <before-sha-or-empty> <after-sha-or-empty>
-# Writes `rust=<bool>`, `text=<bool>`, `all=<bool>` and `carry_failure=<bool>` to $GITHUB_OUTPUT (or stdout when
-# it is unset).
+# Writes `rust=<bool>`, `text=<bool>`, `render=<bool>`, `all=<bool>` and `carry_failure=<bool>` to $GITHUB_OUTPUT
+# (or stdout when it is unset).
 set -euo pipefail
 
 event="${1:-}"
@@ -15,9 +15,10 @@ out="${GITHUB_OUTPUT:-/dev/stdout}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 text=false
+render=false
 emit() {
-  printf 'rust=%s\ntext=%s\nall=%s\ncarry_failure=%s\n' "$1" "$text" "$2" "${4:-false}" >>"$out"
-  printf 'selection: rust=%s text=%s all=%s carry_failure=%s (%s)\n' "$1" "$text" "$2" "${4:-false}" "$3"
+  printf 'rust=%s\ntext=%s\nrender=%s\nall=%s\ncarry_failure=%s\n' "$1" "$text" "$render" "$2" "${4:-false}" >>"$out"
+  printf 'selection: rust=%s text=%s render=%s all=%s carry_failure=%s (%s)\n' "$1" "$text" "$render" "$2" "${4:-false}" "$3"
 }
 
 list=$(mktemp)
@@ -57,14 +58,18 @@ while IFS= read -r -d '' f; do
     # Row 2. Agent-policy files and the CI configuration: no product job reads them (core D2). Their checks are
     # policy-drift and pr-evidence.
     AGENTS.md|*/AGENTS.md|CLAUDE.md|*/CLAUDE.md|PROFILE.md|.agent-rules/*|.claude/*|.githooks/*|.github/*) ;;
-    # Row 3. The Rust workspace: the crates and everything the build reads.
+    # Row 3. The core crate: part of the workspace, and built into the renderer trial as well.
+    crates/everink-core/*) rust=true; render=true ;;
+    # Row 4. The rest of the Rust workspace: the crates and everything the build reads.
     crates/*|Cargo.toml|Cargo.lock|tools/*) rust=true ;;
-    # Row 4. The text-library trial: a package of its own, outside the workspace.
+    # Row 5. The text-library trial: a package of its own, outside the workspace.
     spike/text-trial/*) text=true ;;
-    # Row 5. The pinned toolchain builds both, and the format, lint and cargo settings at the root are read by
-    # both (the tools look in parent directories, and cargo reads `.cargo/` from where it is run).
-    rust-toolchain.toml|rustfmt.toml|clippy.toml|.cargo/*) rust=true; text=true ;;
-    # Row 6. Anything else is unknown, and unknown paths escalate.
+    # Row 6. The renderer trial: another package of its own.
+    spike/render-trial/*) render=true ;;
+    # Row 7. The pinned toolchain builds all three, and the format, lint and cargo settings at the root are
+    # read by all three (the tools look in parent directories, and cargo reads `.cargo/` from where it is run).
+    rust-toolchain.toml|rustfmt.toml|clippy.toml|.cargo/*) rust=true; text=true; render=true ;;
+    # Row 8. Anything else is unknown, and unknown paths escalate.
     *) all=true ;;
   esac
 done <"$list"
