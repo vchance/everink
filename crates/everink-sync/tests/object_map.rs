@@ -66,6 +66,12 @@ fn the_random_run_exercises_every_path() {
             "no change was rejected with {code}"
         );
     }
+    println!(
+        "random run: {} accepted, {} refused, {} objects",
+        w.tally.accepted,
+        w.tally.rejected.len(),
+        w.room.len()
+    );
     assert!(w.tally.accepted > 2_000, "accepted {}", w.tally.accepted);
     assert!(w.room.len() > 1_000);
     let nested = w
@@ -899,6 +905,7 @@ fn always_inserting_at_one_end_grows_the_key_slowly_and_then_fails_cleanly() {
     assert_eq!(lowest.as_bytes().len(), MAX_ORDER_KEY_BYTES);
     // About seven inserts fit in each byte: each takes the middle third of what is left below.
     let at_24 = at_24.unwrap();
+    println!("at one end: past 24 bytes after {at_24} inserts, no key left after {inserts}");
     assert!(
         (100..400).contains(&at_24),
         "passed 24 bytes after {at_24} inserts"

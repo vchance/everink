@@ -71,8 +71,10 @@ jobs:
         run: rustup toolchain install
       - name: Tests (x86-64; includes the cross-platform golden file written on aarch64)
         run: cargo test --workspace --locked
-      - name: Timing example builds and runs
-        run: cargo run --release --locked --example bench_positions
+      - name: Timing examples build and run
+        run: |
+          cargo run --release --locked --example bench_positions
+          cargo run --release --locked --example bench_object_map
 
   ci-result:
     name: ci-result

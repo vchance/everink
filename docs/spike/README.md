@@ -1,6 +1,6 @@
 # The spike
 
-Status: started 2026-11-12. Slice 1 is done; slices 2 to 5 are planned.
+Status: started 2026-11-12. Slice 1 and the first part of slice 2 are done; the rest is planned.
 
 The spike is step 0 of the order of work in [`../design.md`](../design.md). Its purpose is to replace the largest
 guesses in the detailed design with measurements before anything is built on them. It is one stroke type, two
@@ -10,7 +10,9 @@ clients and a server, native and web. Code written for it is kept only where a s
 
 - **A question is answered by a measurement or a test, never by an opinion.** Each answer names the machine, the
   revision and the command that produced it.
-- **Each slice is one reviewed change** with its own results file in this folder.
+- **Each slice is one reviewed change** with its own results file in this folder. Slice 2 answers four
+  questions that do not depend on each other, so it is three changes: 2a the object map, 2b the text libraries,
+  2c the server, the clients and the paced connection.
 - **Results change the design.** Where a measurement contradicts a section of [`../design/`](../design/README.md),
   the slice's results file says so and names the section; the design is corrected in a separate change.
 - **What the agent cannot measure is the owner's to run.** Those rows are marked "owner".
@@ -26,10 +28,10 @@ criterion for each.
 | 2 | Are positions the same on every machine? | 1, 3 | One golden file of positions, level changes and float conversions passes byte for byte on aarch64 and x86-64 (slice 1) and on wasm32 (slice 3) | agent |
 | 3 | Are stroke outlines bit-identical everywhere? | 3 | The same strokes give byte-identical outlines on x86-64, aarch64 and wasm32 | agent |
 | 4 | What does cutting a large shape cost? | 3 | A curve from 10, 100 and 1,000 levels above the view is cut to the view and timed against the 2 ms per frame budget | agent |
-| 5 | Can any of Loro, yrs or Automerge sync part of a document? | 2 | Each library is read and tried: either a documented way to export and import a subset is shown working, or the attempt and where it fails is recorded | agent |
-| 6 | Which library edits text best in one small document per text object? | 2 | For each candidate: bytes and memory for 1,000 small text documents, time to apply an edit, and whether the server can inspect an update before applying it | agent |
-| 7 | Does Everink's own object map hold up? | 2 | 100,000 strokes: memory per object and time to open; randomized tests in which the same changes applied in different orders end in the same state | agent |
-| 8 | Do cursors stall during a bulk load on one connection? | 2 | Cursor delay is measured while a client loads a large surface over a link limited to 1, 5 and 20 Mbit/s, with the 20 ms pacing rule, against the 200 ms target | agent |
+| 5 | Can any of Loro, yrs or Automerge sync part of a document? | 2b | Each library is read and tried: either a documented way to export and import a subset is shown working, or the attempt and where it fails is recorded | agent |
+| 6 | Which library edits text best in one small document per text object? | 2b | For each candidate: bytes and memory for 1,000 small text documents, time to apply an edit, and whether the server can inspect an update before applying it | agent |
+| 7 | Does Everink's own object map hold up? | 2a | 100,000 strokes: memory per object and time to open; randomized tests in which the same changes applied in different orders end in the same state | agent |
+| 8 | Do cursors stall during a bulk load on one connection? | 2c | Cursor delay is measured while a client loads a large surface over a link limited to 1, 5 and 20 Mbit/s, with the 20 ms pacing rule, against the 200 ms target | agent |
 | 9 | How fast is storage? | 5 | Commit latency and load time for one SQLite file per room at 10,000, 100,000 and 1,000,000 objects | agent |
 | 10 | Does the renderer carry the load? | 3 | `vello_gpu` on WebGPU and on WebGL2: tile raster rate, 10,000 objects at 60 frames per second or the measured shortfall, and the size of the wasm build | agent, with the owner for browsers the agent cannot drive |
 | 11 | What is pen latency really? | 3 | A 240 frames-per-second camera on named devices, with and without the low-latency canvas | owner |
@@ -41,7 +43,7 @@ criterion for each.
 | Slice | Contents | Answers | Kept afterwards |
 |---|---|---|---|
 | 1. Positions | The Cargo workspace, CI, and `everink-core` with the position type, its canonical bytes, the camera, tests and a timing run | 1, 2 (two of three targets) | Yes: `crates/everink-core` |
-| 2. Object map and sync | The server-ordered object map, a server, two headless clients, convergence tests, the text-library trials, the paced connection | 5, 6, 7, 8 | Decided from the results |
+| 2. Object map and sync | 2a: the server-ordered object map and its convergence tests (`crates/everink-sync`). 2b: the text-library trials. 2c: a server, two headless clients and the paced connection | 5, 6, 7, 8 | Decided from the results, at the end of the slice |
 | 3. Rendering and ink | Vello natively and in the browser, the tile cache, stroke outlines, the cut, the wasm32 target | 2 (wasm32), 3, 4, 10, 11 | Decided from the results |
 | 4. Controls and the further candidate | The same toolbar both ways; the owner's candidate behind the renderer interface | 12, 13 | Decided from the results |
 | 5. Storage | One SQLite file per room: commit and load timings | 9 | Decided from the results |
@@ -51,3 +53,4 @@ criterion for each.
 | Slice | Results | Summary |
 |---|---|---|
 | 1 | [results-1-positions.md](results-1-positions.md) | Exact arithmetic costs almost nothing per frame at any depth (0.004 ms for 10,000 objects). Subtraction and re-basing at depth cost about three times the design's estimate, and a re-base does not reliably fit in a frame at depth, so it has to be spread. Positions match one golden file byte for byte on aarch64 and x86-64. Zooming back to a spot by hand is not exact at depth; an object's position and a jump to it are. |
+| 2a | [results-2a-object-map.md](results-2a-object-map.md) | The object map holds up. Copies converge whatever order writes arrive in. 100,000 strokes take about 1.3 KB of memory each, as the design estimated, and open in 0.13 s; the server's work on a change is under a microsecond. One correction: the design's rule for order keys runs out of room after about 450 objects put in front one after another, so "front" and "back" count instead. |
