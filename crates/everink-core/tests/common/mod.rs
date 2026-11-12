@@ -41,7 +41,7 @@ impl Rng {
     /// An axis whose cell has at most `cell_bits` bits.
     pub fn axis(&mut self, cell_bits: u64) -> Axis {
         let bits = self.below(cell_bits + 1);
-        Axis::from_cell_frac(self.big(bits), self.next())
+        cell_frac(self.big(bits), self.next())
     }
 
     /// A position on a level in `[-max_level, max_level]`.
@@ -53,6 +53,21 @@ impl Rng {
             y: self.axis(cell_bits),
         }
     }
+}
+
+/// An axis from a big integer of the test's own library, through the crate's library-neutral bytes.
+pub fn axis_big(b: BigInt) -> Axis {
+    Axis::from_signed_bytes_be(&b.to_signed_bytes_be())
+}
+
+/// The axis value as a big integer of the test's own library.
+pub fn big_of(a: &Axis) -> BigInt {
+    BigInt::from_signed_bytes_be(&a.to_signed_bytes_be())
+}
+
+/// The axis `cell * 2^64 + frac`.
+pub fn cell_frac(cell: BigInt, frac: u64) -> Axis {
+    axis_big((cell << 64u32) + BigInt::from(frac))
 }
 
 /// A position `depth` levels down that is near the level-0 origin: the kind a person reaches by zooming in.

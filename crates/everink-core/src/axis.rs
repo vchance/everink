@@ -4,6 +4,10 @@
 //! `frac()` as views of its high and low part. A value that fits 128 bits is held inline and costs no
 //! allocation; anything larger is a big integer. The form is canonical: a value that fits inline is always
 //! held inline, so equality of the representation is equality of the value.
+//!
+//! The big-integer crate is private to this crate: nothing in the public API names its types, so it can be
+//! replaced without changing a caller. `from_signed_bytes_be` and `to_signed_bytes_be` are the way in and out for
+//! a value too large for `from_i128`.
 
 use std::cmp::Ordering;
 
@@ -30,7 +34,7 @@ impl Axis {
     }
 
     /// Canonical form of a big integer.
-    pub fn from_big(b: BigInt) -> Axis {
+    pub(crate) fn from_big(b: BigInt) -> Axis {
         match b.to_i128() {
             Some(v) => Axis(Repr::Small(v)),
             None => Axis(Repr::Big(b)),
@@ -38,11 +42,28 @@ impl Axis {
     }
 
     /// Builds `cell * 2^64 + frac`.
-    pub fn from_cell_frac(cell: BigInt, frac: u64) -> Axis {
+    pub(crate) fn from_cell_frac(cell: BigInt, frac: u64) -> Axis {
         Axis::from_big((cell << FRAC_BITS) + BigInt::from(frac))
     }
 
-    pub fn to_big(&self) -> BigInt {
+    /// The value from its two's-complement bytes, most significant first. Any length is accepted (the first
+    /// byte's top bit is the sign); no bytes is zero. This is for callers and tests that hold a large integer of
+    /// their own. It is not the wire format and applies no depth cap: bytes from the network go through
+    /// `Position::decode`.
+    pub fn from_signed_bytes_be(bytes: &[u8]) -> Axis {
+        Axis::from_big(BigInt::from_signed_bytes_be(bytes))
+    }
+
+    /// The value as two's-complement bytes, most significant first, in the fewest bytes that hold it. Zero is
+    /// one zero byte.
+    pub fn to_signed_bytes_be(&self) -> Vec<u8> {
+        match &self.0 {
+            Repr::Small(v) => BigInt::from(*v).to_signed_bytes_be(),
+            Repr::Big(b) => b.to_signed_bytes_be(),
+        }
+    }
+
+    pub(crate) fn to_big(&self) -> BigInt {
         match &self.0 {
             Repr::Small(v) => BigInt::from(*v),
             Repr::Big(b) => b.clone(),
@@ -71,7 +92,7 @@ impl Axis {
     }
 
     /// The cell: the value divided by 2^64, rounded toward minus infinity.
-    pub fn cell(&self) -> BigInt {
+    pub(crate) fn cell(&self) -> BigInt {
         match &self.0 {
             Repr::Small(v) => BigInt::from(*v >> FRAC_BITS),
             Repr::Big(b) => floor_shr(b, FRAC_BITS as u64),
@@ -222,6 +243,56 @@ impl Ord for Axis {
         match (&self.0, &other.0) {
             (Repr::Small(a), Repr::Small(b)) => a.cmp(b),
             _ => self.to_big().cmp(&other.to_big()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `cell()` is the value divided by 2^64 rounded toward minus infinity, and `frac()` is what is left, on
+    /// both the inline and the big path, for negative values as well.
+    #[test]
+    fn cell_is_the_floor_and_frac_the_remainder() {
+        // Inline values, against the integer's own floor division.
+        let two_64 = 1i128 << 64;
+        for v in [
+            0,
+            1,
+            -1,
+            two_64 - 1,
+            two_64,
+            -two_64,
+            -two_64 - 1,
+            -two_64 + 1,
+            i128::MAX,
+            i128::MIN,
+            -5 * two_64 - 7,
+        ] {
+            let a = Axis::from_i128(v);
+            assert_eq!(a.cell(), BigInt::from(v.div_euclid(two_64)), "cell of {v}");
+            assert_eq!(a.frac(), v.rem_euclid(two_64) as u64, "frac of {v}");
+        }
+        // Big values: a cell and an offset are put together and must come apart again. A negative cell with a
+        // non-zero offset is the case a truncating division gets wrong.
+        for bits in [70u32, 127, 128, 200, 1000] {
+            for negative in [false, true] {
+                for frac in [0u64, 1, u64::MAX] {
+                    let mut cell = (BigInt::from(1) << bits) + BigInt::from(12345);
+                    if negative {
+                        cell = -cell;
+                    }
+                    let a = Axis::from_cell_frac(cell.clone(), frac);
+                    assert!(!a.is_small());
+                    assert_eq!(
+                        a.cell(),
+                        cell,
+                        "{bits} bits, negative {negative}, frac {frac}"
+                    );
+                    assert_eq!(a.frac(), frac);
+                }
+            }
         }
     }
 }
