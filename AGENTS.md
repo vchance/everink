@@ -23,6 +23,9 @@ cargo fmt --all --check                                             # format che
 cargo run --release --example bench_positions                       # timing run (spike question 1)
 cargo test -p everink-sync --test object_map <name>                 # one test of the object map
 cargo run --release --example bench_object_map [objects] [depth]    # size and timing run (spike question 7)
+cargo test -p everink-sync --test wire_and_pacing <name>            # one test of the wire bytes and the pacing rule
+cargo run --release --example sim_paced_link                        # cursor delay in the link model (question 8)
+cargo run --release --example paced_link [seconds] [runs]           # the same over loopback sockets (question 8)
 cargo test --locked --manifest-path spike/text-trial/Cargo.toml     # the text-library trial (its own package)
 cargo run --release --locked --manifest-path spike/text-trial/Cargo.toml   # its size and timing run (questions 5, 6)
 cargo clippy --manifest-path spike/text-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
@@ -49,8 +52,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `crates/everink-core`: positions and the camera (spike slice 1). `tests/golden/positions.txt` is the
   cross-platform golden file.
 - `crates/everink-sync`: the server-ordered object map (spike slice 2a): objects and their registers, the
-  server's room, a client's copy, order keys, packed stroke points, canonical bytes. Depends on `everink-core`
-  only.
+  server's room, a client's copy, order keys, packed stroke points, canonical bytes. And the connection (slice
+  2c): the bytes of a change on the wire, the pacing rule that keeps cursors prompt during a bulk load, and a
+  model of a slow link. Depends on `everink-core` only; one example uses `socket2`.
 - `spike/text-trial`: the trial of Loro, yrs and Automerge (spike slice 2b). A package of its own with its own
   `Cargo.lock`, outside the workspace, so the three libraries never enter the main build. The workspace commands
   above do not reach it; it has its own, and its own CI job (`text-trial`).
@@ -68,6 +72,11 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   to regenerate.
 - Crates are `publish = false`. Do not remove that; publishing is an owner decision.
 - Timing figures in `docs/spike/` name the machine they were measured on. Do not compare them with a CI runner.
+  One exception is stated where it is used: `examples/paced_link.rs` needs Linux to bound what the operating
+  system holds unsent, so its Linux figures are read from the CI log; they are delays set by the link speed, not
+  by the machine.
+- `examples/paced_link.rs` uses real sockets and real time. It asserts nothing about timing, so it cannot make
+  CI flaky; do not add timing thresholds to it. The pacing rule's own tests use made-up time.
 - `spike/text-trial` has tests that assert a library's recorded limit (for example that yrs panics on some
   damaged bytes). When one fails after a version change, the library changed: update
   `docs/spike/results-2b-text-libraries.md`, do not just flip the assertion. Which library edits text is the

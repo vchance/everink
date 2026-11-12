@@ -14,6 +14,8 @@ num-bigint = "0.5.1"
 num-traits = "0.2.19"
 # Test only: a second big-integer library, as an independent reference for the arithmetic.
 dashu-int = "0.6.2"
+# Example only: socket options for the paced-link run (spike question 8).
+socket2 = { version = "0.6.5", features = ["all"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

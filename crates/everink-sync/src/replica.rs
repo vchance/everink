@@ -25,6 +25,9 @@ pub struct Replica {
     pending: Vec<Change>,
     /// The newest `Seq` seen in an applied change.
     head: Seq,
+    /// While a fill is under way: writes to objects this copy does not hold yet, to be merged when they arrive.
+    filling: bool,
+    kept: HashMap<ObjectId, Vec<(Seq, Value)>>,
 }
 
 impl Replica {
@@ -35,6 +38,8 @@ impl Replica {
             objects: HashMap::new(),
             pending: Vec::new(),
             head: Seq(0),
+            filling: false,
+            kept: HashMap::new(),
         }
     }
 
@@ -60,7 +65,8 @@ impl Replica {
     }
 
     /// Merges an accepted change. A write to an object this copy does not hold is dropped: the copy is partial,
-    /// and when the server later sends that object it sends it whole, with the write in it.
+    /// and when the server later sends that object it sends it whole, with the write in it. The one exception is
+    /// while a view is being filled (`begin_fill`).
     pub fn apply(&mut self, applied: &Applied) {
         for effect in &applied.effects {
             match effect {
@@ -68,6 +74,11 @@ impl Replica {
                 Effect::Write { id, value } => {
                     if let Some(object) = self.objects.get_mut(id) {
                         object.write(value, applied.seq);
+                    } else if self.filling {
+                        self.kept
+                            .entry(*id)
+                            .or_default()
+                            .push((applied.seq, value.clone()));
                     }
                 }
             }
@@ -85,9 +96,34 @@ impl Replica {
                 mine.merge(object);
             }
             None => {
-                self.objects.insert(object.id(), object.clone());
+                let mut object = object.clone();
+                // Writes that came while the object was still on its way. The stamps decide, as always, so a
+                // write the object already has in it changes nothing.
+                for (seq, value) in self.kept.remove(&object.id()).unwrap_or_default() {
+                    object.write(&value, seq);
+                }
+                self.objects.insert(object.id(), object);
             }
         }
+    }
+
+    /// The server has begun to send the objects of a view (a join, or a move of the view). They arrive over time,
+    /// in a stream of their own, while accepted changes keep arriving in another; a change can overtake the
+    /// object it writes to. Until `end_fill`, a write to an object this copy does not hold is kept and merged
+    /// when the object arrives, instead of being dropped.
+    pub fn begin_fill(&mut self) {
+        self.filling = true;
+    }
+
+    /// The server has sent every object of the view. Writes still kept were for objects that are not coming.
+    pub fn end_fill(&mut self) {
+        self.filling = false;
+        self.kept.clear();
+    }
+
+    /// Writes kept for objects that have not arrived.
+    pub fn kept_writes(&self) -> usize {
+        self.kept.values().map(Vec::len).sum()
     }
 
     /// Drops an object from the copy (it left the view).

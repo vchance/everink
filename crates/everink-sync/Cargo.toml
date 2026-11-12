@@ -11,5 +11,8 @@ publish.workspace = true
 [dependencies]
 everink-core = { path = "../everink-core" }
 
+[dev-dependencies]
+socket2.workspace = true
+
 [lints]
 workspace = true
