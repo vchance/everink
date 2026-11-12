@@ -63,10 +63,11 @@ impl Axis {
         }
     }
 
-    pub(crate) fn to_big(&self) -> BigInt {
+    /// The value, when it fits 128 bits.
+    pub fn to_i128(&self) -> Option<i128> {
         match &self.0 {
-            Repr::Small(v) => BigInt::from(*v),
-            Repr::Big(b) => b.clone(),
+            Repr::Small(v) => Some(*v),
+            Repr::Big(_) => None,
         }
     }
 
@@ -242,7 +243,22 @@ impl Ord for Axis {
     fn cmp(&self, other: &Self) -> Ordering {
         match (&self.0, &other.0) {
             (Repr::Small(a), Repr::Small(b)) => a.cmp(b),
-            _ => self.to_big().cmp(&other.to_big()),
+            (Repr::Big(a), Repr::Big(b)) => a.cmp(b),
+            // A big value never fits 128 bits, so it is beyond every inline value on the side of its sign.
+            (Repr::Small(_), Repr::Big(b)) => {
+                if b.sign() == Sign::Minus {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
+            (Repr::Big(a), Repr::Small(_)) => {
+                if a.sign() == Sign::Minus {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
         }
     }
 }

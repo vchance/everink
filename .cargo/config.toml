@@ -1,0 +1,3 @@
+# The wasm32 tests run under Node (tools/wasi-run.mjs); see AGENTS.md > Commands.
+[target.wasm32-wasip1]
+runner = "tools/wasi-run.mjs"

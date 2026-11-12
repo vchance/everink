@@ -1,0 +1,21 @@
+# Geometry that every client must compute identically may use only arithmetic that is the same on every target
+# (docs/design/01-positions.md, "Float rules"). These are the functions whose results differ between targets or
+# between library versions, or whose rounding the compiler may change. A use outside shared geometry (a display
+# value, a test) says so with `#[allow(clippy::disallowed_methods)]` and a reason.
+disallowed-methods = [
+    { path = "f64::mul_add", reason = "fused multiply-add rounds once, plain arithmetic twice" },
+    { path = "f32::mul_add", reason = "fused multiply-add rounds once, plain arithmetic twice" },
+    { path = "f64::sin", reason = "not the same on every target; use a table of literals" },
+    { path = "f64::cos", reason = "not the same on every target; use a table of literals" },
+    { path = "f64::tan", reason = "not the same on every target" },
+    { path = "f64::atan2", reason = "not the same on every target" },
+    { path = "f64::exp", reason = "not the same on every target" },
+    { path = "f64::ln", reason = "not the same on every target" },
+    { path = "f64::log2", reason = "not the same on every target" },
+    { path = "f64::powf", reason = "not the same on every target" },
+    { path = "f64::powi", reason = "not the same on every target" },
+    { path = "f64::hypot", reason = "not the same on every target" },
+    { path = "f64::min", reason = "its treatment of NaN and signed zero has changed; write `if a < b`" },
+    { path = "f64::max", reason = "its treatment of NaN and signed zero has changed; write `if a < b`" },
+    { path = "f64::clamp", reason = "write the two comparisons" },
+]
