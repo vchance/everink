@@ -133,7 +133,7 @@ Three questions have real alternatives: the transport, the smoothing, and how a 
 | Fallback needed | No | No (it is the fallback) | Yes, the WebSocket path | Yes |
 | Priority of presence over changes | In the server's writer only; bytes already in the kernel cannot be reordered | Full: separate queues and separate TCP streams | Full | Full |
 
-Section 03 choose **A** for the first version. I agree on cost, not on delay: A
+Section 03 chooses **A** for the first version. I agree on cost, not on delay: A
 leaves one connection to authenticate, rate-limit, time out and close (sections 03, 07 and 08 all describe one
 socket), and needs only a writer that serves presence first. What it gives up is quantified under "Transport
 details": with section 03's adaptive unsent limit (20 ms of drain) a cursor message waits behind bulk data for about
@@ -232,8 +232,9 @@ the spike to decide.
 ```rust
 /// What a client sends. Sizes are payload bytes at depth 0, P = P(0) = 19.
 pub enum ToServer {
-    /// First message after connecting. 12 + name bytes. `resume` lets a reconnect keep session and color.
-    Hello { proto: u8, resume: Option<[u8; 16]>, locale_dir: u8 },
+    /// First presence message after the connection is up. About 20 bytes. `resume` lets a reconnect keep session and
+    /// color. A guest's typed name is not here: it travels in section 08's join exchange (section 03's `Hello`).
+    PresenceHello { proto: u8, resume: Option<[u8; 16]>, locale_dir: u8 },
     /// Hot path, up to 30 per second. 9 + P = 28 bytes. Not sent while an ink or drag message is (they carry the
     /// pointer themselves), so a session never sends more than about 30 presence messages a second.
     Pointer(PointerMsg),
@@ -293,7 +294,7 @@ pub enum InkMsg {
 /// The lattice of 06's `PackedPoints`: steps of 2^-16 of an object unit, relative to the previous kept
 /// point (the first is relative to `Begin.first`), plus the pressure byte (0 = none, 1 to 255). The same zigzag
 /// varints as 06's `bytes`. The receiver decodes each into 06's `InkPoint` and feeds it to `OutlineBuilder::push`.
-pub struct WirePoint { pub dx: i32 /*zigzag v*/, pub dy: i32 /*zigzag v*/, pub pressure: u8 }
+pub struct WirePoint { pub dx: i64 /*zigzag v*/, pub dy: i64 /*zigzag v*/, pub pressure: u8 }
 
 /// A drag of selected objects before the move is committed (section 02 sends an `Op::Set` of the `Xform` register on
 /// release and at most 5 times a second during a long drag).
@@ -315,8 +316,8 @@ a few bytes. `Delta` is 01's exact difference with its canonical serialization.
 ```rust
 /// What the server sends.
 pub enum ToClient {
-    /// Reply to Hello. Gives the session its index, color, glyph and sanitized name, and the room's tick.
-    Welcome { you: SessionIdx, color: ColorSlot, glyph: Glyph, name: String, resume: [u8; 16], tick_ms: u8 },
+    /// Reply to PresenceHello. Gives the session its index, color, glyph and sanitized name, and the room's tick.
+    PresenceWelcome { you: SessionIdx, color: ColorSlot, glyph: Glyph, name: String, resume: [u8; 16], tick_ms: u8 },
     /// Describes a session the receiver is about to see: sent on first appearance and when it changes.
     Peer(PeerInfo),
     PeerGone { who: SessionIdx },
@@ -335,7 +336,7 @@ pub enum ToClient {
     /// `ViewMsg` is 03's wire view (it holds 01's `ViewRect`), exact and unpadded.
     JumpTo { who: SessionIdx, view: ViewMsg },
     /// Someone started or stopped following you (to you); a jump or follow was refused; rate limited; ...
-    Notice { code: NoticeCode },
+    PresenceNotice { code: NoticeCode },
 }
 
 pub struct PeerInfo {
@@ -406,7 +407,7 @@ name. The redundant shape follows the Okabe-Ito authors' advice not to rely on c
 ### Names and banners
 
 - **Source.** A token gives a display name (section 08); a guest types one. The server sanitizes both; the client
-  never sends a name in a presence message after `Hello`.
+  never sends a name in a presence message (a guest's typed name arrives in section 08's join exchange).
 - **Sanitizing.** Unicode NFC; remove control characters, bidirectional override and isolate characters (U+202A to
   U+202E, U+2066 to U+2069), zero-width characters and tag characters; collapse runs of whitespace; trim; allow at
   most 3 combining marks in a row (stops stacked "zalgo" text from covering the work); cut to the display-name limit
@@ -461,13 +462,17 @@ pub struct LiveDrag { drag: u16, ids: Vec<ObjectId>, total: u32, last_offset: De
 **Routing region.** `RoutedView` is the session's view padded by 1/8 of its width and height on each side (section
 03 pads the sync view by half a screen; presence uses a smaller pad so it does not send many cursors that cannot be
 seen). The server delivers a cursor when it is inside the padded region; **the client draws it only when it is
-inside the exact view** (exact comparison, by its own position arithmetic). The pad is
-hysteresis: the cursor arrives slightly before it is visible, so it enters already smoothed and does not pop, and a
-cursor at the edge does not flicker on and off when view updates and cursor updates cross. Every cursor in the exact
-view is delivered (the padded region contains the view), and the client shows exactly those: requirement 7 holds on
-the screen. This holds because the server's copy of the view is fresh to within the pad: section 03 sends `SetView`
-at least every 100 ms while a view moves, however small the move, and the server pads the exact
-view it receives by 1/8 for this routing. The client sends the exact, unpadded `ViewRect`.
+inside the exact view** (exact comparison, by its own position arithmetic). The pad is hysteresis: the cursor
+arrives slightly before it is visible, so it enters already smoothed and does not pop, and a cursor at the edge does
+not flicker on and off when view updates and cursor updates cross. Every cursor in the exact view is delivered (the
+padded region contains the view), and the client shows exactly those: requirement 7 holds on the screen. This holds
+on one condition: **the view moves less than the 1/8 pad between two `SetView` messages**. Section 03 sends
+`SetView` at least every 100 ms while a view moves, however small the move, and the server pads the exact view it
+receives by 1/8 for this routing; the client sends the exact, unpadded `ViewRect`. A pan faster than 1/8 of the view
+width in 100 ms (a fling) breaks the condition. Then a cursor that has just come into the exact view may be missing
+until the next `SetView` arrives and the server routes again: at worst about 100 ms plus half a round trip late (the
+interval to the next `SetView`, plus its travel to the server). The cursor then appears, already smoothed, with the
+next snapshot. This lateness is accepted for flings; the spike measures it.
 
 **Views index.** For each level that some session's view is on, a hash map from cell to the list of sessions whose
 padded region overlaps that cell. A view covers few cells at its own level: its width is at most a screen's worth of
@@ -496,15 +501,15 @@ diff new watcher set with the sender's previous set:
 the sender's entry is encoded once and appended to each watcher's pending list
 ```
 
-Cost per moved sender: `|view_levels|` hash lookups plus a few exact rectangle tests; each exact test costs
-O(digits of the cell index), which is about 3 machine words even at depth 100 (01 keeps cells that fit 128 bits in
-plain integers). With `|view_levels|` of 3 and
-2000 senders all moving, that is 2000 x 3 = 6000 lookups per tick, or 180,000 a second: well under 1 percent of
-a core at an assumed 1 microsecond each (an estimate to measure, not a measurement). The worst case is hostile:
-sessions on many different levels make `|view_levels|` large, up to the room size. Bound it: if
-`|view_levels| > 16`, routing keeps running but for the extra levels beyond 16 (least populated first) it runs
-once every 4th tick, and the room's operator metrics report it. Honest users sit on few levels at once because a
-shared surface is worked on at one place.
+Cost per moved sender: `|view_levels|` hash lookups plus a few exact rectangle tests; each exact test costs O(digits
+of the cell index): 01 keeps cells that fit 128 bits in plain integers, but at depth 100 a test compares about 17
+machine words. With `|view_levels|` of 3 and 2000 senders all moving, that is 2000 x 3 = 6000 lookups per tick, or
+180,000 a second. At an assumed 0.3 microsecond for small positions that is about 5 percent of a core; at an assumed
+1 microsecond for positions 100 levels deep it is about 18 percent (both are estimates to measure, not measurements,
+and a room whose cursors are all that deep is unusual). The worst case is hostile: sessions on many different levels
+make `|view_levels|` large, up to the room size. Bound it: if `|view_levels| > 16`, routing keeps running but for
+the extra levels beyond 16 (least populated first) it runs once every 4th tick, and the room's operator metrics
+report it. Honest users sit on few levels at once because a shared surface is worked on at one place.
 
 **Routing a view change (a receiver moved).** When a session's view changes (at most once per tick, from 03's
 messages), query the cursor index with the new padded region and diff with `visible`:
@@ -538,7 +543,9 @@ Constants: `tick` 33.3 ms; payload sizes from the wire section (`P(0)` = 19 byte
 `Pointer` is 28); per-message transport overhead for a TLS WebSocket frame carrying one message of this size is
 taken as 66 bytes (TCP 20 + IP 20 + TLS 22 + frame 4 to 8, rounded up; section 03's own envelope adds 1 to 3 bytes
 more, ignored here); for QUIC datagrams about 55 bytes. A snapshot of n entries at depth 0 is `7 + 27 n` bytes, plus
-overhead once per snapshot. Per-snapshot cost: `S(n) = 66 + 7 + 27 n`. In this section "KB" is 1000 bytes.
+overhead once per message. A snapshot of more than 36 entries is split into `k = ceil(n / 36)` messages of at most
+1000 bytes, each with its own header and overhead, so the per-snapshot cost is `S(n) = k x (66 + 7) + 27 n`. In this
+section "KB" is 1000 bytes.
 
 The budgets below are named limits, `presence_down_budget` (per receiver) and `presence_room_egress` (per room), and
 the cursor cap is `max_visible_cursors`. Section 08's limits table owns their values; the figures
@@ -555,7 +562,7 @@ egress budget for presence (default 100 Mbit/s, 12.5 MB/s). The effective per-re
 
 1. the rate `r` = the highest of 30, 15, 10, 6, 5 snapshots per second (every 1st, 2nd, 3rd, 5th or 6th tick) with
    `r x S(n) <= B_eff`;
-2. if even 5 per second does not fit, it keeps rate 5 and reduces `n` to `(B_eff / 5 - 73) / 27`.
+2. if even 5 per second does not fit, it keeps rate 5 and reduces `n` to the largest value with `S(n) <= B_eff / 5`.
 
 Only entries whose sender changed since the last snapshot to that receiver are included (a **dirty** filter), plus a
 refresh of every visible cursor at least once a second (this is also how a missed update on a lossy path heals).
@@ -565,8 +572,8 @@ Snapshots to different receivers are staggered by `receiver index mod divisor` s
 |---|---|---|---|---|---|
 | 2 | 1 | 30 Hz | 30 x S(1) = 3.0 KB/s (24 kbit/s) | 6.0 KB/s | 2.8 KB/s |
 | 20 | 19 | 30 Hz (S = 586 B) | 30 x 586 = 17.6 KB/s (141 kbit/s) | 352 KB/s (2.8 Mbit/s) | 2.8 KB/s |
-| 200 | 199 | 5 Hz (S = 5,446 B; 6 Hz = 32.7 KB/s is over 32 KB/s; 10 Hz = 54 KB/s) | 27.2 KB/s (218 kbit/s) | 5.4 MB/s (44 Mbit/s) | 2.8 KB/s |
-| 2000 | 200 (cap) | room budget 12.5 MB/s / 2000 = 6.25 KB/s; 5 Hz needs S <= 1,250 B, so n = 43 | 6.25 KB/s (50 kbit/s) | 12.5 MB/s (100 Mbit/s) | 2.8 KB/s |
+| 200 | 199 | 5 Hz (k = 6, S = 5,811 B; 6 Hz = 34.9 KB/s is over 32 KB/s; 10 Hz = 58 KB/s) | 29.1 KB/s (232 kbit/s) | 5.8 MB/s (47 Mbit/s) | 2.8 KB/s |
+| 2000 | 200 (cap) | room budget 12.5 MB/s / 2000 = 6.25 KB/s; 5 Hz needs S <= 1,250 B: n = 40 gives k = 2, S = 1,226 B; n = 41 gives 1,253 B, over | 6.25 KB/s (50 kbit/s) | 12.5 MB/s (100 Mbit/s) | 2.8 KB/s |
 
 In typical use the numbers are lower, because the dirty filter sends only senders that moved. With 10 percent of a
 200-person room moving, a snapshot holds about 20 moving entries plus the 1 Hz refresh share (199 / 30 = 7 at 30
@@ -574,15 +581,15 @@ Hz): 27 entries, S = 802 B, 24 KB/s, which fits the budget at 30 Hz instead of 5
 sizes, not measurements; the first benchmark replaces them.
 
 The 2000-person worst case shows what the design gives up: with everyone in one place and everyone moving, a
-receiver sees 43 cursors at 5 Hz, delayed by about 400 ms (see smoothing). That is by design: the alternative is a
+receiver sees 40 cursors at 5 Hz, delayed by about 400 ms (see smoothing). That is by design: the alternative is a
 100 Mbit/s bill for cursors. The operator can raise the budgets. With depth, each entry grows by 2.5 bytes per level
 (a cursor 10 levels down costs 52 bytes, not 27; 100 levels down, 277 bytes), which steps 1 and 2 account for
 because they use the actual encoded size. At the depth cap an entry is 3.1 KB and a receiver would see about two
 such cursors at 5 Hz inside 32 KB/s; this is why relative encoding is listed as the known remedy.
 
 Server CPU for snapshots is copying: each sender's entry is encoded once per tick, and each snapshot is built by
-gathering slices. For 2000 receivers at 5 Hz and 43 entries, that is about 2000 / 6 x 43 = 14,000 entry copies per
-tick, 430,000 a second, at an assumed 30 ns each: about 1.3 percent of a core. For the 200 room at 5 Hz and 199
+gathering slices. For 2000 receivers at 5 Hz and 40 entries, that is about 2000 / 6 x 40 = 13,000 entry copies per
+tick, 400,000 a second, at an assumed 30 ns each: about 1.3 percent of a core. For the 200 room at 5 Hz and 199
 entries it is 200 / 6 x 199 = 6,600 per tick, 0.2 million a second, under 1 percent.
 
 ### Smoothing on the receiver
@@ -680,11 +687,19 @@ refuse `Selection` and `Drag` from viewers, because a viewer cannot change objec
 
 The pen's samples are collected by the client in the order they arrive, thinned and sent.
 
-- **Thinning.** The points sent are a subset of the stored stroke's own points (the `i32` lattice of
-  2^-16 object unit plus pressure, defined by 02 and 06). The client keeps a sample only if it is at least 0.5
-  screen pixels (at the sender's zoom) from the last kept sample, or if the direction has turned by more than 5
-  degrees, or if 16 ms have passed. A 240 Hz pen drawing at normal speed ends at about 60 to 120 kept points a
-  second.
+- **Thinning.** The points sent are a subset of the stored stroke's own points (the `i32` lattice of 2^-16 object
+  unit plus pressure, defined by 02 and 06). The client drops a sample only if it lies within 0.15 screen pixel (at
+  the sender's zoom) of the line from the last kept sample to the next one, the tolerance 06 uses for the stored
+  stroke; since the next sample is not yet known, it keeps a sample if it is at least 0.5 pixel from the last kept
+  sample, or the direction has turned by more than 5 degrees, or 16 ms have passed. A 240 Hz pen drawing at normal
+  speed ends at about 60 to 120 kept points a second.
+- **One stroke rule (owned by 06).** A stroke's level is the camera's level when the pen goes down and does not
+  change while it is drawn. The tool ends the stroke and starts a new one (a new `ObjectId`, so `End` then a new
+  `Begin`) when a point would lie 2^14 object units or more from the pen-down point on either axis. So every preview
+  point relative to `Begin.first` fits an `i32` at 2^-16 of a unit, and the extent stays under 2^15 units. A delta
+  between two points can reach 2^31 steps, so the receiver decodes `dx` and `dy` as `i64` and checks that each
+  resulting point fits `i32`; a point that does not is a malformed message and is dropped. The preview relies on
+  this rule, including for strokes drawn while the view auto-pans.
 - **Batching.** Kept points are sent in `Points` messages every tick (33 ms), 2 to 8 points in each. The client also
   sends a batch sooner if 120 points have gathered.
 - **Size.** A point is two zigzag varints and a pressure byte. A step of half a pixel is about 32,000 lattice steps
@@ -722,9 +737,9 @@ The pen's samples are collected by the client in the order they arrive, thinned 
   300 ms. If the object arrives and the preview never existed (the stroke was too short to bother, or out of view),
   nothing special happens. For the swap to be invisible, the finished outline must equal the preview outline to
   within a quarter of a pixel: the preview is built from thinned points and the object from all points, so the
-  thinning tolerance (0.5 pixel of deviation at the sender's zoom, above) is chosen so the difference is below what
-  the eye sees at that zoom. A receiver at 1000 times the sender's zoom would see the difference, but it can see the
-  stroke only through the part in its tiny view, and the swap there changes a corner at most.
+  difference is at most the thinning tolerance of 0.15 pixel at the sender's zoom (above, and 06's), which is under
+  the quarter pixel the swap test allows. A receiver at 1000 times the sender's zoom would see the difference, but
+  it can see the stroke only through the part in its tiny view, and the swap there changes a corner at most.
 - **The drawer disconnects mid-stroke.** The server does not make a stroke for them (it would be a change authored
   by a client that never sent it). On a connection loss the server sends `Cancel`-like removal for the live ink
   after the disconnect timeout (6 s), and receivers freeze the preview, then fade it out over 300 ms. If the
@@ -805,14 +820,13 @@ The who list is a panel (section 07); its data comes from here.
   camera there (camera is section 01's; the animation is a straight move of the view center in log-scale, so a jump
   across many levels does not fly over empty space). The target's view reaches only the asker, once.
 - **Follow.** `Follow { target }` needs the target to be `locatable`, as a jump does. It makes the server push
-  `JumpTo`-form updates of the target's view at 15 Hz (only when it changed). Following is a server-pushed stream
-  at 15 updates a second, one per session, not repeated jumps; jumps keep their own rate limit. It
-  reveals nothing more than repeated jumps would. The follower's camera
-  eases toward each (critically damped, response 150 ms). Any manual pan or zoom by the follower ends the follow (a
-  `Notice` confirms). The target's cursor is always delivered to a follower, regardless of the region test and the
-  cap, as Figma does. Followers see the target's cursor delayed by D, and the view stream is delayed to match, so
-  the cursor and the camera stay together.
-- **Follower cap.** At most 50 followers per person; a 51st `Follow` is refused with a `Notice`. The
+  `JumpTo`-form updates of the target's view at 15 Hz (only when it changed). Following is a server-pushed stream at
+  15 updates a second, one per session, not repeated jumps; jumps keep their own rate limit. It reveals nothing more
+  than repeated jumps would. The follower's camera eases toward each (critically damped, response 150 ms). Any
+  manual pan or zoom by the follower ends the follow (a `PresenceNotice` confirms). The target's cursor is always
+  delivered to a follower, regardless of the region test and the cap, as Figma does. Followers see the target's
+  cursor delayed by D, and the view stream is delayed to match, so the cursor and the camera stay together.
+- **Follower cap.** At most 50 followers per person; a 51st `Follow` is refused with a `PresenceNotice`. The
   cost is stream rate times message size times followers. A `JumpTo` carrying a `ViewMsg` is about 50 bytes of
   payload at depth 0 (two positions and `pixel_log2`) and about 120 bytes with transport overhead, so one follower
   costs 15 x 120 = 1.8 KB/s of server egress and 50 followers cost 90 KB/s (0.72 Mbit/s) for one person, encoded
@@ -821,7 +835,8 @@ The who list is a panel (section 07); its data comes from here.
   2,000-person room would cost 3.6 MB/s (29 Mbit/s) for one camera. The limit is named `max_followers_per_person`
   for section 08's table. A presenter with a larger audience needs a different mechanism (see the owner questions).
 - **Follow notice.** Section 08 requires that the target is told ("Ana is following you"). The server sends the
-  target a `Notice` when a follow starts and ends, and the who list shows the names of followers to the target.
+  target a `PresenceNotice` when a follow starts and ends, and the who list shows the names of followers to the
+  target.
 - **Privacy position and the cost of an opt-out.** The high-level design accepts that jump reveals where a person is
   working. Section 08 specifies the opt-out as a per-session `locatable` flag (default from the token's `loc` claim,
   otherwise on), and this design implements it as `ToServer::Locatable { on }` and `PeerInfo.locatable`. When off,
@@ -874,12 +889,13 @@ The who list is a panel (section 07); its data comes from here.
   not model or measure that (unverified). These are worst cases: the average wait behind a chunk in progress is
   about `U + chunk / 2`, and outside bulk loads the wait is zero.
 - **Fallback trigger: a second WebSocket.** If in the spike the cursor lag during a bulk load still exceeds 200 ms
-  with the 20 ms rule on a link above the floor (about 1.6 Mbit/s) that the product must support, presence
-  moves to its own socket: path `/presence` on the same host, authenticated by the same session credential as the
-  sync socket, with its own queue and no bulk data on it. The message format does not change; only the framing
-  around `Presence(Bytes)` is removed, and section 03's `Hello`/`Welcome` must say how the second socket attaches to
-  the session. This costs a second handshake, a second set of timeouts and a second place where a client can be
-  half-connected (see the failure table). It does not remove the TCP stall from a lost segment.
+  with the 20 ms rule on a link above the floor (about 1.6 Mbit/s) that the product must support, presence moves to
+  its own socket: path `/presence` on the same host, authenticated by the same session credential as the sync
+  socket, with its own queue and no bulk data on it. The message format does not change; only the framing around
+  `Presence(Bytes)` is removed, and section 03's `Hello`/`Welcome` (the connection's own messages) must say how the
+  second socket attaches to the session. This costs a second handshake, a second set of timeouts and a second place
+  where a client can be half-connected (see the failure table). It does not remove the TCP stall from a lost
+  segment.
 - **Back-pressure.** Clients send `Heartbeat.last_snapshot` at least every 250 ms while receiving. The server keeps
   `inflight_bytes` = bytes sent in snapshots numbered after `last_acked`. If `inflight_bytes` exceeds `max(16 KB, 4
   x B_eff x RTT)`, the server skips that receiver's snapshot this tick (the state stays in the table, the next
@@ -888,7 +904,7 @@ The who list is a panel (section 07); its data comes from here.
   writing when the client falls behind, not to model the connection.
 - **Drop order** when a receiver is over budget: (1) cursors at the end of the priority order; (2) a lower snapshot
   rate; (3) ink thinning; (4) delayed selection updates. Never dropped: `PeerGone`, the followed person's cursor,
-  answers to `Jump`, `Notice`.
+  answers to `Jump`, `PresenceNotice`.
 - **Later: WebTransport datagrams.** The same messages in datagrams (snapshot split into datagrams of at most 1000
   bytes, each with whole entries), with the WebSocket kept as the fallback and chosen when a WebTransport handshake
   fails or times out in 2 s. The path is added when the benchmark below shows that stalls on the WebSocket (a lost
@@ -902,14 +918,13 @@ The who list is a panel (section 07); its data comes from here.
 - The server writes `who` itself; a client can never claim another's index. Every float in a message must be finite
   and every `Position` within the depth cap (01; checked on the raw bytes before any number is built), or the
   message is dropped and counted.
-- **Rates and caps are section 08's**. This section only names what it needs in that table: the
-  presence message rate per session (08 lists 40 a second sustained with a burst of 80 for members, 30 and 60 for
-  guests); the jump rate; the points per stroke; and four limits I propose adding: `max_live_strokes` per room,
-  `max_visible_cursors` per receiver, `presence_down_budget` per receiver and `presence_room_egress` per room. Over
-  the limit, presence is dropped without reply (08). The design keeps a drawing or dragging session at about 30
-  messages a second so the 40-a-second figure holds: ink and drag messages replace `Pointer`, and `Selection`,
-  `Activity`, `Heartbeat` are rare. 08's presence row no longer lists "view": the view is a `SetView`,
-  limited by 08's view row.
+- **Rates and caps are section 08's**. This section only names what it needs in that table: the presence message
+  rate per session (60 a second with a burst of 120 for members, 30 and 60 for guests); the jump rate; the points
+  per stroke; and four limits I propose adding: `max_live_strokes` per room, `max_visible_cursors` per receiver,
+  `presence_down_budget` per receiver and `presence_room_egress` per room. Over the limit, presence is dropped
+  without reply (08). The design keeps a drawing or dragging session at about 30 messages a second so the
+  60-a-second figure holds with room to spare: ink and drag messages replace `Pointer`, and `Selection`, `Activity`,
+  `Heartbeat` are rare.
 - Message sizes are checked before decoding (1000 bytes, or the depth-dependent size of one position for the
   rare deep message) and decoders never allocate more than they were told (a declared length is checked against
   the bytes present).
@@ -922,10 +937,10 @@ The who list is a panel (section 07); its data comes from here.
 | A presence packet is lost (datagram path, later) | The next snapshot replaces it; interpolation holds or extrapolates up to 100 ms; the 1 Hz refresh repairs any lost entry. |
 | TCP stalls the socket (a lost segment) | Cursors freeze, then extrapolate and stop after 100 ms; when the stall ends, the newest state arrives first (the server never queued a backlog) and the cursor eases to it over 100 ms. |
 | The client falls behind | `inflight_bytes` rises, the server skips snapshots, the rate drops; ink thins. |
-| The connection drops (one socket) | Sync and presence go together. The client reconnects and sends `Hello` with `resume`; others see the cursor grey after 6 s and removed after 30 s if it does not return; if it returns within 10 min it has the same color. |
+| The connection drops (one socket) | Sync and presence go together. The client reconnects and sends `PresenceHello` with `resume`; others see the cursor grey after 6 s and removed after 30 s if it does not return; if it returns within 10 min it has the same color. |
 | Fallback only: presence socket drops but the sync socket lives, or the reverse | A half-connected session: the server treats it as Silent for routing after 6 s without a presence message (or without a view update) and the client reconnects the missing socket. |
 | A bulk load on a slow link | Cursors lag by the wait in the transport table, up to about 40 ms above 1.6 Mbit/s with the adaptive limit and more below the 4 KiB floor (262 ms at 0.25 Mbit/s); interpolation extrapolates and eases; the lag ends with the load. |
-| Room process restarts | Presence starts empty. Clients reconnect and send `Hello` and `Pointer`; cursors reappear in under 2 s. Colors may change. |
+| Room process restarts | Presence starts empty. Clients reconnect and send `PresenceHello` and `Pointer`; cursors reappear in under 2 s. Colors may change. |
 | Many cursors in one place | Cap, `Omitted` count, 50-banner limit. |
 | Two tabs of one person | Same color, one list entry, two cursors. |
 | A cursor on a level the receiver has not been sent | Cursor display does not need the object data; it needs only its `Position`. It is drawn even where the receiver has no content yet. |
@@ -940,6 +955,7 @@ The who list is a panel (section 07); its data comes from here.
 | Rule | Proved by |
 |---|---|
 | A cursor in the receiver's exact view is delivered; the receiver shows exactly those in its exact view (replaces design.md's "delivered exactly") | Random sessions with views at levels -5 to 100, random cursors, 100,000 cases: the indexed result equals a brute-force scan over all pairs, for the padded region (server) and for the exact view (client draw list). Includes cursors exactly on edges and on cell borders, and across the level boundary |
+| Cursors stay correct while the view moves | A scripted receiver panning at 0.5, 1 and 2 times the pad per 100 ms with cursors crossing its edge: every cursor in the exact view is present when the pan is below the pad per `SetView`; above it, a missing cursor appears within 100 ms plus half the simulated round trip, and the measured worst case is reported |
 | Routing is per direction | A scripted pair where A's view contains B's cursor and B's view does not contain A's: A receives B and B does not receive A, and back |
 | The index agrees after any sequence of moves, joins and leaves | A model test: random operations on the index and on a plain list; compare after each |
 | Deep and shallow views see each other correctly | Scripted scenarios with the sender 1, 10, 100 levels deeper and shallower than the receiver, against a reference big-number implementation |
@@ -957,7 +973,7 @@ The who list is a panel (section 07); its data comes from here.
 | Jump and follow | A session with `locatable` off refuses both and a refusal looks like a departed person; the jump rate limit holds; the target receives the follow notice; a follower gets the followed cursor outside the region and cap; manual pan ends a follow; no message to another client contains a view that was not requested (scan of all outputs, shared with 08's N87) |
 | Drag preview | A scripted dragger and viewer: the viewer's preview follows `Move`; after the `Set` arrives exactly one of preview and object is drawn in each frame; a lost `End` times out in 2 s; nothing from a preview reaches the document |
 | One socket keeps cursors timely | Throttled-socket test with a 50 MB view fill running: the wait is measured at 0.25, 1, 5, 20 and 100 Mbit/s with the 20 ms drain rule (and, for comparison, 40 ms) against the transport table (bound about 40 ms above the 4 KiB floor); cursor lag stays under 200 ms where the table says it can; the result decides whether the second-socket fallback is needed |
-| A session sends at most about 30 presence messages a second | Drive a drawing session and a dragging session at full rate: the count stays under 40 a second (08's limit) |
+| A session sends at most about 30 presence messages a second | Drive a drawing session and a dragging session at full rate: the count stays under 60 a second for members and 30 for guests (08's limits) |
 | Deep positions | A cursor at depth 100 and at the cap: the message decodes, the budget formula uses the real size, and an over-cap position is rejected from the raw bytes |
 | Limits | Rate-limit, size, non-finite number and impossible-position cases are dropped and counted |
 | Who list at scale | 2000 simulated joins: no more than the count message reaches closed panels; open panels get at most one batch a second |
@@ -1003,8 +1019,8 @@ come from crates.io on 2026-11-11; their health beyond the update date was not e
   pen-down point `Begin.first`, so preview and final points are the same world points (agreed with section 06).
 - **07.** Pointer events with an activity signal and hover state, hidden-tab events, the who-list panel and its
   accessibility description, tool ids; one socket in `Transport`.
-- **08.** Which roles may send which messages (viewers: cursor and view, no ink); the presence message rate (40 a
-  second, burst 80, guests 30 and 60); the jump rate; display-name limits and their unit; the guest session id used
+- **08.** Which roles may send which messages (viewers: cursor and view, no ink); the presence message rate (60 a
+  second, burst 120; guests 30 and 60); the jump rate; display-name limits and their unit; the guest session id used
   as `user_key`; `kind` on every session; the per-session `locatable` flag with its `loc` claim; the follow notice;
   and a place in the limits table for `max_followers_per_person` (50), `max_live_strokes`, `max_visible_cursors`,
   `presence_down_budget` and `presence_room_egress`, with a room cap on sessions. Its table row "Presence (cursor,

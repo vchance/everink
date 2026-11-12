@@ -43,9 +43,9 @@ measured in the spike):
 - A busy room has 50 active people. Presence at 30 updates per second each is 1,500 updates per second entering the
   room, and without view filtering up to 73,500 per second leaving it (50 people, each sent the 49 others). So the
   filter, not the sender, is what makes presence affordable.
-- A large surface has 1 million objects. Held fully in server memory at about 170 bytes of index and bookkeeping
-  per object plus the object bodies, that is roughly 1 to 2 GB. A surface with 10 million is not practical to hold
-  in memory on one small machine; see [Capacity](#capacity-estimates).
+- A large surface has 2 million objects, the first-version cap. Held fully in server memory that is an estimated 2.6
+  GB (built in [Capacity](#capacity-estimates)); a surface ten times larger is not practical to hold in memory on
+  one small machine.
 - The server must not lose an acknowledged change, even if it crashes one millisecond later.
 
 Why the obvious answers do not work:
@@ -246,8 +246,10 @@ pub struct Room {
 **Rows.** A **row** `r` (an `i64`) is a grid of square tiles whose side is `32^r` level-0 units. Rows are absolute,
 so they do not depend on any view. Section 01 fixes a cell at 1,024 units of its level and a unit of level `L` at
 `1024^-L` level-0 units, so a level-`L` cell is `1024^(1-L) = 32^(2-2L)` level-0 units and **level `L`'s cell grid
-is row `2 - 2L`**. Section 01's depth cap (levels within ±1,024) therefore gives rows from -2,046 to 2,050, which
-fit an `i16`, and the integer test below sums terms no larger than about 20,500, which fits an `i32`; nothing here
+is row `2 - 2L`**. Section 01's depth cap (levels within ±1,024) therefore gives cell-grid rows from -2,046 to
+2,050; home rows, which add the finest row of each level and the coarser rows that hold large objects, run from
+about -2,050 to 2,052. Both fit an `i16`, and the integer test below sums terms no larger than about 20,500, which
+fits an `i32`; nothing here
 needs more than `i64` for a row or a level. Every other row is a finer or coarser grid in steps of 32. Ratio 32 was
 chosen because a ratio of 2 makes ten rows per level and a deep object would need a long chain of rows, while a
 ratio of 1,024 (one row per level) leaves tiles that are too coarse to prune anything.
@@ -272,9 +274,10 @@ below:
 
 **Buckets.** Hashing tiles one by one would make the finest rows cost millions of probes, so each row groups tiles
 into **buckets** of 1,024 by 1,024 tiles (side `32^(r+2)`). A bucket holds an R-tree (the `rstar` crate) of the
-entries whose box touches it, with coordinates stored as 64-bit floats relative to the bucket's corner. A bucket is
-at most 1,024 times larger than the smallest object in it, so the floats keep more than 40 bits for the object's own
-scale. The stored box is rounded outward, so the index never misses; a final exact check removes the rounding.
+entries whose box touches it, with coordinates stored as 64-bit floats relative to the bucket's corner. A bucket can
+be up to 2^15 times larger than its smallest entry (1,024 tiles, each up to 32 times an entry's extent), so the
+53-bit floats keep about 38 bits for the entry's own scale. The stored box is rounded outward, so the index never
+misses; a final exact check removes the rounding.
 
 **Keys and boxes stay small at any depth.** A full `Position` costs 19 bytes at the origin, 272 at level 100 and up
 to about 3.1 KB at the cap (section 01). The index therefore never keeps one per object. A `BucketKey` (two big
@@ -330,7 +333,7 @@ effect) as derived data for the picture counts.
 |---|---|
 | Insert or remove | Compute row and at most 4 buckets (a shift of the fixed-point integers), then O(log n) per bucket tree |
 | Move or resize | Remove, then insert; the old box is read from the object table, so the index cannot drift |
-| Query | For each occupied row that can matter: at most about 4 buckets (up to about 49 in the finest row), one hash probe and one tree range query each, so O(R · (log n) + k) where R is the number of occupied rows that pass the test below and k the results |
+| Query | For each occupied row that can matter: at most about 4 buckets (about 64 to 81 in the finest row, for a padded view), one hash probe and one tree range query each, so O(R · (log n) + k) where R is the number of occupied rows that pass the test below and k the results |
 | Memory | About 60 bytes per entry plus about 110 bytes per object for the object table (`ObjBox` about 80 bytes, ids, rev); about 170 bytes per object together, at any depth (estimate) |
 | Rebuild | One pass over the document, estimated 1 to 2 microseconds per object; 1 million objects in 1 to 2 s |
 
@@ -360,7 +363,8 @@ row r can hold an object that reaches min_px   iff   tile_px_log2(r) >= log2(min
   so if `tile_px_log2(r) >= 5 + ceil(log2(min_px))` the per-entry size test is skipped.
 - **Fine rows** are cut off by the test: a row whose whole tile is under `min_px` holds nothing that reaches it.
   How many fine rows pass depends only on the view's size in pixels against `min_px`; for a 4,000-pixel view and
-  `min_px = 1` it is three or four rows (tiles of 1 to about 1,000,000 pixels), whatever level the content is on.
+  `min_px = 1` it is five rows (tiles of 1, 32, about 1,000, about 33,000 and about 1,000,000 pixels), whatever
+  level the content is on.
 - **Rows with nothing in them are never visited:** `rows` holds only occupied rows, so a surface that has content
   at levels 0 and 400 costs two row visits however many levels lie between.
 - **Rounding is conservative.** `pixel_log2` is rounded down, so the size test is conservative to within a factor of
@@ -459,7 +463,7 @@ overview pictures are for; until they exist, the budget is the guard.
 **Far objects.** A **far** object is one whose home row has `tile_px_log2` above 40 (its tile is over a trillion
 pixels, so the view lies inside a small part of it). Such objects are backdrops and frames; every occupied coarse
 row can contribute some, and an abusive surface can stack one per level over a thousand levels. At most
-`max_far_objects` (named in section 08's table; the value is for 08 to set, a few hundred is enough for any honest
+`max_far_objects` (256, proposed here and held in section 08's table; a few hundred is enough for any honest
 nesting) are sent per view, smallest tile first, and `far_dropped` in `ViewEnd` reports how many were left out.
 
 **Client send rate.** While the view is moving the client sends `SetView` **at least every 100 ms, however small the
@@ -597,8 +601,8 @@ pub enum ClientMsg {
     Presence(Bytes),                       // section 04's payload, at most 1,000 bytes
     Ping { client_ms: u64 },
     VersionCmd { req: u32, cmd: VersionCmd },
-    UploadGrantRequest { req: u32, blob: BlobId, size: u64, kind: BlobKind },   // section 05
-    BlobGrantRequest { req: u32, blobs: Vec<BlobId> },                         // section 05 and 08
+    UploadGrantRequest { req: u32, blob: BlobId, size: u64, kind: BlobKind },   // reference for 05 and 08
+    BlobGrantRequest { req: u32, blobs: Vec<BlobId> },                         // at most 100 ids (08's table)
     Bye,
 }
 pub struct ChangeFrame {
@@ -613,7 +617,7 @@ pub enum VersionCmd {                      // Save, Delete and Restore: members 
 }
 
 pub enum ServerMsg {
-    AuthOk { session: SessionId, expires: u64, role: Role, http_bearer: Bytes },   // section 08
+    AuthOk { session: SessionId, expires: u64, role: Role },                      // section 08
     Welcome {
         user: UserId, head: Seq, server_ms: u64,
         window: Window,                    // how much the client may have unacknowledged (numbers: section 08)
@@ -628,7 +632,7 @@ pub enum ServerMsg {
         more: Vec<(PicTile, u32)>,         // tiles with objects not sent, and how many ("more here")
     },
     Apply { seq: Seq, origin: Option<UserId>, base: Position, effects: Vec<Effect> },
-    Ack { upto: ClientChangeId, seq: Seq },      // cumulative: all changes up to `upto` are durable
+    Ack { acked: Vec<(ClientChangeId, Seq)> },   // one (id, seq) pair for every change covered; all are durable
     Partial { change: ClientChangeId, skipped: Vec<u16> },   // `Applied.skipped` of a `partial_ok` change (undo only)
     Reject { change: ClientChangeId, code: RejectCode, touched: Vec<ObjectId> },   // RejectCode wraps 02's `Rejected`; RateLimited carries retry_after
     FetchResult { req: u32, base: Position, bodies: Vec<BodyMsg>, missing: Vec<ObjectId> },
@@ -636,7 +640,7 @@ pub enum ServerMsg {
     Presence(Bytes),                       // section 04's payload, at most 1,000 bytes
     Pong { client_ms: u64, server_ms: u64 },        // clock offset for video (sections 04 and 05)
     Versions { req: u32, result: VersionResult },
-    UploadGrant { req: u32, grant: Bytes },         // section 05 and 08: bearer for the HTTP upload
+    UploadGrant { req: u32, grant: Bytes },         // section 08's upload grant, for section 05's HTTP upload
     BlobGrants { req: u32, grants: Vec<(BlobId, Bytes)>, denied: Vec<BlobId> },   // one grant covers a blob's variants
     BlobStatus { blob: BlobId, status: BlobStatus },   // section 05's enum; pushed, never stored in the document
     PictureUpdate { tile: PicTile, picture: Option<PictureRef> },              // section 06; None = removed
@@ -655,15 +659,16 @@ pub struct BodyMsg { rev: Rev, body: ObjectBody, group: Option<GroupSummary> }
 ```
 
 `BlobStatus`, `BlobKind`, `BlobId` and `RejectReason` are defined by section 05 and `PicTile` and `PictureRef` by
-section 06 (see the outlines below); this section carries them unchanged. Message count: 11 client messages, 22
-server
-messages. `Welcome` is sent only after `AuthOk`, and nothing at all is sent before it.
+section 06 (see the outlines below); this section carries them unchanged. Message count: 12 client messages, 21
+server messages. `Welcome` is sent only after `AuthOk`, and nothing at all is sent before it.
 
 **Ordering.** `seq` is assigned by the room actor and gives a total order of accepted changes; it is also the stamp
 of every register a change writes (section 02). `Apply` messages to one connection are in increasing `seq` order
-(with gaps for changes it was not sent). The client may rely on this. `Ack { upto, seq }` means every change up to
-`upto` is in the log at `seq` or below. So for a local change, any `Apply` with `seq` below the ack is "before it",
-and any above is "after it". The recommended client rule, from Figma's design, is to hold back incoming patches to
+(with gaps for changes it was not sent). The client may rely on this. `Ack { acked }` carries a `(ClientChangeId,
+Seq)` pair for every change it covers, so the client learns the sequence number of each of its own changes (section
+02's undo and redo need it). Every pair is durable. For a local change, any `Apply` with `seq` below its pair's
+`seq` is "before it", and any above is "after it". The recommended client rule, from Figma's design, is to hold back
+incoming patches to
 a property while a local change to that property is unacknowledged, and apply them after the ack; this prevents a
 value flickering back. It is section 02's rule to confirm.
 
@@ -689,16 +694,19 @@ whatever has arrived while the previous commit was running (group commit), so lo
 change. Presence and `Pong` are never held for the commit.
 
 **Idempotent resubmission.** A client resends every unacknowledged `ChangeFrame` after a reconnect. The room
-keeps, per `ClientId`, the highest `ClientChangeId` it has logged and its `seq`; a frame with `id <= highest` is not
-applied again and is answered with the cumulative `Ack`. The map is saved in every snapshot and rebuilt from the
+keeps, per `ClientId`, the highest `ClientChangeId` it has logged and the `(ClientChangeId, Seq)` pairs of its most
+recent changes (at least as many as the unacknowledged budget in section 08's table allows, so every change a client
+can resend is covered); a frame with `id <= highest` is not
+applied again and is answered with its original pair in an `Ack`. The map is saved in every snapshot and rebuilt
+from the
 log tail, so it survives a crash. It is trimmed for clients idle 30 days (about 40 bytes per entry; 100,000
 devices is 4 MB).
 
 **Flow control and back-pressure.**
 
-- *Client to server:* `Welcome.window` gives the client a budget of unacknowledged bytes and changes; the numbers
-  are
-  in section 08's table. `Ack` returns the budget. A client past the budget waits (it keeps queueing locally). A
+- *Client to server:* `Welcome.window` gives the client a budget of unacknowledged bytes and changes: 1 MiB and 256
+  changes, proposed here and held in section 08's table. `Ack` returns the budget. A client past the budget waits
+  (it keeps queueing locally). A
   client that sends beyond the budget plus a margin is closed. Section 08's rate limits apply on top, per role.
 - *Server to client, classes.* Each connection has four outbound queues:
 
@@ -719,7 +727,9 @@ devices is 4 MB).
   the 47 ms left of the 200 ms cursor budget. The 4 KiB floor takes over below about 1.6 Mbit/s (4 KiB drains in
   20 ms at 1.64 Mbit/s); there the wait is two floors' drain time, 66 ms at 1 Mbit/s and 660 ms at 100 kbit/s.
   On such links the server sends fewer objects first by raising `eff_min_px` for the opening fill, so less bulk
-  data is queued. 20 ms is the first value the spike tries. Examples: 5 Mbit/s gives a limit of 12.5 KB, 13 Mbit/s
+  data is queued. 20 ms is the first value the spike tries. The bound counts bytes unsent on this host; bytes
+  already queued in the network (a router in front of a slow last hop) are not modelled, so such a link can add
+  delay beyond the figures here. Examples: 5 Mbit/s gives a limit of 12.5 KB, 13 Mbit/s
   gives 32 KB, and 26 Mbit/s or more gives 64 KiB.
   With tokio it is done in two layers. First, the accepted `TcpStream` gets `TCP_NOTSENT_LOWAT` through the
   `socket2` crate before the WebSocket upgrade, set to the current limit (and set again when the limit changes);
@@ -850,7 +860,7 @@ last snapshot, or room unload. A final snapshot at unload makes the next load fa
 - *Space:* `auto_vacuum=INCREMENTAL`; the file is shrunk by the expiry job, not on the hot path.
 - *Not done in the first version:* squashing runs of property writes in old log rows. Dragging an object sends one
   patch per tick, so a long drag fills the log; the remedy is on the client (section 02 and 04: preview a drag as
-  presence, commit it on release or at most every 250 ms), not in the store.
+  presence, commit it on release or at most 5 times a second, every 200 ms), not in the store.
 
 **Recovery after a crash** (runs at every room load, because a clean unload and a crash look the same):
 
@@ -915,8 +925,10 @@ one is disconnected.
    objects whose `Rev` is above `s0`, applies that, and repeats until it is empty; the last round runs with the
    actor briefly refusing new `Submit`s (queued, not dropped), normally under 50 ms (estimate).
 4. All connections receive the restore as ordinary `Apply` effects (for objects in their view) and
-   `Notice::RestoreHappened { by, version, at: Seq }`. The undo stack of every user is cleared for objects the
-   restore touched (section 02's call), because their history no longer matches.
+   `Notice::RestoreHappened { by, version, at: Seq }`. No undo stack is cleared: section 02's conditional undo
+   (`if_stamp`) already fails for any entry whose registers the restore re-stamped, so a stale entry reports
+   "Nothing to undo" instead of undoing the wrong thing. Schema migrations in section 02 read old versions from
+   their snapshot chunks, because the log is trimmed.
 5. Changes that were in flight from other people arrive after the restore and are applied on top of it by the
    normal merge rules. They are not lost, and they may re-create things the restore deleted, as `design.md`
    already says. Undoing the restore means restoring the "before restore" point.
@@ -928,9 +940,14 @@ The owner decides who may restore beyond the owner and whether other editors get
 Section 05 owns the media pipeline (upload, derivation, tiles, the blob store). This section carries the messages
 and keeps the records that tie blobs to a surface. Files travel over HTTP, never on the WebSocket.
 
-- **Upload and grants.** `UploadGrantRequest { blob, size, kind }` is checked against the sender's role and
-  section 08's media limits, and answered with `UploadGrant`, the bearer for section 05's resumable HTTP upload.
-  `BlobGrantRequest { blobs }` is answered with `BlobGrants`: one grant per blob, which covers all of the blob's
+- **Upload and grants.** The message names and fields here are the reference that sections 05 and 08 use.
+  `UploadGrantRequest { req, blob, size, kind }` is checked against the sender's role and section 08's media limits,
+  and answered with `UploadGrant`: the upload grant defined in section 08, bound to user, surface, blob and size,
+  valid until the session ends and for at most 24 hours. It is the only credential for section 05's resumable HTTP
+  upload. `everink-server` checks every upload request (`POST`, `PATCH`, `HEAD`) against the revoked-session list,
+  so an upload after a link is turned off is refused.
+  `BlobGrantRequest { req, blobs }` (at most 100 ids, from section 08's table) is answered with `BlobGrants`: one
+  grant per blob, which covers all of the blob's
   variants and tiles, and is issued only if this surface references the blob (the reference index below
   decides). The grant itself (a MAC over tenant, surface, blob hash, session id and expiry) is built by section 08's
   code; this section only checks the reference and relays the bytes.
@@ -956,7 +973,8 @@ and keeps the records that tie blobs to a surface. Files travel over HTTP, never
   ```rust
   /// Blobs referenced by one stored state of a surface: the current state, one retained snapshot, one named
   version.
-  fn blobs_in_state(store: &dyn RoomStore, state: StateRef) -> impl Iterator<Item = BlobId>;
+  /// Loads the state and calls section 02's pure `blobs_in_state(&Doc)`; the tenant comes from the store's scope.
+  fn blobs_in_store(store: &dyn RoomStore, state: StateRef) -> impl Iterator<Item = BlobId>;
   ```
 
   For a snapshot it is the union of the `blobs` lists of the chunks in its manifest (each list is written when the
@@ -1088,9 +1106,10 @@ Assumptions (all unmeasured; the spike replaces them with numbers):
 | Stroke bytes at commit | 1.2 KB |
 | Stroke rate per active drawer | 0.3 per second |
 | Presence message | 60 bytes, 30 per second per user |
-| Objects in a large surface | 1 million (stretch 10 million) |
-| Object body in memory | 600 bytes average, 2 KB for ink |
-| Index and bookkeeping | 170 bytes per object |
+| Objects in a large surface | 2 million (the first-version cap) |
+| Object header (section 02) | about 110 bytes near the origin |
+| Stroke body (section 02's typical, packed) | about 1 KB for 200 pen samples; every object is taken to be a stroke |
+| Index entry and object table (this section) | about 170 bytes per object |
 
 Derived:
 
@@ -1104,8 +1123,7 @@ Derived:
 | Actor CPU for changes | 15 · (20 µs apply + 50 · 0.1 µs route + encode) | well under 1% of a core |
 | Actor CPU for presence worst case | 73,500 per second · about 1 µs | about 7% of a core |
 | First fill of 2,000 objects | 2,000 · 1 KB, LZ4 about 2 times | 1 MB, 0.4 s at 20 Mbit/s |
-| Server memory, 1 million objects | 1M · (600 B ink-mixed body + 170 B) | about 0.8 GB |
-| Server memory, 10 million objects | same | about 8 GB: too much for a small host |
+| Server memory at the cap, estimate | 2M · (110 B header + 1,000 B stroke body + 170 B index) | about 2.6 GB; about 4 GB if the in-memory form costs 50% more than the packed form |
 | Per connection | two bitmaps (up to 100 KB), 256 KB buffers | under 0.5 MB, 50 people is 25 MB |
 | Log growth, busy | 18 KB/s | 65 MB per hour |
 | Log growth, ordinary (5 people, 0.1 strokes/s each) | 0.5 · 1.2 KB | 0.6 KB/s, 2 MB per hour, trimmed at the second snapshot |
@@ -1116,7 +1134,9 @@ Presence worst-case fan-out is the largest figure, and it is section 04's to red
 cursors beyond a count shown as a list). Past 1 million objects, the route is to keep object bodies in the chunk
 cache instead of RAM: chunks are the paging unit already, and the index (170 B per object, 1.7 GB at 10 million)
 stays resident. That is the design Liveblocks describes for its second engine. It is not part of the first version;
-the first version rejects creating objects past `max_objects` (default 2,000,000; section 08).
+the first version rejects creating objects past `max_objects` (default 2,000,000; section 08). The cap follows from
+the memory estimate: 2.6 to 4 GB for the surface, plus under 0.1 GB for 200 connections and a transient copy of the
+shards a snapshot job is writing, fits a host with 8 GB; ten times the cap (13 to 20 GB) does not.
 
 ## Failure modes
 
@@ -1155,7 +1175,7 @@ the first version rejects creating objects past `max_objects` (default 2,000,000
 | Group with partly loaded children | Scenario: group of 1,000 children, client views 3; move the group, ungroup (must fetch), delete |
 | Held-list revalidation | Scenario: client caches region, disconnects, others edit and delete, client reconnects; compare final cache with server truth |
 | Ack only after durable | Store test double that delays commits: no `Ack` or foreign `Apply` before the commit callback; kill the actor after apply and before commit, restart, resubmit, compare |
-| Idempotent resubmission | Submit every change twice, and in a loop with random disconnects; log has each exactly once |
+| Idempotent resubmission | Submit every change twice, and in a loop with random disconnects; log has each exactly once, and each resubmission is answered with the original `(ClientChangeId, Seq)` pair |
 | Crash safety | Fault injection: kill the process at random points across 10,000 runs of random workloads; recovered state equals the acknowledged prefix; also truncated and bit-flipped log rows |
 | Snapshot fallback | Corrupt the newest manifest, then a chunk, then both; recovery still yields the correct state |
 | Snapshot equals log | At any seq, snapshot plus replay equals replay from empty |
@@ -1208,8 +1228,9 @@ table in `02-document-model.md`.
 **Section 01 (positions).** `Position` is `{ level, x: Axis, y: Axis }` with a fixed-point `Axis { cell, frac }` in
 steps of `2^-54` of a level unit, a canonical wire format of 19 bytes at the origin, about 2.5 bytes more per level,
 and at most about 3.1 KB at the depth cap (levels within ±1,024, cell magnitude up to 12,288 bits). Checked against
-those numbers: row `2 - 2L` is the level-`L` cell grid (a cell is 1,024 units, a unit is `1024^-L`), rows stay
-within ±2,050, and the tile and bucket shifts are never negative for an object in its home row. Used, all exact:
+those numbers: row `2 - 2L` is the level-`L` cell grid (a cell is 1,024 units, a unit is `1024^-L`), home rows run
+from about -2,050 to 2,052, and the tile and bucket shifts are never negative for an object in its home row. Used,
+all exact:
 
 - Types: `Level`, `Axis`, `Fixed`, `Position`, `Delta`, `ExactRect`, `ViewRect` (with `pixel_log2`), `ExactBox`,
   `Bounds`, `TileKey`, `BucketKey { row, bx, by }`, `Round`, `DepthCap`.
@@ -1261,7 +1282,7 @@ enforces the size and the queue class. The reduction of presence fan-out in larg
 
 **Section 05 (media).** Owns the upload protocol, the worker, `BlobStatus`, `BlobId`, `BlobKind` and the store.
 Needs
-from this section: the messages and records in "Media support", `blobs_in_state`, the status push, pausing of
+from this section: the messages and records in "Media support", `blobs_in_store`, the status push, pausing of
 playing videos, and `Ping`/`Pong` outside the change queue for its offset estimate (minimum-delay sample of the
 last 8). A video's `PlaybackState` is an ordinary register beside `VideoFields`.
 
@@ -1284,7 +1305,9 @@ default 2,000,000), `max_far_objects`, and the three view limits `max_view_objec
 
 ## Questions for the owner
 
-1. **The CRDT library.** The proposed design, with the spike as its test: do not let one library own the whole
+1. **The CRDT library.** One document per object (for example yrs subdocuments) is a route to partial copies that is
+   unproven at scale (section 02's caveat). The proposed design, with the spike as its test: do not let one library
+   own the whole
    document. View-scoped sync needs each
    object to be its own mergeable state. Both Loro and yrs have one document with a shared operation history, which
    a partial replica cannot follow (this is from general knowledge; the spike should confirm it for each). The

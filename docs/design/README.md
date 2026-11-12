@@ -33,7 +33,7 @@ These are the decisions that cross section boundaries. The section named first h
 | Groups | A child is placed relative to its parent, so moving a group is one write. A child is at most 8 levels from its group. | 02, 01, 03 |
 | Merge | The object map is Everink's own and is ordered by the server: each field is last-writer-wins by the surface's sequence number. A CRDT library is used only for the text inside text objects. Proposed, for the owner to accept. | 02, 03 |
 | What is sent | An object is sent when it crosses the padded view and covers at least one pixel, with a budget that raises the threshold on dense views. Size decides, not level. The client sends its exact view; the server adds the padding. | 03, 06 |
-| Connection | One WebSocket carries changes and presence. Presence has its own queue, served first; bulk data is paced to what the link drains in about 20 ms, so a cursor waits about 40 ms at most behind it on links faster than about 1.6 Mbit/s. A second socket is the fallback if the spike shows this is not enough. | 03, 04, 07, 08 |
+| Connection | One WebSocket carries changes and presence. Presence has its own queue, served first; bulk data is paced to what the link drains in about 20 ms, so a cursor waits about 40 ms at most behind it on links faster than about 1.6 Mbit/s. Data already queued in the network is not counted. A second socket is the fallback if the spike shows this is not enough. | 03, 04, 07, 08 |
 | Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine. | 06, 01, 02 |
 | Partial erase | A stroke carries a set of cuts, so two people erasing parts of one stroke both take effect. | 02, 06 |
 | Renderer | `vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind Everink's own interface. Frames come from a cache of 512-pixel tiles. | 06 |
@@ -48,13 +48,14 @@ The research overturned or sharpened these points. [`../design.md`](../design.md
 
 - **Offsets are fixed-point, not floating-point.** Floating-point offsets cannot be compared exactly in bounded
   space and have several encodings of one value (01).
-- **No CRDT library can hold the object map.** View-scoped sync needs each client to hold part of a surface, and
-  none of Loro, yrs or Automerge documents a way to sync part of a document. Two sections reached this separately.
-  It is unproven and the spike tests it (02, 03).
+- **No CRDT library documents syncing part of one document.** View-scoped sync needs each client to hold part of
+  a surface. The only route found in Loro, yrs or Automerge is one small document per object (yrs subdocuments,
+  for example), which is unproven at scale. Two sections reached this separately, from documentation and not from
+  trial, so the spike tests it first (02, 03).
 - **The server may refuse a change:** a move that would make a group contain itself, a role or limit violation, a
   move into a deleted group. "Everything always merges" is too strong (02).
-- **Frames are not redrawn from the objects each time.** A tile cache makes a still scene nearly free and keeps
-  10,000 objects at 60 frames per second (06).
+- **Frames are not redrawn from the objects each time.** A tile cache makes a still scene nearly free; holding
+  10,000 objects at 60 frames per second is its target (06).
 - **"Vello" is several crates,** and the one meant for production is pre-1.0. The renderer is wrapped and only a
   safe subset of its features is used (06).
 - **"Two levels below the view" is retired.** What is searched and drawn follows from size (03, 01).
@@ -81,7 +82,8 @@ The research overturned or sharpened these points. [`../design.md`](../design.md
 | `everink-ui` | The shared controls. |
 | `everink-sync` | Merge rules, wire protocol, partial copy, presence. |
 | `everink-runtime` | Runs what the core asks for (network, storage, clipboard, media) through the platform traits. |
-| `everink-server` | The room server, storage, versions, the blob store interface. The media worker is a separate process. |
+| `everink-server` | The room server, storage, versions. |
+| `everink-media` | The blob store and the media worker, which runs as a separate process. |
 | `everink-native` | Desktop shell. |
 | `everink-web` | Browser shell. |
 

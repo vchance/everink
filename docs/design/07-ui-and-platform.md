@@ -191,10 +191,10 @@ Package names are intentions only; publishing them is the owner's decision (AGEN
  Embedder Command --> Core;  Core --Notification--> Embedder
 ```
 
-Packages: `everink-core`, `everink-render`, `everink-ui`, `everink-sync`, `everink-runtime` (new
-here: the loop that feeds events in and runs the core's effects through the `Platform` traits; used by both shells),
-`everink-server`, `everink-native`, `everink-web`. Core, sync and ui know nothing of any platform and never call
-async code.
+Packages: `everink-core`, `everink-render`, `everink-ui`, `everink-sync`, `everink-media` (05: the media worker and
+blob store code), `everink-runtime` (new here: the loop that feeds events in and runs the core's effects through the
+`Platform` traits; used by both shells), `everink-server`, `everink-native`, `everink-web`. Core, sync and ui know
+nothing of any platform and never call async code.
 
 ### Sans-I/O: events in, effects out
 
@@ -269,7 +269,7 @@ both:
 pub trait Platform: MaybeSend + 'static {
     type Surface: SurfaceHost;  type Net: Transport;   type Http: HttpClient;  type Store: Storage;
     type Clip: Clipboard;       type Text: TextBridge; type A11y: AccessibilityHost;
-    type Video: PlatformVideoPlayer;  type Media: MediaHost;  type Clock: Clock;  type Host: HostServices;
+    type Video: PlatformVideoPlayer /* defined in 05 */;  type Media: MediaHost;  type Clock: Clock;  type Host: HostServices;
     fn parts(&mut self) -> Parts<'_, Self>;
 }
 
@@ -285,7 +285,9 @@ pub trait SurfaceHost {
 }
 
 pub trait Transport {                          // the one WebSocket per surface (03 owns the protocol)
-    async fn connect(&mut self, url: &str, subprotocol: &str, token: &str) -> Result<(), NetError>;
+    /// Opens the socket; `url` carries no secret. The first frame the core sends is `auth { token }` (members) or
+    /// `auth { ticket }` (guests, from the link exchange) as 08 defines it; the shell never puts either in the address.
+    async fn connect(&mut self, url: &str, subprotocol: &str) -> Result<(), NetError>;
     fn send(&mut self, frame: &[u8]) -> Result<(), NetError>;   // binary frame; never blocks
     fn buffered_amount(&self) -> u64;          // bytes queued, not yet on the wire
     fn close(&mut self, code: u16, reason: &str);
@@ -325,14 +327,6 @@ pub trait AccessibilityHost {                   // see "Accessibility"
     fn set_enabled_hint(&mut self) -> bool;     // has assistive technology asked for the tree?
     fn update(&mut self, update: accesskit::TreeUpdate);
     fn announce(&mut self, text: &str, politeness: Politeness);
-}
-
-pub trait PlatformVideoPlayer {                 // the platform's decoder and sound for video; detail in 05
-    fn open(&mut self, id: VideoId, source: VideoSource) -> Result<(), MediaError>;
-    fn op(&mut self, id: VideoId, op: VideoOp);              // Play, Pause, Seek, SetVolume, SetMuted
-    fn latest_frame(&mut self, id: VideoId) -> Option<VideoFrame>;
-    // Sound blocked for lack of user activation is reported as Completed::AudioBlocked; the controls then show
-    // the unmute control (a tap supplies the activation).
 }
 
 pub trait MediaHost {                           // still images; detail in 05
@@ -819,7 +813,7 @@ size. The browser compiles while downloading when the file is served as `applica
 | Need | Header or setting |
 |---|---|
 | Streaming compile | `Content-Type: application/wasm`; brotli or gzip `Content-Encoding` |
-| Content security policy | `script-src 'self' 'wasm-unsafe-eval'` and nothing looser (no `'unsafe-eval'`, no `'unsafe-inline'`); `worker-src 'self'` (the storage worker is a file of the package, not a `blob:`); `connect-src` the server's `wss:` and `https:` origins; `img-src` and `media-src` the blob origin |
+| Content security policy | Section 08's policy, which this shell runs under: `script-src 'self' 'wasm-unsafe-eval'` and nothing looser (no `'unsafe-eval'`, no `'unsafe-inline'`); `worker-src 'self'` (the storage worker is a file of the package); `connect-src 'self'` plus the server's `wss:` and `https:` origins and the blob origin, because the wasm code fetches and decodes images itself; `img-src 'self' blob: data:`; `media-src` the blob origin and `blob:` (for video elements) |
 | Clipboard inside an iframe | `Permissions-Policy` and iframe `allow="clipboard-read; clipboard-write"` |
 | Cross-origin isolation | **Not required.** Only a future threaded build would need COOP `same-origin` and COEP `require-corp` |
 | Secure context | HTTPS (clipboard, OPFS, service worker, WebGPU require it) [16] |
@@ -908,7 +902,8 @@ Latest on crates.io on 2026-11-11 [1] unless noted.
 | `tokio-tungstenite` | 0.30.0 | MIT | Active | Native WebSocket |
 | `arboard` | 3.7.0 | MIT OR Apache-2.0 | Active | Native clipboard |
 | `redb` | 4.5.0 | MIT OR Apache-2.0 | Active | Native embedded store |
-| `vello`, `parley` | 0.12.0 | Apache-2.0 OR MIT | Active | Via 06: scene API and the one text stack |
+| `vello_gpu`, `vello_cpu` | 0.4.0 | Apache-2.0 OR MIT (unverified for these crates) | Active | Via 06: scene API behind its `Backend` trait |
+| `parley` | 0.12.0 | Apache-2.0 OR MIT | Active | Via 06: the one text stack |
 | `serde`, `postcard` or `ciborium`, `smallvec` | not checked | MIT OR Apache-2.0 each (unverified) | | Command and clipboard encoding |
 
 Considered and not used: egui 0.37.0 (MIT OR Apache-2.0), xilem and masonry 0.4.0 (Apache-2.0), iced 0.14.0 (MIT),
@@ -937,9 +932,11 @@ unverified) are not shipped.
 - **04 (presence):** cursors, selections and live ink are drawn by the core overlay; the shell supplies pointer,
   hover and leave activity and `Hidden`/`Visible`; this section supplies the people-list panel from 04's data (name,
   color, guest flag, view summary).
-- **05 (media):** `HttpClient` with `Range` and streaming `PATCH`, `PlatformVideoPlayer`, the `uploads` and `tiles`
-  stores, `user_activation()` and the unmute control are provided here; 05 defines `DecodeRequest`, `VideoOp`, fonts
-  for non-Latin controls from the blob store, and pasted-media rules.
+- **05 (media):** `HttpClient` with `Range` and streaming `PATCH`, the shell-side implementation of 05's
+  `PlatformVideoPlayer` (`open`, `set_rate`, `seek`, `position_us`, `output_latency_us`, `next_frame`; sound blocked
+  for lack of user activation is reported as `Completed::AudioBlocked` and the controls then show the unmute
+  control), the `uploads` and `tiles` stores, `user_activation()` and the unmute control are provided here; 05
+  defines `DecodeRequest`, `VideoOp`, fonts for non-Latin controls from the blob store, and pasted-media rules.
 - **06 (rendering):** a scene API for `SceneFragment` painted in the same frame as the canvas; the shared text
   service (Parley); the wgpu device; `request_frame()` and the pen-sample stream (coalesced samples, timestamps)
   delivered by this section; the `desynchronized` canvas it asks for through `live_ink_target`; selection-to-PNG;

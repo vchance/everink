@@ -163,7 +163,7 @@ rejected for the 2x burst at a window edge.
 Sketches only; names are proposals.
 
 ```rust
-/// Chosen by the operator. Lowercase ASCII letters, digits and '-', 1..=32 bytes.
+/// Chosen by the operator. Lowercase text: ASCII letters, digits and '-', 1 to 32 bytes. Every section uses this type.
 struct TenantId(String);
 struct SurfaceId(String);          // opaque, 1..=64 bytes, [A-Za-z0-9_-]
 struct UserSub(String);            // opaque from the embedder, 1..=128 bytes UTF-8, no control characters
@@ -189,7 +189,6 @@ struct Session {
     via: Via,
     started: Instant,
     expires: Instant,              // see "Lifetimes"
-    http_bearer: BearerHash,       // SHA-256 of the value given to the client for HTTP calls
     budgets: SessionBudgets,       // rate limiters and the write budget
 }
 
@@ -247,30 +246,55 @@ cost of one embedder round trip per connect.
 
 - Each tenant has between 1 and 4 public keys, each with an id and optional `not_before` and `not_after` times. The
   server holds public keys only. The embedder holds the private key and nothing else is secret about verification.
-- Distribution is by **configured keys** (a file or the admin API) by default, because it needs no outbound network
-  call from the server and nothing for an attacker to redirect. A tenant may instead give one **JWKS URL**
-  (RFC 7517 key set). The server then fetches it only from that operator-configured HTTPS address, never from a
-  token; it refuses redirects, private-network addresses (unless the operator allows them), bodies over 64 KiB and
-  responses slower than 5 s; it caches for 5 minutes, keeps a stale copy for 24 hours when the fetch fails, and
-  fetches again for an unknown `kid` at most once a minute per tenant. Choice: configured keys first, JWKS optional,
-  because an unreachable or hijacked JWKS address is a new way to deny service or to inject a key.
+- Distribution is by **configured keys** (operator configuration, or the tenant admin interface for its own keys) by
+  default, because it needs no outbound network call from the server and nothing for an attacker to redirect. A
+  tenant may instead give one **JWKS URL** (RFC 7517 key set). The server then fetches it only from that
+  operator-configured HTTPS address, never from a token; it refuses redirects, private-network addresses (unless the
+  operator allows them), bodies over 64 KiB and responses slower than 5 s; it caches for 5 minutes, keeps a stale
+  copy for 24 hours when the fetch fails, and fetches again for an unknown `kid` at most once a minute per tenant.
+  Choice: configured keys first, JWKS optional, because an unreachable or hijacked JWKS address is a new way to deny
+  service or to inject a key.
 - **Rotation** is overlap: add the new key; start signing with it; wait one maximum token life (10 minutes) after
   the last token under the old key; remove the old key. Sessions record their `kid`; removing a key ends the
   sessions that came in under it at their next refresh, or at once if the operator uses the emergency form.
 - **Compromise** of a tenant key: remove it, and set the tenant's *revocation floor* to now (below). The attacker
   can have minted tokens only for that tenant's surfaces.
 
-**Revocation.** Tokens are short, so most revocation is expiry. Three faster tools, all on the admin interface:
+**Revocation.** Tokens are short, so most revocation is expiry. Three faster tools:
 
-1. *Revocation floor* per tenant, optionally per `sub` or per surface: tokens with `iat` before the floor are
-   refused and sessions that entered on such a token are closed. Propagation to rooms on other machines: at most 5
-   s.
-2. *Remove a key*, as above.
-3. *Suspend the tenant*: all its sessions close and new ones are refused.
+1. *Revocation floor* per tenant (tenant admin), optionally per `sub` or per surface: tokens with `iat` before the
+   floor are refused and sessions that entered on such a token are closed. Propagation to rooms on other machines:
+   at most 5 s.
+2. *Remove a key* (tenant admin for its connect keys, operator for any), as above.
+3. *Suspend the tenant* (operator): all its sessions close and new ones are refused.
 
-The admin interface takes a second kind of token, `typ: everink-admin+jwt`, signed by a separate admin key list
-(also up to 4 keys), so a leaked connect-token key cannot call it. Operations: set floor, add or remove a key,
-suspend, delete a surface, set tenant quotas, read the audit trail. Admin tokens live 60 s and are single use.
+**The admin interface is two interfaces,** so that a tenant can never change the limits the operator set on it.
+
+| | Operator admin | Tenant admin |
+|---|---|---|
+| Who | The party running the server | One embedding app, for its own tenant only |
+| Operations | Register a tenant and its keys; set tenant quotas and ceilings; suspend or resume a tenant; delete a tenant; set the tenant admin key list; read any audit trail | Set its revocation floor; add or remove its own connect keys, up to the operator's limit (4); delete a surface; erase a user; read its own audit trail |
+| Key list | Operator admin keys, in the server's own configuration, not per tenant | Up to 4 tenant admin keys per tenant, set by the operator only, so a stolen tenant admin key cannot lock the tenant out of recovery |
+| Token `typ` | `everink-operator+jwt` | `everink-tenant-admin+jwt` |
+
+A tenant admin token that names a quota, a ceiling or another tenant is refused. Nothing a tenant sends can raise a
+quota that applies to it.
+
+Both admin tokens use the same profile as the connect token, with the differences below. They are checked by the
+same function, so `alg`, `kid`, header and size rules (RFC 8725 3.1, 3.10 to 3.12) are identical.
+
+| Field | Value |
+|---|---|
+| Header `alg` | `EdDSA` only. Any other header member (`jku`, `jwk`, `x5u`, `x5c`, `crit`) rejects the token. |
+| Header `typ` | `everink-operator+jwt` or `everink-tenant-admin+jwt`; each endpoint accepts exactly one. A connect token, an operator token and a tenant admin token cannot be swapped. |
+| Header `kid` | Looked up only in that interface's key list. |
+| `iss` | The tenant id for a tenant admin token; the fixed string `operator` for an operator token. |
+| `aud` | `everink-admin:<deployment id>`, so a token for another deployment fails. |
+| `sub` | The administrator's identity, 1 to 128 bytes. Written to the audit trail. |
+| `op` | Exactly one operation name from the table above. The token is good for that operation only. |
+| `tgt` | The target of the operation (surface id, `sub`, key id), where the operation has one. Must match the request. |
+| `iat`, `exp` | `exp - iat <= 60`; 10 s of clock leeway. |
+| `jti` | 128 random bits. **Single use:** the server keeps each `jti` until `exp` plus leeway in its shared store (the same store as the revocation floor), not in a room's memory, so a replay is refused after a restart and on another node. A connect token's `jti`, by contrast, is kept in the room's memory and only when the tenant turns single use on. |
 
 **Refresh in a long session.** A session ends when its token expires unless refreshed. At half the token's life the
 client asks the embedder for a new token and sends `refresh { token }` on the open socket. The server runs the same
@@ -309,15 +333,15 @@ WebSocket request, so the credential travels in the first message.
    reply to every failure is the same code, 4401, with no reason (the reason goes to the log).
 6. **Session creation.** The server sanitizes the name, takes the role from the token, counts the user's other
    sessions (at most 8 per `(tenant, sub, surface)`), counts the surface's sessions against its cap, creates the
-   `Session`, picks `expires = min(token.exp, now + 15 min)`, and replies `auth_ok { session_id, expires,
-   role, http_bearer }`.
+   `Session`, picks `expires = min(token.exp, now + 15 min)`, and replies `auth_ok { session_id, expires, role }`.
 7. **After `auth_ok`** the room accepts the normal messages (section 03). Every message is checked by `Authz::check`
    against the session as it is *now*, not as it was at connect.
 
-`http_bearer` is a random 192-bit value for the HTTP endpoints (upload, blob address requests; sections 03 and 05).
-HTTP endpoints take it in an `Authorization: Bearer` header on `fetch` requests made with `credentials: omit`. The
-server keeps only its hash. It dies with the session. Because it is a header and not a cookie, cross-site request
-forgery has nothing to forge. CORS on these endpoints allows only the tenant's origins.
+**Upload requests** (section 05) are not authenticated by the connection. A client asks for an **upload grant** over
+the socket (`UploadGrantRequest { req, blob, size, kind }`, section 03) and presents it on every upload request. The
+grant is defined under Blob access control below and is the only upload credential. HTTP endpoints take credentials
+in an `Authorization` header on `fetch` requests made with `credentials: omit`; because that is a header and not a
+cookie, cross-site request forgery has nothing to forge. CORS on these endpoints allows only the tenant's origins.
 
 **The session the server keeps** lives in memory in the surface's room, not in a database. A restart ends all
 sessions; clients reconnect with the token (still valid for up to 10 minutes) or fetch another. Guest tickets are
@@ -366,12 +390,13 @@ struct ShareLink {
    times.
 4. The client opens the WebSocket and sends `auth { ticket }`. The session role is the link's role.
 
-The secret is used once per visitor; after that only the ticket is used. The ticket is kept in `sessionStorage` on
-the web (gone when the tab closes) and in memory on native shells. The exchange endpoint is rate-limited at 10
-failed attempts per minute per address and 100 per minute per surface, and every failure returns the same answer
-whether the link never existed, is off or has expired (a guess learns nothing; at 256 bits a guess cannot succeed
-in any case). The secret is accepted only in the body of a `POST`, never in a `GET` (TAG: a `GET` has no side
-effects, and `GET` addresses are logged).
+The typed name travels in this exchange and nowhere in presence (section 04 drops it from the presence hello). The
+secret is used once per visitor; after that only the ticket is used. The ticket is kept in `sessionStorage` on the
+web (gone when the tab closes) and in memory on native shells. The exchange endpoint is rate-limited at 10 failed
+attempts per minute per address and 100 per minute per surface, and every failure returns the same answer whether
+the link never existed, is off or has expired (a guess learns nothing; at 256 bits a guess cannot succeed in any
+case). The secret is accepted only in the body of a `POST`, never in a `GET` (TAG: a `GET` has no side effects, and
+`GET` addresses are logged).
 
 **Guest session lifetime.** A ticket lasts at most 24 hours from the exchange, and is dead after 2 hours with no
 connection. A guest who returns after that re-enters the link and types a name again. Within the 24 hours the
@@ -380,7 +405,7 @@ session (a visible "leave" action, or the tab closing for `sessionStorage`) clea
 
 **Turning a link off.** The owner sets the state to Off. In the same step the room closes every session with
 `Via::Link(id)` using code 4403, deletes their tickets, and blocks the exchange. Because the link state lives
-with the room that owns the surface, this takes under a second on a single room. The embedder-facing admin
+with the room that owns the surface, this takes under a second on a single room. The tenant admin
 interface can do the same. Expiry does the same at the expiry time (a timer in the room). Changing a link's role
 applies to open sessions at once.
 
@@ -417,10 +442,11 @@ guest on a viewer link. Cells: **Y** allowed; **n** denied; **L** allowed but un
 | Edit text; place a library template | Y | Y | n | L | n | room |
 | Play, pause or seek a video | Y | Y | n | L | n | room |
 | Save a user library (a small surface) | Y | Y | n | n | n | room |
-| Upload an image | Y | Y | n | L (8 MiB) | n | upload endpoint, again at blob commit |
+| Upload an image | Y | Y | n | L (8 MiB) | n | upload grant, checked on every upload request and again at blob commit |
 | Upload a video | Y | Y | n | n | n | upload endpoint |
 | Upload a font | Y | Y | n | n | n | upload endpoint |
-| Ask for a blob grant | Y | Y | Y | Y | Y | room, per blob grant |
+| Ask for a blob grant | Y | Y | Y | Y | Y | room: only for a blob in the surface's current state, or in a snapshot or version the role may open |
+| Ask for an upload grant (`UploadGrantRequest`) | Y | Y | n | L | n | room; checked again on every upload request |
 | List or open a version (read only) | Y | Y | n | n | n | room |
 | Create a named version | Y | Y | n | n | n | room |
 | Restore a version | Y | n | n | n | n | room |
@@ -500,15 +526,20 @@ placeholder to be tested, not a derived figure. Rows that name a section take th
 | `MAX_OPS_PER_CHANGE`: operations in one change (objects created or changed) | 1,000 | 100 | Own proposal: A pasted library template or a group move. |
 | `MAX_STROKE_POINTS`: points per stroke | 20,000 | 5,000 | Own proposal: A pen at 240 Hz for 83 s; clients simplify, so real strokes are far smaller. |
 | `MAX_CUTS_PER_STROKE`: cuts per stroke | 64 | 64 | Section 02: past 64 the eraser replaces the stroke with pieces. |
-| `MAX_TEXT_CHARS`: text length, one text object (scalar values) | 50,000 | 5,000 |
+| `MAX_TEXT_CHARS`: text length, one text object (scalar values) | 50,000 | 5,000 | Own proposal: An essay for members; a paragraph for guests. |
 | `MAX_TEXT_UPDATE_BYTES`: one text update | 64 KiB | 16 KiB | Own proposal: Fits inside the change cap; a larger paste becomes several objects (section 02). |
 | `MAX_ORDER_KEY_BYTES`: order key length | 64 | 64 | Own proposal: Section 02 rebalances at 24 bytes, so 64 is far above any honest key and bounds a hostile one. |
-| `MAX_TREE_DEPTH`: group nesting depth | 16 | 16 | Recursion bound for every walk of the tree. | Own proposal: An essay for members; a paragraph for guests. |
+| `MAX_TREE_DEPTH`: group nesting depth | 16 | 16 | Own proposal: Recursion bound for every walk of the tree. |
 | Style runs per text object | 2,000 | 200 | Own proposal: Layout cost grows with runs. |
 | Path or polygon vertices, one shape (path nodes) | 20,000 | 5,000 | Own proposal: Same as strokes; section 06 adds its own render skip. |
-| Glyphs per text object, picture size, tile time-out | set by section 06 | same | Rendering cost caps; no figure invented here. |
+| Glyphs per text block | 60,000 | 6,000 | Own proposal: one glyph per scalar value at most, so slightly above `MAX_TEXT_CHARS`; section 06 points here. |
+| Encoded size of one overview picture | 512 KiB | 512 KiB | Own proposal: a 512 x 512 RGBA tile is 1 MiB raw (section 06); a larger encoding is refused as hostile. |
+| Time to render one tile before it is marked failed | 2 s | 2 s | Own proposal: section 06 asks for a time-out and gives no figure; measure in the spike. |
+| Far objects sent per view (`max_far_objects`) | 256 | 256 | Own proposal: section 03 says a few hundred is enough for any honest nesting. |
+| Unacknowledged budget in `Welcome.window` | 1 MiB and 256 changes | 1 MiB and 64 changes | Section 03's proposal (four full-size member changes in flight), held here; a tuning target for the spike. |
 | A child's distance from its group, in levels | 8 | 8 | Section 02. |
-| Followers per person | 50 | 50 | Section 04: a 51st follower is refused with a message; reasoning in section 04. |
+| Followers per person (`max_followers_per_person`) | 50 | 50 | Section 04: a 51st follower is refused with a message; reasoning in section 04. |
+| Blob ids in one `BlobGrantRequest` | 100 | 100 | One number for the whole design; section 03 names the message. |
 | Descendants of one group (`max_group_descendants`) | 20,000 | 20,000 | Reasoning in section 03. |
 | Objects per view (`max_view_objects`) | 50,000 | 50,000 | Reasoning in section 03. |
 | Bytes per view (`max_view_bytes`) | 64 MiB | 64 MiB | Reasoning in section 03. |
@@ -521,6 +552,14 @@ placeholder to be tested, not a derived figure. Rows that name a section take th
 | Image pixels | 128 Mpx, each side at most 32,768 | 16 Mpx, each side at most 8,192 | Section 05 for members (128 Mpx x 4 B = 512 MiB, bounded by the worker's limits); guests stricter. |
 | Video upload | 2 GiB, 4096 x 2304, 4 hours (section 05) | not allowed | Section 05 for members. |
 | Font upload | 20 MiB (section 05) | not allowed | Section 05. |
+| Placeholder, bytes | 64 | 64 | Set by section 05. |
+| Alt text, bytes | 500 | 500 | Set by section 05. |
+| Playback writes per second | 5 per user, 10 per object | not allowed | Set by section 05. |
+| Playback anchor tolerance | 2 s | n/a | Set by section 05. |
+| Decoder memory; decode time | 768 MiB (`max_alloc`), 1.5 GiB process; 60 s wall, 45 s CPU | same | Set by section 05. |
+| Image metadata (EXIF, XMP, ICC) | 1 MiB | 1 MiB | Set by section 05. |
+| Font glyphs; variation axes | 65,535; 16 | not allowed | Set by section 05. |
+| Presigned address lifetime | 60 s | 60 s | Set by section 05. |
 | Uploads in flight | 3 per user, one a video (section 05) | 1 | Section 05; guests stricter. |
 | Blob storage per surface | 2 GiB | shared | Own proposal: Tenant ceiling decides. Unreferenced uploads are deleted after 24 h. |
 | `max_visible_cursors`: cursors drawn per receiver (banners: 50) | 200 | 200 | Reasoning in section 04. |
@@ -549,7 +588,8 @@ message plus 1 per 4 KiB.
 | Change commits | 20 /s / 100 | 5 /s / 20 | Normal drawing commits a stroke every 0.2 s or slower |
 | View changes | 20 /s / 40 | 20 /s / 40 | Panning; each costs an index query |
 | Upload requests | 10 /min | 3 /min | |
-| Blob grant requests | 60 /min, 100 blobs each | 60 /min | |
+| Blob grant requests | 60 /min | 60 /min | Each carries at most 100 blob ids. |
+| Upload grant requests | 10 /min | 3 /min | |
 | Jumps | 1 /s, 30 /min | same | See opt-out. Follow is not a jump: it is one server-pushed stream of 15 updates a second per session (section 04). |
 | Joins (exchange) | n/a | 10 failures /min per address | |
 | Bytes in, per session | 512 KiB/s | 128 KiB/s | Above any honest stroke rate |
@@ -577,7 +617,7 @@ decides to compress, inflation stops at the message cap and aborts when the rati
 | Flooding with changes or presence | Rates above; sockets closed and banned with backoff; per-tenant socket cap. |
 | Deface as an editor guest | 5 links max; guest write budget (5,000 objects, 30 MiB); smaller changes; auto freeze on mass limiting; owner can *freeze guests*, *`Op::DeleteBy` for this guest or link*, turn the link off, or restore a version. |
 | Deface as an editor member | Same tools except the guest budget; the embedder is the one who removes the member (new tokens, revocation floor). |
-| Hostile embedding app | Trusted only for its own tenant. Tenant quotas: surfaces, sockets, storage, upload rate, new `sub` values per hour. Operator can suspend the tenant. It cannot reach another tenant (below). Its content is still escaped and limited like anyone's. |
+| Hostile embedding app | Trusted only for its own tenant. Tenant quotas: surfaces, sockets, storage, upload rate, new `sub` values per hour. The operator, not the tenant, sets the quotas and can suspend the tenant. It cannot reach another tenant (below). Its content is still escaped and limited like anyone's. |
 | Memory exhaustion by deep positions | Encoded-size and level checks run on the raw bytes before any big-number allocation. |
 | Memory exhaustion by huge objects | Size and count limits above are checked at the framing layer, then the parser stops at the cap while parsing (no "parse then check"). The room has a memory budget; at 90% it refuses object creation and keeps serving reads. |
 | Slow-loris (slowly sent headers, frames or reads) | Header deadline 10 s; authentication frame 5 s; a partly received message must finish in 10 s; ping every 20 s, closing if no pong in 20 s; the outbound queue per socket is capped at 4 MiB, presence dropped first, then the socket closed; idle 5 minutes without application traffic closes the socket. |
@@ -597,10 +637,11 @@ decides to compress, inflation stops at the message cap and aborts when the rati
   bytes are uploaded through that surface, or when the server copies content from a surface the copier can read to
   another it can write. A change message that names a hash with no grant for that surface is refused. This closes
   the gap in correction 3.
-- Resource isolation: per-tenant quotas (sockets, rooms, storage bytes, upload bytes per day, token-verification
-  failures) and a per-tenant CPU share through a bounded work queue per tenant. An operator who needs stronger
-  separation runs one server process per tenant; the design does not stop that, and the default of a single tenant
-  `default` makes the common case a one-line configuration.
+- Resource isolation: per-tenant quotas, set only through the operator interface and never by the tenant (sockets,
+  rooms, storage bytes, upload bytes per day, token-verification failures) and a per-tenant CPU share through a
+  bounded work queue per tenant. An operator who needs stronger separation runs one server process per tenant; the
+  design does not stop that, and the default of a single tenant `default` makes the common case a one-line
+  configuration.
 - A tenant can be suspended or deleted by the operator. Deleting a tenant deletes everything under its scope
   (see Retention).
 
@@ -623,17 +664,40 @@ sig = HMAC-SHA256(blob_key[k], "everink-blob-v1\0" || tenant || "\0" || surface 
 - **Lifetimes:** **10 minutes** for images, tiles and fonts. **2 hours** for video, because a browser keeps sending
   range requests to one address and cannot be handed a new one in the middle of playback. Clients ask again before
   expiry. The store checks the MAC in constant time, the expiry (5 s leeway) and that the key id is known. Keys
-  rotate every 90 days, with an overlap of 2 hours (the longest lifetime).
+  rotate every 90 days, with an overlap of 24 hours (the longest upload grant).
 - **Revoked sessions:** the list lives in `everink-server`, which serves the media endpoint. The room adds the id of
-  every session that ends by revocation (link turned off, guest removed, revocation floor, freeze of guest
-  sessions). The store keeps these ids for 2 hours (the longest grant) and checks every blob request against them,
-  so turning a link off cuts blob access at once, not after the grant would have expired. A session that ends
-  normally needs no entry; its grants simply expire. The list is small: it holds only forced endings, 16 bytes each.
-  If the store cannot reach the list, it refuses video requests it cannot check (fail closed) and keeps serving
-  cached image grants only until their 10 minutes end.
-- **The user is not in the MAC,** so a grant is a capability: whoever holds the address can read until it expires or
-  its session is revoked. Binding it to a cookie or header is impossible because a media element cannot send
-  headers.
+  every session that ends by revocation (link turned off, guest removed, revocation floor). The store keeps these
+  ids for 24 hours (the longest upload grant) and checks every blob read request and every upload request (`POST`,
+  `PATCH`, `HEAD`) against them, so turning a link off cuts blob access at once, not after the grant would have
+  expired. A session that ends normally needs no entry; its grants simply expire. The list is small: it holds only
+  forced endings, 16 bytes each. If the store cannot reach the list, it refuses video requests it cannot check (fail
+  closed) and keeps serving cached image grants only until their 10 minutes end.
+- **The user is not in the read MAC,** so a read grant is a capability: whoever holds the address can read until it
+  expires or its session is revoked. Binding it to a cookie or header is impossible because a media element cannot
+  send headers.
+- **Upload grant.** The one credential for uploads. The room issues it on an `UploadGrantRequest` after
+  `Authz::check` for the upload operation and the limits table (size, kind, uploads in flight). It is bound to the
+  principal, the surface, the blob and its declared size, and is valid until the session ends and for at most 24
+  hours. Section 05 and section 03 point here.
+
+  ```rust
+  struct UploadGrant {
+      tenant: TenantId, surface: SurfaceId, principal: PrincipalKey, session: SessionId,
+      blob: BlobHash, size: u64, kind: UploadKind, expires: Timestamp,   // expires <= issued + 24 h
+      mac: [u8; 32],   // HMAC-SHA-256, context "everink-upload-v1", over every field above
+  }
+  ```
+
+  The upload endpoint refuses a request whose bytes exceed `size`, whose blob differs, or whose session is on the
+  revoked list, on every `POST`, `PATCH` and `HEAD`. So an upload that was in progress when a link was turned off
+  stops at its next request.
+- **Freezing guests does not revoke them.** A frozen guest becomes a viewer at once, keeps read access to blobs
+  (its sessions are not on the revoked list), and has its upload grants cancelled: the room puts the session on a
+  separate cancelled-uploads list that the upload endpoint checks and the read path does not.
+- **What a read grant is checked against.** The room issues a read grant only for a blob referenced by the
+  surface's current state, or by a snapshot or named version that the requester's role may open. The reference index
+  that never forgets is for garbage collection only, never for access. A viewer therefore cannot read a blob that is
+  referenced only by a deleted object.
 - **Originals.** Derived files are what clients display. The uploader's original is download-only: it lives under a
   different path (`/o/`) with a different MAC context string (`everink-blob-orig-v1`), is sent as an attachment
   (headers below), and the room issues such a grant only to members. Guests never receive one.
@@ -646,11 +710,17 @@ sig = HMAC-SHA256(blob_key[k], "everink-blob-v1\0" || tenant || "\0" || surface 
 `Referrer-Policy: no-referrer`; the app sets `Referrer-Policy: no-referrer` too; a blob response is never a page
 that links elsewhere; the expiry limits the damage of anything that does leak.
 
-**Response headers the blob store sends on every file:**
+**Response headers the blob store sends on every file.** This table is the only list of them; section 05 refers to
+it.
+
+**Presigned mode.** If the store answers with a redirect to a presigned address on object storage, the same headers
+must be set there: response-header overrides on the presigned request, object metadata written at upload, and a
+bucket CORS policy for the tenant's origins. A store that cannot do all three runs in proxy mode (the server streams
+the bytes). The header test runs in both modes.
 
 | Header | Value | Reason |
 |---|---|---|
-| `Content-Type` | The type the server decided after validating the bytes (`image/webp`, `image/png`, `video/mp4`, `font/woff2`, ...), never the uploader's | No sniffing by trust in the client |
+| `Content-Type` | The type the server decided after validating the bytes (`image/webp`, `image/png`, `video/mp4`, `font/ttf`, `font/otf`, ...), never the uploader's | No sniffing by trust in the client |
 | `X-Content-Type-Options` | `nosniff` | The browser must not guess a type |
 | `Content-Disposition` | `attachment; filename="blob"` | If anyone navigates to the address, it downloads and does not render (does not block use by `fetch` or a media element) |
 | `Content-Security-Policy` | `default-src 'none'; sandbox` | If something does render, it has no scripts and a null origin |
@@ -674,7 +744,7 @@ The wording is a requirement for section 05; this section sets the line.
 
 | Threat | Control |
 |---|---|
-| Decompression bomb (a small PNG that inflates to gigabytes; a WOFF2 that inflates) | Section 05's rule: read the header, compute the size, compare with the limits table, only then decode. The media worker is a separate OS process with memory and CPU limits, no network and no filesystem beyond its pipes (limits and times are section 05's). Fonts: probe and a decompressed-size cap. Animated images are refused (one frame). |
+| Decompression bomb (a small PNG that inflates to gigabytes) | Section 05's rule: read the header, compute the size, compare with the limits table, only then decode. The media worker is a separate OS process with memory and CPU limits, no network and no filesystem beyond its pipes (limits and times are section 05's). Fonts: TTF and OTF only, probe and table-size caps; WOFF2 is refused in the first version. Animated images are refused (one frame). |
 | Polyglot (a file valid as an image and as something else, such as a script or archive) | The worker decodes images and writes derived files in its own formats; clients display only derived files. Metadata (EXIF, which can hold GPS position) is dropped from derived files. The original is kept as a download-only attachment for members, served from the `/o/` path with `attachment`, `nosniff`, `sandbox`. Video is never decoded or re-encoded by the server (section 05): it is probed by header only, then served as `video/mp4` or `video/webm` with `nosniff` from the separate origin. |
 | SVG and embedded scripts | SVG is not an accepted upload type, as image or as font or anywhere. HTML, PDF, ZIP and Office files are not accepted either. Vector content comes only through Everink's own object types. |
 | Content sniffing | `nosniff`, a server-chosen `Content-Type`, `Content-Disposition: attachment`. |
@@ -702,6 +772,8 @@ Referrer-Policy: no-referrer
 X-Content-Type-Options: nosniff
 ```
 
+- Images are fetched and decoded by the wasm code, not by `<img>`, so the blob origin is in `connect-src`;
+  `media-src` carries it for video elements; `img-src` stays `'self' blob: data:`. Section 07 uses this policy.
 - `'wasm-unsafe-eval'` lets WebAssembly compile and does not allow `eval` or `Function` (MDN). The plain
   `'unsafe-eval'` must never be needed: the web shell and its generated glue must not use string-to-code APIs. The
   CI test loads the shell under this policy and fails on any violation report. (Trusted Types compatibility with
@@ -732,7 +804,7 @@ requested. The `GuestId` is shown to the owner only.
 
 | Logged (operational log) | Never logged |
 |---|---|
-| Time, request id, tenant, surface, session id, role, principal kind, operation name, outcome code, sizes, timings | Tokens, tickets, bearers, share-link secrets, signed addresses, query strings of blob requests, message contents, names of guests, object contents |
+| Time, request id, tenant, surface, session id, role, principal kind, operation name, outcome code, sizes, timings | Tokens, tickets, upload grants, share-link secrets, signed addresses, query strings of blob requests, message contents, names of guests, object contents |
 | Remote address truncated to /24 (IPv4) or /48 (IPv6) | Full remote address (kept in memory only for rate limiting) |
 
 The secret types print as `[redacted]` in `Debug` and `Display`, so a stray `{:?}` cannot leak them. A test
@@ -812,8 +884,10 @@ Controls for the repository and its releases; the commands go into `AGENTS.md` w
 
 - **`cargo-deny`** (0.20.2, MIT OR Apache-2.0) in CI on every pull request and nightly: advisories (from the RustSec
   database), licenses (allow-list: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib, CC0-1.0,
-  and `OpenSSL` only if `aws-lc-sys` needs it, unverified; no copyleft), bans (duplicate versions of crypto crates,
-  known-bad crates), sources (crates.io only; no git dependencies without a recorded reason).
+  MPL-2.0 for the container probes of section 05 (file-level copyleft; used unmodified as a dependency, so it does
+  not reach our own files), and `OpenSSL` only if `aws-lc-sys` needs it, unverified; no other copyleft), bans
+  (duplicate versions of crypto crates, known-bad crates), sources (crates.io only; no git dependencies without a
+  recorded reason).
 - **`cargo-audit`** (0.23.0, Apache-2.0 OR MIT) nightly against `Cargo.lock`, so a new advisory on an already
   merged lock file opens an issue. It overlaps `cargo-deny` and is kept for the schedule.
 - **`cargo-vet`** (0.10.3, Apache-2.0/MIT): every dependency that handles untrusted input or secrets (token, crypto,
@@ -854,7 +928,7 @@ creator; supply-chain attacker. The operator is trusted (accepted residual risk)
 |---|---|---|---|---|---|---|
 | T1 | S: forge a token | Network; `auth` frame | EdDSA only, `typ`, `kid` from tenant set, signature, `aud`, `iss`, `surface`, `exp` | N1 to N8 | Embedder key theft (T3) | V9 |
 | T2 | S: algorithm confusion, `none` | Network; token header | Verifier fixed to one algorithm; unknown headers rejected | N1, N2 | None known | V9 |
-| T3 | S/E: stolen tenant signing key | Compromised embedder | Short tokens; rotation; revocation floor; key removal; tenant scope limits the harm to that tenant | N9, N10, N11 | Up to 10 min of forged access, plus anything the thief did | V9, V13 |
+| T3 | S/E: stolen tenant signing key | Compromised embedder | Short tokens; rotation; revocation floor; key removal; tenant scope and operator-set quotas limit the harm to that tenant; a connect key cannot call any admin endpoint | N9, N10, N11 | Up to 10 min of forged access, plus anything the thief did | V9, V13 |
 | T4 | S: token replay | Network; stolen token | TLS; 10-minute cap; optional single use | N12 | Replay within the life if single use is off | V9, V7 |
 | T5 | S/E: token for tenant A used on tenant B or another surface | Any member | `iss` equals path tenant; `surface` claim equals path; keys per tenant | N5, N6, N13 | None known | V8, V9 |
 | T6 | S: cross-site WebSocket hijacking | Hostile web page | No ambient credentials; first-message auth; `Origin` allow-list | N14, N15 | Non-browser clients can lie about `Origin`, which grants them nothing | V3, V4 |
@@ -874,15 +948,15 @@ creator; supply-chain attacker. The operator is trusted (accepted residual risk)
 | T20 | E: malicious font | Editor | Memory-safe parser; table allow-list; size cap; Everink-only rendering | N71, N72 | A parser bug; fuzzing reduces it | V5 |
 | T21 | I: read a blob without access | Any user; tenant member | One grant per blob, issued by the room after `Authz` and a surface reference; HMAC over tenant, surface, blob hash, session id, expiry; revoked-session list on every request; per-tenant dedup | N73 to N78 | A grant works up to 10 minutes (images) or 2 hours (video) after normal access ends, unless the session was revoked | V8, V4 |
 | T21a | I: access outlives a revoked session through a presigned storage address | Removed guest or member | Where the store hands out a presigned address to object storage, it is valid for 60 seconds at most and is issued only after the revoked-session check | N80b | Up to 60 seconds of access after revocation (accepted; also stated in section 05) | V8, V4 |
-| T22 | I: hash-existence oracle across surfaces or tenants | Member | Server always receives the bytes; grants per surface; dedup per tenant | N79, N80 | None known | V8, V14 |
+| T22 | I: hash-existence oracle across surfaces or tenants | Member | Server always receives the bytes; grants per surface; dedup per tenant | N79, N80 | Accepted: within one tenant, an upload of a file another surface already holds completes without the processing steps, so the uploader can tell it already existed. They already hold the bytes, so they learn only that it exists in the tenant | V8, V14 |
 | T23 | I: cross-tenant data access | Another tenant | `TenantScope` in every call; keys per tenant; room key includes tenant | N81 to N85 | A bug in a new storage path; the type system and tests narrow it | V8, V15 |
 | T24 | I: learn where a person is working | Other members | Views never sent except on request; `locatable`; jump rate limit; follow notice | N86 to N89 | A cursor in view reveals position by design | V14 |
 | T25 | I: local copy left on shared machine | Next user of the machine | Cleared on sign out and leave; guest ticket in `sessionStorage` | N90 | A user who closes the browser without leaving: cache stays on disk | V14 |
 | T26 | T/E: script injection through names, text, files | Any user | Plain runs; canvas drawing; mirror uses `textContent`; CSP | N91 to N94 | A bug in the mirror (07) | V1, V3 |
 | T27 | E: supply-chain compromise of a dependency or action | Supply-chain attacker | `cargo-deny`, `cargo-audit`, `cargo-vet`, pinned actions, locked builds, reproducible wasm | CI jobs S1 to S5 | A malicious update that passes review; zero-day in an audited crate | V15, V13 |
 | T28 | I: operator reads everything | Operator | None (decision 5) | none | Accepted | V14 |
-| T29 | E: hostile embedder reaches beyond its tenant | Embedder | Tenant scope; admin tokens separate; quotas | N81 to N85, N95 | An embedder can read and delete everything in its own tenant, by design | V8 |
-| T30 | D: noisy tenant starves others | Embedder or its users | Per-tenant quotas and work queues | N96 | One process shares CPU; strong isolation needs separate processes | V13 |
+| T29 | E: hostile embedder reaches beyond its tenant | Embedder | Tenant scope; operator and tenant admin separate, a tenant cannot change its own quotas; separate `typ` and key lists | N81 to N85, N95, N97 | An embedder can read and delete everything in its own tenant, by design | V8 |
+| T30 | D: noisy tenant starves others | Embedder or its users | Per-tenant quotas set by the operator only, and work queues | N96, N97 | One process shares CPU; strong isolation needs separate processes | V13 |
 
 ## Failure modes
 
@@ -908,18 +982,18 @@ also checks the audit entry and, where relevant, the absence of a side effect.
 |---|---|
 | Token verification | N1 `alg: none`. N2 `alg: HS256` with the public key as the secret. N3 expired. N4 `exp - iat` over 600 s. N5 wrong `iss`. N6 wrong `surface`. N7 wrong `aud`. N8 wrong `typ`. And: unknown `kid`; `jku`, `jwk`, `x5u`, `crit` present; duplicate claim; claims over 2 KiB; invalid role value; oversized name. All yield the same close code and the room stays empty. |
 | Keys and revocation | N9 removed key refused and its sessions closed. N10 floor revokes. N11 suspended tenant. N12 single use refuses the second use. Property test: for random mutations of a valid token, acceptance implies the signature covers the mutated bytes. |
-| Cross-tenant | N13 token A, path B. N81 to N85: for each storage, blob, room, audit and rate-limit function, a test with two tenants using the same surface id and the same hash shows no cross-read or write; a compile-time test that no public function takes a surface id without a `TenantScope`. N95: connect-key signature on an admin endpoint. N96: one tenant at its quota does not slow another's p99 beyond a set figure. |
+| Cross-tenant | N13 token A, path B. N81 to N85: for each storage, blob, room, audit and rate-limit function, a test with two tenants using the same surface id and the same hash shows no cross-read or write; a compile-time test that no public function takes a surface id without a `TenantScope`. N95: connect-key signature on an admin endpoint. N97: a tenant admin token cannot set or raise a quota, change a ceiling or touch another tenant, and operator, tenant admin and connect tokens are not interchangeable. N97a an admin token with a reused `jti` is refused, also after a restart. N96: one tenant at its quota does not slow another's p99 beyond a set figure. |
 | Origin and handshake | N14 hostile `Origin` refused. N15 a request with cookies and no token gets nothing. Pre-authentication: no data before `auth_ok`; 5-second timeout; frame over 4 KiB; second frame; 65th pre-auth socket from one address. |
 | Logging | N16 integration tests run with known secrets and grep every log and error body. N17 `Debug` of every secret type prints `[redacted]`. |
 | Share links | N18 wrong secret, expired, off and unknown give identical answers (byte for byte, within a timing tolerance). N19 secret from another surface. N20 rate limit on failures. N21 turning off closes sessions in under 1 s and deletes tickets. N22 expired ticket (24 h) and idle ticket (2 h). Storage test: the table never holds a secret, and a row shows only the hash. |
 | Role matrix | A generated test over the table: for every `Operation` and every principal kind (owner, editor, viewer, Guest-E, Guest-V) the expectation in the matrix is asserted, plus the change is not applied, and other clients see nothing. N23 to N27: guest tries each owner-only operation. N28 to N34: viewer and Guest-V try each change type, live ink, upload, version operations. The matrix in this document and the test table are generated from one source file and checked for equality in CI. |
 | Server-checked changes | N35 a viewer sends a well-formed object change, and a well-formed text update; both refused. A change with one denied op among permitted ones applies none. |
 | Guest names | N36 bidi override, zero-width, control, combining flood. N37 confusable of a present member (Cyrillic "a"). N38 over-length. A fuzz target on the validator. |
-| Defacement tools | N39 guest write budget ends writes at 5,000 objects. N40 freeze demotes guest sessions on the next message. N41 `Op::DeleteBy` removes exactly that creator's objects and a restore brings them back; a non-owner sending it is refused. N42 auto-freeze on mass limiting. |
+| Defacement tools | N39 guest write budget ends writes at 5,000 objects. N40 freeze demotes guest sessions on the next message. N40a a frozen guest can still read blobs, and its upload grants are refused afterwards. N41 `Op::DeleteBy` removes exactly that creator's objects and a restore brings them back; a non-owner sending it is refused. N42 auto-freeze on mass limiting. |
 | Audit | N43 each audited action produces exactly one row with the right actor. N44 breaking the chain is detected by the verifier. |
 | Limits and rates | N44a with a deliberately low drain-rate estimate, a bulk load still completes and the estimate recovers within a few seconds (it does not starve the load), while cursor updates stay within the 40 ms wait. N44b a 51st follower of one person is refused. N45 change flood is refused with `rate_limited`. N46 presence flood is dropped. N47 many sockets from one user share one budget. N48 ban with backoff. N49 trusted-proxy header ignored from an untrusted peer. N50 IPv6 /64 grouping. N51 to N54 slow headers, slow frame, no pong, slow reader. N55 position with level over the cap (+-1024). N56 position with encoded size over the cap of about 3.1 KB (checked before any arithmetic: a test with a counting allocator). N57 change over size. N58 stroke over 20,000 points. N59 text over length. N60 object count. |
-| Media | N61 PNG with a large declared size. N62 animated GIF refused. N63 WOFF2 that inflates. N64 media worker killed at its limits. N65 polyglot (image plus script or archive): only derived files are displayed. N66 SVG refused. N67 HTML and PDF refused. N68 wrong extension and wrong `Content-Type` ignored. N69 response headers are exactly the table (a golden test). N70 video with trailing data; the server never decodes video. N71 font with bad tables. N72 font over size. N72a a guest cannot obtain an original. Fuzzing: image headers, font tables, container parsers. |
-| Blobs | N73 expired grant. N74 changed `exp`. N75 changed surface, blob hash or session id. N76 grant for a tenant's blob used under another tenant. N77 request for a blob the surface does not reference. N78 a viewer on surface A cannot get a grant for a blob that belongs only to surface B. N79 a change naming an ungranted hash is refused. N80 uploading a file already in the tenant gives the same response as a new one. N80a turning a link off makes the next blob request of its guests fail (revoked-session list), for image and video grants alike. N80b a presigned storage address has a lifetime of at most 60 seconds and is not issued for a revoked session. |
+| Media | N61 PNG with a large declared size. N62 animated GIF refused. N63 a WOFF2 upload is refused (not accepted in the first version). N64 media worker killed at its limits. N65 polyglot (image plus script or archive): only derived files are displayed. N66 SVG refused. N67 HTML and PDF refused. N68 wrong extension and wrong `Content-Type` ignored. N69 response headers are exactly the table (a golden test), run in proxy mode and in presigned mode. N70 video with trailing data; the server never decodes video. N71 font with bad tables. N72 font over size. N72a a guest cannot obtain an original. Fuzzing: image headers, font tables, container parsers. |
+| Blobs | N73 expired grant. N74 changed `exp`. N75 changed surface, blob hash or session id. N76 grant for a tenant's blob used under another tenant. N77 request for a blob the surface does not reference. N77a a viewer is denied a blob referenced only by a deleted object, and allowed one in a version their role may open. N78 a viewer on surface A cannot get a grant for a blob that belongs only to surface B. N79 a change naming an ungranted hash is refused. N80 uploading a file that another tenant holds gives the same response as a new file. N80c an upload request (`POST`, `PATCH` or `HEAD`) after the link is turned off is refused. N80d an upload with more bytes than the grant's size, or a different blob, is refused. N80a turning a link off makes the next blob request of its guests fail (revoked-session list), for image and video grants alike. N80b a presigned storage address has a lifetime of at most 60 seconds and is not issued for a revoked session. |
 | Privacy | N86 `locatable: false` refuses jump and shows no jump action. N87 no message to another client contains a view that was not requested (scan of all outputs in the presence tests). N88 jump rate limit. N89 follow notice is sent. N90 sign-out deletes IndexedDB and OPFS data in the browser test. |
 | Client | N91 a name containing markup renders as text in canvas and mirror. N92 pasting HTML yields plain text only. N93 the web shell runs under the CSP with no violation report. N94 a build check that the shell uses no string-to-code API. |
 | Supply chain | S1 `cargo deny check` (advisories, licenses, bans, sources). S2 `cargo audit` nightly. S3 `cargo vet` with no unaudited security-relevant crate. S4 a workflow lint that fails on an action not pinned to a SHA and on `pull_request_target` with a checkout of the pull request. S5 the double wasm build with equal hashes. |

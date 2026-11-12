@@ -45,9 +45,10 @@ copy. Four facts make this harder than "put it in a CRDT library".
    objects (section 03), so take 2 million objects as the planning size. A stroke of about 200 pen samples is
    roughly 1 KB once packed (an estimate; the format is section 06's). The fixed part of each object is roughly 110
    bytes near the origin: id 16 bytes, kind, creator, ordinal, order key about 6 bytes, parent link, a `Position` of
-   19 bytes plus 2.5 bytes for each level away from the origin, and stamps of 8 bytes each. So 2 million objects is
-   about 220 MB of headers and about 2 GB of stroke data on the server, and a client sees well under 1% of it. A
-   client must never need the rest.
+   19 bytes plus 2.5 bytes for each level away from the origin, and stamps of 8 bytes each. Section 03 gives the one
+   estimate of what a surface of that size costs in server memory, from this header size, a typical stroke body and
+   its index entry; it is far more than any client should hold, and a client sees well under 1% of it. A client must
+   never need the rest.
 2. **A general-purpose CRDT document is a whole-document object.** To the best of this section's research (details
    under "What others do"), Loro, yrs and Automerge sync and load a document as a unit. None documents a way to hold
    or sync a chosen subset of the containers or objects inside one document.
@@ -332,9 +333,9 @@ reports to the user. Section 03 computes an object's world box through its ances
 
 **Regroup drift, accepted.** `localize` followed by `compose` is exact when the parent's `linear` has a power-of-two
 scale or a rotation that is a multiple of 90 degrees. Otherwise each ungroup-and-regroup cycle can move a child by
-about 2^-51 of its offset from the group origin (01's measured bound, about 4 ulps). This section accepts that,
-because a group is not normally dissolved and re-formed over and over. Undo of a regroup restores the stored `Xform`
-values whole, so undo itself adds no drift.
+about 2^-51 of its offset from the group origin (01's estimate of the bound, about 4 ulps). This section accepts
+that, because a group is not normally dissolved and re-formed over and over. Undo of a regroup restores the stored
+`Xform` values whole, so undo itself adds no drift.
 
 ### 4. Fields and merge rule, by kind
 
@@ -522,8 +523,9 @@ move first, it sees that its pending move would form a cycle among objects it ho
   completely and advances `purge_horizon` to the `Seq` of the newest purge; a later change that names a purged id,
   or has `observed` older than the horizon, is refused. Subtrees are purged together. Named versions are separate
   snapshots (section 03) and keep their copies; a purge does not reach into them. Blob garbage collection (section
-  05) counts current state, retained snapshots and named versions as live; `blobs_in_state` (section 14) is how it
-  finds the blobs in each.
+  05) counts current state, retained snapshots and named versions as live; `blobs_in_state` (part 14) is the pure
+  function that lists the blobs of one document state; section 03's `blobs_in_store` loads each stored state and
+  calls it.
 - **Versions.** Creating, deleting and restoring named versions is for members only, never guests. Until the owner
   decides, restoring is owner-only (sections 03 and 08). A restore is itself a server-authored change that writes
   the old state on top, using `Doc::diff_to` (section 14).
@@ -576,11 +578,17 @@ which ones applied. This is the exact meaning of "undo reverses only my changes"
   object and return if someone restores it). This is deliberate: it is my object. (Owner question 4.)
 - If an entry applies nothing, it is consumed, the user sees "Nothing to undo: changed by someone else", and it is
   not pushed to the redo stack. Applied parts become a redo entry, built from the *actual* values replaced, with the
-  new stamps (known from the acknowledgement), so redo obeys the same rule against later changes by others.
+  new stamps (the acknowledgement gives the `Seq` of each of the client's own changes), so redo obeys the same rule
+  against later changes by others.
 - A new gesture clears the redo stack. Undoing several steps, copying, and redoing back leaves the document
   unchanged when nobody else interfered, which is Figma's stated rule.
-- An undo that is made while one of its parts is unacknowledged waits for the acknowledgement (one round trip) so it
-  knows `wrote`.
+- The acknowledgement carries a `(ClientChangeId, Seq)` pair for every change it covers, so the client learns the
+  `Seq` of each of its own changes, and that `Seq` is the `wrote` of the undo parts that change produced. A replayed
+  change is answered with its original pair, so `wrote` is the same after a reconnect. An undo made while one of
+  its parts is unacknowledged waits for the acknowledgement (one round trip) so it knows `wrote`.
+- A restore of a version (section 03) clears no undo stack. The restore is a change that writes new stamps, so a
+  stale entry's condition (`if_stamp = wrote`) fails and that part is skipped, exactly as if someone else had
+  changed the register.
 - Because the conditions are checked by the server, undo works on objects that left the client's cache. The client
   need not hold them.
 - Undo is per session. Two devices of one user have separate stacks; a guest's stack is lost when they leave. The
@@ -610,9 +618,10 @@ pub struct StrokeBrush { pub brush: BrushId, pub base_width: Fixed32, pub style_
 ```
 
 A stroke's anchor (its `TopXform` or `ChildXform` origin) is the **center of the stroke's bounding box** (section
-06), chosen by the stroke tool when the pen lifts. An `i32` at 2^-16 reaches 2^15 units from the anchor, so a stroke
-inside the size band of section 01 ([2^-12, 2^16) units) always fits; the tool also picks the stroke's level so that
-its extent is below 2^14 units before packing. Integers decode identically on every platform.
+06), chosen by the stroke tool when the pen lifts. An `i32` at 2^-16 reaches 2^15 units from the anchor. Section 06
+has the one stroke rule that makes every point fit (the stroke's level is fixed when the pen goes down, and the tool
+ends the stroke and starts a new one when a point would lie too far from the pen-down point); this section relies on
+it and does not restate its numbers. Integers decode identically on every platform.
 
 **Erasing.**
 
@@ -713,9 +722,11 @@ pub trait TextDoc {
   kinds they do not know, unchanged (`Object::extra`, `Kind::Unknown(u8)`), show an unknown kind as a labelled box,
   and never edit it.
 - **Breaking changes** raise `major`. The room runs migration functions `migrate(n -> n+1)` over every object, in
-  order, as a maintenance step: it stops accepting old clients, rewrites the snapshot, and starts a new `epoch`. Log
-  entries of the older epoch are kept as they were and run through the migration chain when read (for example when
-  opening a named version). This follows tldraw's rule that the server migrates and is upgraded first (Source 3).
+  order, as a maintenance step: it stops accepting old clients, rewrites the snapshot, and starts a new `epoch`. The
+  log is trimmed after snapshots (section 03), so old versions are read from their snapshot chunks, not from the
+  log: each chunk carries the schema version it was written under and is run through the migration chain when opened
+  (for example when opening a named version). This follows tldraw's rule that the server migrates and is upgraded
+  first (Source 3).
 - Clients with an older `major` are told to update and are not allowed to write.
 - Migrations are pure functions of one object; each has a test over stored sample documents of every earlier
   version.
@@ -809,7 +820,7 @@ pub struct ObjectEffect {
 pub trait ExtentOracle { fn extent(&self, object: &Object) -> LocalBox; }
 
 /// Every blob referenced by the object / by the whole state: image and video files, posters, and fonts in text
-/// defaults and marks. Works on any stored state: the live document, a snapshot, a named version.
+/// defaults and marks. A pure function of one document state (the live document, or a snapshot or version after 03 has loaded it).
 pub fn blobs_in_object(object: &Object) -> impl Iterator<Item = BlobId> + '_;
 pub fn blobs_in_state(state: &Doc) -> impl Iterator<Item = BlobId> + '_;
 ```
@@ -854,7 +865,7 @@ One line each. These names are used by other sections; they will not change with
 | `UndoEntry`, `UndoPart` | The client's undo stacks. |
 | `Doc`, `Doc::apply`, `Doc::diff_to`, `Doc::body`, `Doc::encode_all`, `Doc::get`, `Doc::children` | The model's interface (section 14). |
 | `ApplyCtx` (with `descendants`), `Applied`, `ObjectEffect`, `ExtentOracle` and `LocalBox` (including each kind's extent and the group rule), `LocalBox` (06's) | Inputs and outputs of `apply`; a group's box is formed by `Doc` through `compose`. |
-| `blobs_in_object`, `blobs_in_state` | Blob references of one object or of any stored state. |
+| `blobs_in_object`, `blobs_in_state` | Blob references of one object or of one document state (pure; 03's `blobs_in_store` loads stored states and calls it). |
 | `purge_horizon`, `TOMBSTONE_RETENTION`, `DUPLICATE_WINDOW`, `REBALANCE_KEY_BYTES` | This section's own parameters (sections 2, 7, 6). |
 | `MAX_OPS_PER_CHANGE`, `MAX_CHANGE_BYTES`, `MAX_ORDER_KEY_BYTES`, `MAX_TREE_DEPTH`, `MAX_TEXT_CHARS`, `MAX_TEXT_UPDATE_BYTES`, `MAX_CUTS_PER_STROKE`, `MAX_STROKE_POINTS` | Limits; the numbers are in section 08's table. |
 
@@ -864,7 +875,7 @@ One line each. These names are used by other sections; they will not change with
 |---|---|
 | Two users change one register at once | The later accepted write wins on every client; the other client's pending value is replaced when the acknowledgement arrives. No dialog. |
 | A change is refused (cycle, role, limit, into a deleted group) | `Rejected`; the client reverts that change and shows a short notice. An undo that fails shows "Nothing to undo". |
-| The room crashes after accepting a change but before the acknowledgement | The client resends; the duplicate window answers with the original `Seq` instead of applying twice. |
+| The room crashes after accepting a change but before the acknowledgement | The client resends; the room answers with the original `(ClientChangeId, Seq)` pair instead of applying twice. |
 | The client is offline for a long time | On reconnect: if `observed` is older than the purge horizon, reload and re-apply what still applies; otherwise changes apply by arrival order and may override newer online edits to the same register. A play, pause or seek is not queued at all. |
 | An object is evicted from a client cache while it is in the undo stack | Undo is decided by the server by stamp, so it still works. |
 | Order keys grow | The server rebalances at `REBALANCE_KEY_BYTES` and refuses keys over `MAX_ORDER_KEY_BYTES`. |

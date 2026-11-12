@@ -197,7 +197,7 @@ exponents all over that range to force wide arithmetic. Offsets also have severa
 0), non-finite values to refuse, and non-uniform spacing (spacing near 1,000 is 2^-43, near 1e-3 it is 2^-62),
 which means moving an object by "one step" is not the same distance everywhere in the cell. A u64 fixed-point
 offset has none of these problems and gives up nothing we need (see Design: resolution is 2^-54 of a level unit,
-2^44 steps per pixel at the largest in-level zoom).
+2^43 steps per pixel at the largest in-level zoom).
 
 **Why not (b).** It is the simplest model and it is correct. It loses on size (a point costs the depth, and a
 stroke has thousands of points) and on time (every point of every visible object would pass through big-number
@@ -321,17 +321,19 @@ The ratio is a convention with consequences; this is what each constraint says.
 1. *It must be a power of two*, so changing level is a bit shift of an integer and a multiply by an exact power of
    two of a float. A non-power-of-two (say 1000) would make every cross-level conversion a big multiplication and
    would round floats.
-2. *The in-level zoom range must cover what one view needs.* In a view, an object spans from about one pixel to
-   several screens (about 20,000 pixels if you pan while drawing): a ratio of about 2^14.3. The camera holds zoom in
-   [0.5, 2048) pixels per unit (next section), so object sizes in units fall in [2^-12, 2^16): a width of 28 binary
-   orders. An object's own coordinates are f32-or-lattice, which is scale-free; the band only has to fit the integer
-   lattice (below) and keep sizes well away from the ends of that lattice.
+2. *The in-level zoom range must cover what one view needs.* The camera holds zoom in [0.5, 2048) pixels per unit
+   (next section). A drawn object is at least about one pixel, which is 2^-11 units at the largest zoom. Its upper
+   size is set by section 06's stroke rule: a stroke ends and a new one starts when a point would lie 2^14 object
+   units or more from the pen-down point on either axis, so a stroke is under 2^15 units across (8,192 pixels at the
+   lowest zoom). Sizes therefore fall in [2^-12, 2^16): a width of 28 binary orders. An object's own coordinates are
+   f32-or-lattice, which is scale-free; the band only has to fit the integer lattice (below) and keep sizes well
+   away from the ends of that lattice.
 3. *Bits per doubling do not depend on the ratio.* Position cost is 1 bit per axis per doubling of zoom, whatever
    the ratio. So 1024 does not save space; 16 or 2 would not cost more.
 4. *Smaller ratios mean more re-levelling.* With ratio 2, an object scaled by 3 changes level. With 1024 an object
    keeps its level over a 2^28 range of sizes, so levels change only after large rescaling.
-5. *Larger ratios widen the range that lattice and f64 conversions must cover.* With 2^16 the band is 2^44 wide,
-   which does not fit a 2^-40 lattice in an i64 with margin.
+5. *Larger ratios widen the range that lattice and f64 conversions must cover.* With 2^16 the band is about 2^34
+   wide (28 orders plus 6 for the larger ratio), which does not fit a 2^-40 lattice in an i64 with margin.
 6. *It matches `design.md`* (a thousandth to a couple of thousand units), so the index of section 03 can still use
    cells and levels as named.
 
@@ -454,16 +456,15 @@ which is the worst case, for geometry at the edge of the window and well off scr
 visible area, within `V/2`) the spacing is under 0.001 pixel.
 
 **Cost (estimates, not measurements).**
-- Exact subtraction of two anchors: the common case (both cells `Small`, levels within 3 of each other) is
-  `i128` arithmetic, about 2 ns. A deep case is one big subtraction on `ceil((64 + 10 d) / 64)` words, where `d` is
-  the depth in levels: at depth 100 that is 17 words, roughly 20 to 40 ns with a careful in-place implementation.
-- Re-base for 10,000 objects: 10,000 subtractions, 10,000 conversions: about 0.5 ms at depth 100, 0.05 ms at
-  shallow depth. At one screen of panning per second and a re-base every 2V this runs about once per two
-  seconds.
-- Per frame: one big subtraction (`center - R`) and 10,000 x about 10 flops: about 0.05 ms. This meets the
-  "exact arithmetic under a millisecond per frame at level 100" target of `design.md` with a wide margin, because
-  the exact step runs on re-base and on object entry, not every frame. **Changed from `design.md`:** it said the
-  exact step runs "when the camera crosses into another cell"; the trigger here is distance from the render origin,
+- Exact subtraction of two anchors: the common case (both cells `Small`, levels within 3 of each other) is `i128`
+  arithmetic, about 2 ns. A deep case is one big subtraction on `ceil((64 + 10 d) / 64)` words, where `d` is the
+  depth in levels: at depth 100 that is 17 words, roughly 20 to 40 ns with a careful in-place implementation.
+- Re-base for 10,000 objects: 10,000 subtractions, 10,000 conversions: about 0.5 ms at depth 100, 0.05 ms at shallow
+  depth. At one screen of panning per second and a re-base every 2V this runs about once per two seconds.
+- Per frame: one big subtraction (`center - R`) and 10,000 x about 10 flops: about 0.05 ms. The exact step runs on
+  re-base and on object entry, not every frame, so the per-frame exact work is one subtraction. The one budget for
+  the rest is the cut queue, 2 ms per frame (see "Budget" below). **Changed from `design.md`:** it said the exact
+  step runs "when the camera crosses into another cell"; the trigger here is distance from the render origin,
   because a cell is 1024 units, which is anywhere between half a screen and a million screens depending on zoom.
 
 Entry into the window happens when section 03 delivers an object, when a rebase brings an already-held object into
@@ -627,7 +628,7 @@ lattice outline, so it is deterministic.
 
 | Event | Rule |
 |---|---|
-| Created by drawing | Level = camera level. Size lies in [2^-12, 2^16) by construction (see "Why 1024"), so no re-level. |
+| Created by drawing | Level = camera level at pen-down. Section 06's stroke rule keeps the extent under 2^15 units (see "Why 1024"), and a pixel is at least 2^-11 units, so the size is inside [2^-12, 2^16) and no re-level is needed. |
 | Resized, scaled, or group-scaled | After the operation, if `s` is outside **[2^-12, 2^16)**, re-level. |
 | Pasted, library template placed, dropped | Always compute `s` and re-level if outside the band (below). |
 | Moved without scaling | Never re-levels; only the anchor changes. |
@@ -662,12 +663,11 @@ group stores no list of children, and moving, rotating or scaling a group is **o
 at most `MAX_LEVEL_SPAN = 8` levels from its group (80 binary orders of scale). Nothing here rewrites a member.
 The server index and the cut work on the **world placement** that `compose` computes, never on the stored forms.
 
-**What a child stores.** Section 02's sketch has `Child { offset: [f64; 2], linear }`. That cannot support a span
-of 8 levels, so this section needs a different offset type (a mismatch to resolve with 02; the reason follows).
-An f64 offset is accurate to 2^-53 of its own size. A child that is `d` levels finer than its group can be
-2^(-10 d) of the group's size, and the offset reaches the group's size, so the child's position would be wrong
-by `2^(10 d - 53)` child sizes: an eighth of its size for `d = 5`, 128 sizes for `d = 6`, and 2^27 sizes for
-`d = 8`. With a span of 8 an f64 offset is useless. The type needed is exact:
+**What a child stores.** The offset is an exact integer, not a float, for this reason. An f64 offset is accurate to
+2^-53 of its own size. A child that is `d` levels finer than its group can be 2^(-10 d) of the group's size, and the
+offset reaches the group's size, so the child's position would be wrong by `2^(10 d - 53)` child sizes: an eighth of
+its size for `d = 5`, 128 sizes for `d = 6`, and 2^27 sizes for `d = 8`. With a span of 8 an f64 offset would be
+useless, so the offset is exact:
 
 ```rust
 pub const MAX_LEVEL_SPAN: i32 = 8;
@@ -681,9 +681,7 @@ pub struct TopXform   { pub anchor: Position, pub linear: Linear }
 
 `Fixed` is the signed integer type behind `Axis` (the wrapper over the big-integer crate, with the inline fast
 path). On the wire `RelOffset` is two `axis`-style numbers without the `frac` split (a length-prefixed signed
-magnitude), at most 2 x 21 bytes. Fallback if 02 keeps an f64 offset: `MAX_LEVEL_SPAN` must fall to 3, where the
-position error is `2^(30 - 53) = 2^-23` of the child's size (about 1e-7); at 4 it is 1e-4, which a viewer who zooms
-in on the child can see.
+magnitude), at most 2 x 21 bytes.
 
 **`compose`: a child through one parent.** Input: the parent's world placement `P = (lp, anchor_p, Lp)` and the
 child's `ChildXform`. Output: the child's world placement `W = (lc, anchor_w, Lw)`. Every step is an integer
@@ -707,10 +705,10 @@ operation or a fixed-order float operation from the reference list, so the resul
    where `p` is `Lp` and `c` is the child's `linear`, and `m = [a, b, c, d]`. Refuse if any result is not finite.
 
 The units are consistent: the child's `linear` maps child-level geometry to child-level units, `Lp` is
-dimensionless, and `off` is already in child-level steps, so the level factor `1024^dl` appears nowhere in the
-float part. A deep chain is composed from the root down: `world(n) = compose(world(n-1), xform(n))`, so the order of
-rounding is fixed and every machine gets the same bits. The depth is at most 32 (section 02). Total level span along
-a chain may exceed 8; each link is at most 8 and the cap bounds the sum.
+dimensionless, and `off` is already in child-level steps, so the level factor `1024^dl` appears nowhere in the float
+part. A deep chain is composed from the root down: `world(n) = compose(world(n-1), xform(n))`, so the order of
+rounding is fixed and every machine gets the same bits. The depth is at most 16 (`MAX_TREE_DEPTH`, section 08).
+Total level span along a chain may exceed 8; each link is at most 8 and the cap bounds the sum.
 
 **`localize`: the inverse, for reparenting and for making a group.** Input: the object's world placement `W` and
 the new parent's world placement `P`. Output: a `ChildXform` such that `compose(P, localize(P, W))` equals `W`
@@ -849,13 +847,14 @@ pub struct Scale { pub level: i32, pub z: f64 }   // total = z * 1024^level pixe
 ```
 
 **The depth cap's default.** A person turning the wheel for an hour at 10 doublings per second reaches 36,000
-doublings, 3,600 levels. That would cost a position 9 KB and a cut up to 20 ms per curve (and 3,600 levels of
-nothing to look at). I choose **1,024 levels either way** as a default: 10,240 doublings, which is one hour of
-hand-zooming at about 2.8 doublings per second, but also bounded: a position is at most 3.1 KB and the worst cut
-costs about 15 ms (budgeted). `max_cell_bits = 12,288` allows cell values up to 2^12288: 1,024 levels (10,240 bits)
-plus 2,048 bits of horizontal distance. The server refuses a placement or view beyond the cap, and `check_cap_bytes`
-decides this on the raw bytes before any number is built; the client camera stops at the cap (a gentle "this is as
-deep as this surface goes" indicator). Raising it per surface is possible.
+doublings, 3,600 levels. That would cost a position 9 KB and, since a cut grows with the square of the level
+difference, a cut of about 50 ms per curve (15 ms at 2,000 levels) (and 3,600 levels of nothing to look at). I
+choose **1,024 levels either way** as a default: 10,240 doublings, which is one hour of hand-zooming at about 2.8
+doublings per second, but also bounded: a position is at most 3.1 KB and the worst cut costs about 15 ms (budgeted).
+`max_cell_bits = 12,288` allows cell values up to 2^12288: 1,024 levels (10,240 bits) plus 2,048 bits of horizontal
+distance. The server refuses a placement or view beyond the cap, and `check_cap_bytes` decides this on the raw bytes
+before any number is built; the client camera stops at the cap (a gentle "this is as deep as this surface goes"
+indicator). Raising it per surface is possible.
 
 **Bounded surfaces** use the same engine with limits (inspired by tldraw's bounds behaviors):
 - *Bounds:* the camera center is clamped so the view keeps overlapping the bounds, with tldraw's behaviors available
@@ -1040,7 +1039,7 @@ column says otherwise.
 | Forbidden float operations are not used | `clippy.toml` `disallowed-methods` for `mul_add`, `sin`, `cos`, `tan`, `atan2`, `exp`, `ln`, `powf`, `powi`, `hypot`, `f64::min`, `f64::max`, `f64::clamp` in `everink-core::geometry`; CI also checks the build features exclude `relaxed-simd`. |
 | NaN and infinity never enter | Fuzz the codec and all tool entry points with NaN, inf, subnormals and huge numbers; none reach shared state. |
 | Re-level preserves the shape | For random objects and `k` in [-50, 50]: world-space outline before and after equal exactly for finer, within 2^-54 new unit for coarser. |
-| `compose` is exact and deterministic | Differential test against rational arithmetic: world anchor equals the exact value floored once to the child lattice; `Lw` is bit-identical on x86-64, aarch64 and wasm32; chains of depth 1 to 32 with level spans up to 8. |
+| `compose` is exact and deterministic | Differential test against rational arithmetic: world anchor equals the exact value floored once to the child lattice; `Lw` is bit-identical on x86-64, aarch64 and wasm32; chains of depth 1 to 16 with level spans up to 8. |
 | `localize` inverts `compose` | Random parents (rotated, scaled, levels apart by up to 8) and children: `compose(P, localize(P, W))` differs from `W` by at most 2^-51 of the offset; exact when the parent's `linear` is a power-of-two scale. Refusals (span above 8, singular matrix) are tested. |
 | A group is one write | Move, rotate, scale and re-level a group of 10,000 children: exactly one register changes, and every child's world outline is unchanged for the re-level and transformed as a rigid body for the others. |
 | Stored points feed the lattice deterministically | 06's builder, run on random `i32` stroke points and placements on three targets, produces bit-identical `i64` outlines and bounds; the operation list it uses equals this section's list (checked by the same lint configuration). |
@@ -1052,7 +1051,7 @@ column says otherwise.
 | Animation ends exactly | After the last frame, `center` equals the target position exactly and zoom equals the target within 1e-12 relative; at mid-path the focus error is below 0.01 pixel. |
 | The cap holds | Server tests: placements at cap ± 1 on level and bits; cost test: 1,000 adversarial curves at `Δ = 2,000` keep frame time under budget with items pending. |
 | Bounded surfaces | Camera clamps for each behavior; server rejects placements outside `Bounds` at exact edges (1 step in and out). |
-| Performance targets | Benchmarks for re-base of 10,000 objects at depth 0 and 100, and per-frame update; recorded against the 1 ms target. |
+| Performance targets | Benchmarks for re-base of 10,000 objects at depth 0 and 100, and per-frame update; recorded against the 2 ms per frame cut budget. |
 
 ## Dependencies
 
@@ -1080,11 +1079,9 @@ in-house `Fixed`) possible.
    last-writer-wins register**, not several. Separate registers allow a merge that pairs one writer's level with
    another's anchor. The cost, stated in 02: a concurrent move and rotate of one object lose one of the two.
 2. Groups follow 02: a child is relative to its parent, the group has no child list, and a group move, rotate,
-   scale or re-level is one write to the group. `MAX_LEVEL_SPAN = 8` is accepted **only if** the child offset is
-   the exact `RelOffset` of this section (a signed fixed-point integer in steps of 2^-54 child units, plus the
-   level difference `dl`) in place of 02's `[f64; 2]` and with no `dl` field. With an f64 offset the span must be
-   3 or less (see "Groups: compose, localize, relevel"). 02 calls `compose`, `localize` and `relevel` as specified
-   here and gets refusals (out of range, span above the limit, singular matrix) as errors to report.
+   scale or re-level is one write to the group. `MAX_LEVEL_SPAN = 8` rests on the exact `RelOffset` and `dl` of this
+   section, which 02 has adopted in `ChildXform`. 02 calls `compose`, `localize` and `relevel` as specified here and
+   gets refusals (out of range, span above the limit, singular matrix) as errors to report.
 3. Object data is stored so that the lattice outline is derivable from stored numbers using only the allowed
    operations; stored floats are finite and in range, validated on load. Stroke points are 06's `i32` lattice at
    2^-16 unit.
@@ -1096,8 +1093,8 @@ in-house `Fixed`) possible.
 **Section 03 (sync).**
 1. The client sends the exact, unpadded `ViewRect` (inside 03's `SetView` / `ViewMsg`); 03 pads it. This section
    supplies `Camera::view_rect`, `ViewRect::exact_rect`, and the exact `ExactRect::intersects`, `contains` and
-   `grown`. 03 decides what is sent by on-screen size (`min_px`, `eff_min_px`), not by level, using `pixel_log2`. The
-   wire message is 03's `ViewMsg`, which carries a `ViewRect`.
+   `grown`. 03 decides what is sent by on-screen size (`min_px`, `eff_min_px`), not by level, using `pixel_log2`.
+   The wire message is 03's `ViewMsg`, which carries a `ViewRect`.
 2. The functions in the table "Interfaces named by other sections" (`tile_at`, `bucket_at`, `shr_floor`,
    `offset_from_corner`, `from_corner_offset`, `offset_in` with outward rounding, `sub`, `add_delta`,
    `encode_delta`, `check_cap_bytes`) are provided here. Tile side `32^row` level-0 units and bucket side

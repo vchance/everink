@@ -234,7 +234,9 @@ the processor as a last resort, behind Everink's own interface. Positions are tu
 by the exact arithmetic above before anything reaches the GPU, so the graphics card only ever sees small numbers,
 at any depth. Layers, back to front:
 
-1. **Content:** the visible objects from every level, in their one order.
+1. **Content:** the visible objects from every level, in their one order. An overview picture stands in for the
+   small objects beneath it and is placed in the order by the range of their order keys; where a large object's
+   key falls inside that range the order is approximate.
 2. **Live ink:** the local user's stroke in progress, drawn with input prediction on the shortest path to the
    screen, because this is where latency is felt.
 3. **Overlay:** selection handles, other users' selections and cursors with their name banners.
@@ -320,7 +322,7 @@ where they merge by the rules above.
 ## Security
 
 A first assessment, at the depth of this document. The detailed design of the server and of identity (step 2)
-carries the full review; its open points are listed at the end.
+carries the full review, in [`design/08-identity-and-security.md`](design/08-identity-and-security.md).
 
 | Who | Trusted to | Not trusted to |
 |---|---|---|
@@ -340,13 +342,14 @@ What the design does about the ways these can go wrong:
   guests who came through it. A link is a secret inside an address, and addresses leak through browser history
   and logs, so the secret sits in the part of the address a browser does not send onward and is exchanged for a
   session at once.
-- **Tokens** expire and are bound to one tenant (one embedding app) and one surface. The server trusts one signing
-  key per tenant, so one app's tokens are worthless on another's surfaces. How keys are rotated and tokens revoked
-  is for the detailed design.
+- **Tokens** expire and are bound to one tenant (one embedding app) and one surface. The server trusts only the
+  keys configured for that tenant, so one app's tokens are worthless on another's surfaces. Keys are rotated by
+  overlap and tokens revoked by a per-tenant cut-off time.
 - **The blob store believes no one about a file's name.** The server computes the hash of what was uploaded
   itself. A file is read only through a surface that refers to it and that the reader may see, by a signed
-  address tied to the reader's session, so ending the session ends the access. Knowing a file's hash grants
-  nothing. Identical
+  address tied to the reader's session. A session that is ended by force (a link turned off, a person removed)
+  loses access at once; after an ordinary sign-out an address stays valid until it expires, at most ten minutes
+  for images and two hours for video. Knowing a file's hash grants nothing. Identical
   files are shared only within one tenant, so no one can learn from an upload whether a file exists elsewhere.
 - **Pasted media is data from strangers:** images are decoded by memory-safe decoders in a separate, limited
   process (video is decoded by the browser or operating system, which is not memory-safe code), limited in size and
@@ -355,7 +358,7 @@ What the design does about the ways these can go wrong:
 - **Presence gives away little by default:** a client receives only cursors inside its own view, and views are
   never sent to other clients. The list of people and "jump to this person" are the exception: they reveal, on
   request, where someone is working, and repeated jumps amount to following them. That is accepted for people
-  sharing a surface; whether a person can opt out is for the detailed design.
+  sharing a surface, and a person can turn off being found this way.
 - **Local copies stay on the machine.** The cache and offline changes are on disk or in browser storage. Signing
   out or leaving a guest session clears them.
 
@@ -392,7 +395,7 @@ Each rule the design depends on has a test that fails if the rule is broken, wri
 
 ## Packages
 
-The README plans four. This design adds four and sharpens the roles; the README table changes when the packages
+The README plans four. This design adds five and sharpens the roles; the README table changes when the packages
 are created.
 
 | Package | Role |
@@ -403,6 +406,7 @@ are created.
 | `everink-sync` | Merge rules, wire protocol, partial copy, presence. |
 | `everink-runtime` (new) | Runs what the core asks for (network, storage, clipboard, media) through the platform API. |
 | `everink-server` (new) | The room server, versions and blob store interface. |
+| `everink-media` (new) | The blob store and the media worker, which runs as a separate process. |
 | `everink-native` | Desktop shell. |
 | `everink-web` | Browser shell (wasm + WebGPU). |
 
@@ -414,7 +418,7 @@ Proposed, not measured:
   devices (the first version of this target, 20 ms, did not say what was measured).
 - 60 frames per second with 10,000 objects in view, at level 0 and at level 100 alike.
 - Zooming continuously through a level boundary shows no jump.
-- The exact position arithmetic stays within a budget of 2 ms per frame while panning at level 100.
+- Cutting large shapes down to the view stays within a budget of 2 ms per frame while panning at level 100.
 - Opening a surface: first content in under one second, whatever the surface's total size.
 - Cursor updates 30 times a second; a remote cursor lags by under 200 ms on a good connection, of which
   smoothing is under 100 ms.

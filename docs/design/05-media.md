@@ -155,10 +155,11 @@ Concrete numbers, because they drive every choice below.
           others: ThumbHash (in document) --> BlobStatus pushes --> grant --> tiles / range reads
 ```
 
-One new crate, `everink-media`, holds what the client and the server must agree on exactly: format sniffing,
-limits, header probing, tile geometry, the ThumbHash encoder and the BLAKE3 helper. Its `derive` feature (decoders
-and encoders, used only by the server's media worker) is off in the wasm and native client builds. The server's
-`BlobStore` and the HTTP endpoints live in `everink-server`.
+`everink-media` is a package of its own. It holds what the client and the server must agree on exactly (format
+sniffing, limits, header probing, tile geometry, the ThumbHash encoder and the BLAKE3 helper), and the media worker
+and the blob store code. Its `derive` feature (decoders and encoders, used only by the server's media worker, the
+`everink-media-worker` binary) is off in the wasm and native client builds. The HTTP endpoints, the revoked-session
+list and the room-side reference index live in `everink-server`, which depends on `everink-media`.
 
 ### What is in the document and what is in the blob store
 
@@ -245,7 +246,10 @@ keeps its metadata, so it is served only to members (Questions for the owner, 7)
 
 Section 08's limits table is the home of these figures; it adopts the member figures below and has stricter guest
 figures (guests may upload only images, and smaller ones). The values shown are for member sessions so the reasoning
-can be read next to them; if the two ever differ, 08 is right. Each limit is checked at the earliest point that can
+can be read next to them; if the two ever differ, 08 is right. The limits the server enforces from this section
+(file sizes and pixels, decoder memory and time, metadata size, font glyphs and axes, placeholder and alt-text size,
+playback writes per user and per object and the anchor tolerance, presigned address lifetime) are mirrored in 08's
+table as rows "set by section 05", with the figures given here. Each limit is checked at the earliest point that can
 know it.
 
 | Limit | Default | Where checked | How the number was chosen |
@@ -315,7 +319,7 @@ pub fn tile_grid(px_w: u32, px_h: u32, k: u8) -> (u32, u32) {    // tiles across
     let (w, h) = level_size(px_w, px_h, k);
     (w.div_ceil(TILE), h.div_ceil(TILE))
 }
-pub struct TileKey { pub k: u8, pub x: u32, pub y: u32 }          // URL path: .../t/<k>/<x>_<y>
+pub struct ImageTileKey { pub k: u8, pub x: u32, pub y: u32 }     // URL path: .../t/<k>/<x>_<y>
 ```
 
 Because the layout is computed from `px_w` and `px_h`, a client needs no manifest before its first tile request.
@@ -374,11 +378,11 @@ recently used. Both are starting values.
 ### The blob store
 
 ```rust
-pub struct TenantId(pub u64);
+// TenantId is section 08's type: a lowercase text id of 1 to 32 bytes. This section only uses it.
 
 pub enum Variant {
     Orig,                          // bytes as uploaded
-    Tile(TileKey),                 // image tile
+    Tile(ImageTileKey),            // image tile
     Playback,                      // video: transcoded file, only if an operator configured a transcoder
     Manifest,                      // small CBOR: probe results for video and fonts, summary for images
 }
@@ -435,9 +439,12 @@ proof of possession (hashes of random byte ranges) to skip the upload across sur
 A strict subset of tus 1.0.0 (core plus the creation extension), so that off-the-shelf tus clients (tus-js-client,
 Uppy) work for embedders. It runs over HTTP, not the WebSocket.
 
-1. The client asks over the WebSocket for an **upload grant**: `UploadGrantRequest { surface, blob, size, kind }`.
-   The server checks role, tenant limits and `size`, and returns a bearer token bound to (user, surface, blob id,
-   size), valid for 24 hours.
+1. The client asks over the WebSocket for an **upload grant** with section 03's `UploadGrantRequest { req, blob,
+   size, kind }`. The server checks role, limits and `size`. The grant is defined in section 08: it is bound to
+   user, surface, blob and size, and is valid until the session ends and for at most 24 hours. Every upload request
+   (`POST`, `PATCH` and `HEAD`) is checked against the revoked-session list, so an upload after a link is turned off
+   is refused. A guest who is frozen becomes a viewer at once and has their upload grants cancelled; they keep read
+   access to blobs.
 2. `POST /v1/uploads` with `Tus-Resumable: 1.0.0`, `Upload-Length: <bytes>`, `Authorization: Bearer <grant>` and
    `Upload-Metadata` carrying `blob` (the `b3-` id) and `surface`. Reply `201` with `Location`, or `200` with
    `Everink-State: present` when the same surface already references the blob (nothing to upload).
@@ -492,10 +499,12 @@ downloads its own picture.
 
 ### Download authorization and delivery
 
-1. A client that needs a blob's files sends `GrantRequest { blobs }` (at most 256 ids) over the WebSocket. For each
-   id the server checks that **the blob is referenced by the surface this connection is on**, in its current
-   document or in a snapshot or named version the person may open (a lookup in the reference index below). A blob
-   that is not referenced is answered `Denied`, whether or not it exists.
+1. A client that needs a blob's files sends section 03's `BlobGrantRequest` over the WebSocket (the cap on ids per
+   request is one number, in section 08's table). For each id the server checks that **the blob is referenced by
+   the current state of the surface this connection is on, or by a snapshot or named version that the requester's
+   role may open.** The reference index described under garbage collection, which never forgets a reference, is for
+   garbage collection only and is never consulted here: a viewer asking for a blob that only a deleted object
+   referenced is denied. A blob that does not pass is answered `Denied`, whether or not it exists.
 2. The reply carries one grant per blob: `{ blob, exp, kid, tag }`. Section 08 owns the grant: `tag` is an
    HMAC-SHA-256 over (tenant, surface, blob hash, session id, expiry) under a server key. One grant covers every
    variant and tile of that blob.
@@ -505,9 +514,11 @@ downloads its own picture.
    below). The media endpoint, which is part of `everink-server`, recomputes the MAC, checks `exp` and the key id,
    and checks the session id against the revoked-session list that `everink-server` keeps. It supports `Range`.
 4. S3 backend: the endpoint answers `302` to a presigned URL valid for 60 seconds (through `Signer`), or streams the
-   bytes itself ("proxy mode") for stores that cannot sign. Local backend: it streams. The 60 seconds of a presigned
-   address are the **only** access that can outlive a revoked session; section 08 accepts that and lists it in its
-   threat table. Proxy mode has no such gap.
+   bytes itself ("proxy mode") for stores that cannot sign. Local backend: it streams. In presigned mode the
+   redirect must carry the same response headers as section 08's table: response-header overrides on the presigned
+   request, object metadata set at commit, and a bucket CORS policy. A store that cannot do all three runs in proxy
+   mode. The 60 seconds of a presigned address are the **only** access that can outlive a revoked session; section
+   08 accepts that and lists it in its threat table. Proxy mode has no such gap.
 
 **Lifetimes.** Images, tiles, posters and fonts: 10 minutes; the client asks again at 50 percent of the lifetime.
 Video: **2 hours**. This corrects design.md's "short-lived signed addresses" for video: a browser keeps requesting
@@ -520,14 +531,12 @@ and checks every blob request against it. Turning a share link off, or removing 
 blob access stops at once, apart from the up to 60 seconds of an already issued presigned address (above). If the
 list cannot be read, video requests are refused (fail closed), as section 08 says.
 
-**Response headers.** `Content-Type` from the sniffed type of the derived file; `X-Content-Type-Options: nosniff`;
-`Content-Disposition: attachment` for originals; `Content-Security-Policy: default-src 'none'; sandbox`;
-`Cache-Control: private, max-age=31536000, immutable` (content under a hash never changes);
-`Cross-Origin-Resource-Policy: cross-origin`; and CORS `Access-Control-Allow-Origin` restricted to the embedding
-app's registered origins. The media origin is a **separate site** from the app and the API, so nothing it serves can
-run with their cookies or storage. CORS matters twice: wasm `fetch` needs it, and WebGPU's `importExternalTexture`
-and WebGL2 texture uploads reject a cross-origin video source that is not CORS-enabled, so the `<video>` element is
-created with `crossorigin="anonymous"`.
+**Response headers.** Section 08's table is the only list of headers a blob response carries (content type, type
+sniffing, disposition, sandboxing policy, cache policy, cross-origin policy, referrer policy); this section repeats
+none of them. Two consequences for this section: the media origin is a **separate site** from the app and the API,
+so nothing it serves runs with their cookies or storage, and the `<video>` element is created with
+`crossorigin="anonymous"` because WebGPU's `importExternalTexture` and WebGL2 texture uploads reject a cross-origin
+video source that is not CORS-enabled.
 
 **Images are never served as uploaded for display.** What clients display are the derived, re-encoded tiles, which
 carry no metadata. An original (`Variant::Orig`) is download-only. It is fetched from a separate path, `/o/`, with
@@ -542,15 +551,14 @@ period** instead.
 
 *The reference index.* For each surface the server keeps `refs(surface, blob) -> { first_seen, last_referenced }`,
 updated when a change adds an object whose kind is image, video (its blob and poster) or text with a
-`FontRef::Blob`. A reference is never removed when an object is deleted.
+`FontRef::Blob`. A reference is never removed when an object is deleted. This index serves garbage collection only;
+download authorization uses current state and the states a role may open (above).
 
 *Liveness.* A blob is **live** when it is referenced by (a) the current state of any surface, (b) any retained
-snapshot, or (c) any named version. Section 03 supplies this function; this section requires it:
-
-```rust
-/// Blobs referenced by one stored state of a surface (current, snapshot or named version).
-fn blobs_in_state(state: &StoredState) -> impl Iterator<Item = (TenantId, BlobId)>;
-```
+snapshot, or (c) any named version. Section 02 owns the pure function `blobs_in_state(state: &Doc)` over one
+document state; section 03 owns `blobs_in_store(store: &dyn RoomStore, state: StateRef)`, which loads a stored state
+(current, snapshot or named version) and calls 02's. The sweep calls 03's function; the tenant comes from the
+store's scope.
 
 *Sweep,* once a day per tenant, in two phases:
 
@@ -570,7 +578,8 @@ are gone.
 its blobs. Deleting a version, or snapshot expiry, only makes blobs sweepable at the next run.
 
 *Overview pictures.* Section 06's overview pictures are ordinary blobs (lossless WebP or PNG) named by content hash.
-06's table `TileKey { octave, cell, tx, ty } -> blob` (06's names) records which blob is current for which tile.
+06's table `PicTile { octave, tx, ty } -> blob` (06's key; 03 holds the table) records which blob is current for
+which tile.
 Those blobs are read with the same grants (the room treats a blob listed in that table as referenced by the surface)
 and are live while the table, a retained snapshot's copy of the table, or a named version lists them; replaced
 pictures follow the same condemn-then-delete rule. They are not part of `blobs_in_state`, which covers document
@@ -608,6 +617,8 @@ operator's responsibility (this is not legal advice).
 
 Container probe candidates: `mp4parse` (Mozilla) and `symphonia`, both believed MPL-2.0 (file-level copyleft;
 acceptable as a dependency but needs a notice), or a small MP4 crate. None was verified here; the spike picks one.
+Section 08's licence allow-list includes MPL-2.0 for this reason; if the spike picks a probe that is not MPL, that
+entry is not needed.
 
 **Streaming.** v1 is **progressive download with HTTP range requests** of the single stored file: the web shell
 gives `<video>` the grant URL and the browser asks for the ranges it needs; native players do the same over HTTP. An
@@ -635,13 +646,13 @@ pyramid), so zoomed-out clients never fetch video bytes for a still view.
 | OS APIs: AVFoundation (macOS), Media Foundation (Windows) | No third-party licence; the OS vendor holds the codec licences | Vendor | Accepted; the primary native path |
 | `rav1d` (AV1 only) | BSD-2-Clause, compatible | AV1 is royalty-free | Later fallback for AV1 gaps; I know of no H.264 decoder in safe Rust (unverified) |
 
-Native video goes through a `PlatformVideoPlayer` supplied by the shell (section 07 holds the platform API; this
-is the contract media needs):
+Native video goes through a `PlatformVideoPlayer` supplied by the shell. This trait is the definition; section 07
+refers to it and holds the rest of the platform API:
 
 ```rust
 pub trait PlatformVideoPlayer {
     fn open(&mut self, url: &Url, probe: &VideoFields) -> Result<()>;      // async; progressive download
-    fn set_rate(&mut self, milli: u16);               // 1000 = normal; the caller keeps it within 950..=1050
+    fn set_rate(&mut self, milli: u16);               // effective rate: PlaybackState::rate_milli times 0.95 to 1.05 (nudge)
     fn seek(&mut self, to_us: u64);                   // accurate to the frame, not only to a keyframe
     fn play(&mut self); fn pause(&mut self);
     fn set_volume(&mut self, volume: f32, muted: bool);
@@ -713,8 +724,8 @@ object (extra writes are dropped, not queued). Playback writes are **never queue
 anchor would claim the video has been playing for hours. With the connection down, the video controls are disabled,
 and a write rejected for a stale anchor is discarded by the client, not retried. This needs a rule in section 02.
 
-*Why the client stamps the time and not the server:* the server would have to rewrite a CRDT operation after the
-fact, which the CRDT libraries are not built for. The cost is that the writer's clock error is baked into the
+*Why the client stamps the time and not the server:* the server never rewrites a client's change (section 02); it
+accepts or rejects a change whole. The cost is that the writer's clock error is baked into the
 anchor, equal to its offset error below (a few milliseconds).
 
 *Stale `Playing` at rest.* When the last client leaves a room, and when a room starts from storage, the server
@@ -769,7 +780,9 @@ else:                                 seek(target + L)    // L: this client's sm
 
 Read from the top: under 10 ms, play at normal speed; between 10 and 30 ms, do nothing unless a nudge is already in
 progress (a hysteresis band, so the rate does not flip back and forth); between 30 and 400 ms, change speed by up to
-5 percent in the direction that closes the gap, which closes 100 ms in 2 s and 400 ms in 8 s; above 400 ms, jump.
+5 percent in the direction that closes the gap. The correction is proportional below 100 ms (`e / 2 s` reaches the 5
+percent cap at 100 ms of error) and capped above it, so a 400 ms error takes about 6 s to fall to 100 ms and then
+decays smoothly; above 400 ms, jump.
 Browsers preserve pitch under `playbackRate` by default, so 5 percent is hard to hear (Syncplay's 0.95 slowdown is
 the same practice). All constants live in one struct so measurements can tune them:
 
@@ -780,7 +793,8 @@ pub struct SyncTuning {
     pub seek_threshold_us: u64,     // 400_000
     pub seek_cooldown_ms: u32,      // 2_000 between seeks of one video
     pub give_up_after: (u8, u32),   // (3 seeks, 30_000 ms) -> degraded mode
-    pub min_decode_px: u32,         // 160 wide to decode; 24 to draw at all
+    pub min_decode_px: u32,         // 160 wide to decode
+    pub placeholder_only_px: u32,   // 24: below this long side, draw the placeholder only (see the placeholder rule)
 }
 ```
 
@@ -915,6 +929,10 @@ build number are in the document, two clients with all files present produce the
 | A blob is stored under the hash the server computed, not the one claimed | Upload bytes with a wrong claimed id: `422`, nothing stored under either key |
 | Resume works from any interruption | Cut the connection (and separately restart the server) after every N bytes for many N; the final blob is identical |
 | A reader without a reference gets no grant | Grants for a blob in another surface of the same tenant, in another tenant, and nonexistent: all answered `Denied` identically |
+| A viewer cannot read a blob only a deleted object referenced | Delete the only object that references a blob; a viewer's grant request is `Denied`; garbage collection still keeps the blob until the purge horizon |
+| An upload after a link is turned off is refused | `POST`, `PATCH` and `HEAD` with the old upload grant after revocation: each refused |
+| A frozen guest keeps read access and loses upload grants | Freeze a guest mid-upload: the next `PATCH` is refused, reads of blobs still succeed |
+| Response headers are the same in presigned and proxy mode | Run 08's header test against both modes |
 | Grants expire and are bound to one blob | Expired tag, tag of blob A used on blob B, tampered `exp`: each `403` |
 | Identical files are shared inside a tenant and not across tenants | Two uploads, then a storage listing |
 | Unreferenced blobs are collected and referenced ones never | Randomized document histories with deletes, undo, snapshots, named versions and restores; invariant: every blob in any live state exists after a sweep |
@@ -970,15 +988,17 @@ statically.
   rectangle in object units and its source pixel size. On-screen size uses 01's `pixel_log2` and `ExactBox`.
 - **02.** Holds the schema of `ImageFields`, `VideoFields`, `PlaybackState`, `FontRef`, `BlobId` and `Placeholder`
   as I define them here, keeps `PlaybackState` as a register of its own, written whole and never queued offline (a
-  write with a stale anchor is dropped, not retried), and allows server-authored changes , used for
-  pause-at-rest. Provides `blobs_in_state`, `blobs_in_object` and `ObjectEffect::new_blobs`. Stores `size` and
+  write with a stale anchor is dropped, not retried), and allows server-authored changes, used for
+  pause-at-rest. Provides `blobs_in_state(&Doc)`, `blobs_in_object` and `ObjectEffect::new_blobs`. Stores `size` and
   `crop` for images and videos, from which 06's `ExtentOracle` gives the box. Maps a `crop` in object units to
   source pixels by scaling with source pixel size over object size (02's rule); tile choice uses the cropped source
   region.
-- **03.** Carries the new WebSocket messages (`UploadGrantRequest`, `GrantRequest` and replies, `BlobStatus`, clock
-  `Ping` and `Pong`, which it owns); pongs are answered outside the ordered change queue. Holds the blob records and
-  the reference index; runs the daily sweep; supplies named versions and snapshots as inputs to liveness; normalizes
-  `Playing` on room start. Subscribes a client to `BlobStatus` for blobs of objects in its view.
+- **03.** Carries the blob messages with its own names and fields (`UploadGrantRequest { req, blob, size, kind }`,
+  `BlobGrantRequest` and replies, `BlobStatus`, and the clock `Ping` and `Pong`, which it owns); pongs are answered
+  outside the ordered change queue. Holds the blob records and the reference index; runs the daily sweep; supplies
+  `blobs_in_store(store, state)` (which calls 02's `blobs_in_state`) over current state, snapshots and named
+  versions; holds the table behind 06's `PicTile`; normalizes `Playing` on room start. Subscribes a client to
+  `BlobStatus` for blobs of objects in its view.
 - **04.** No dependency, except that presence and clock pings share the one WebSocket; section 03's pacing rule
   (unsent bytes kept to about 20 ms of the link's drain rate, between 4 KiB and 64 KiB, bulk chunks never over 16
   KiB) keeps a ping from waiting more than about 40 ms behind bulk data on the socket; blob transfers do not use the
@@ -987,24 +1007,29 @@ statically.
   `0..=K`), with the maximum texture size taken from the active back end (a tile never exceeds 512, so only back
   ends with a smaller limit are affected); font bytes for a per-script fallback set that includes an emoji font; and
   storage for overview-picture blobs (ordinary hash-named blobs, written by the headless renderer through the same
-  `BlobStore` and listed in 06's `TileKey { octave, cell, tx, ty }` table, read with the same grants, and kept live
-  while that table or a retained copy of it lists them). It supplies `ExtentOracle` for images and videos from their
-  stored `size`. It draws
-  tiles, blends levels while zooming, magnifies pixels with its chosen filter, clips quads to the visible rectangle,
-  draws video through the per-back-end path in Video (WebGPU, WebGL2, CPU), owns text layout and shaping,
-  language-tagged runs, the *use* of the fallback chain defined here, and re-layout when a font arrives. It draws
-  the blob-status badges.
+  `BlobStore` and listed in the `PicTile { octave, tx, ty }` table that 03 holds, read with the same grants, and
+  kept live while that table or a retained copy of it lists them). It supplies `ExtentOracle` for images and videos
+  from their stored `size`. It draws tiles, blends levels while zooming, magnifies pixels with its chosen filter,
+  clips quads to the visible rectangle, draws video through the per-back-end path in Video (WebGPU, WebGL2, CPU),
+  owns text layout and shaping, language-tagged runs, the *use* of the fallback chain defined here, and re-layout
+  when a font arrives. It draws the blob-status badges.
 - **07.** The platform API gains: an HTTP client with `Range`, streaming `PATCH` upload and cancellation
-  (design.md's platform table lists only a WebSocket for Network); a `PlatformVideoPlayer`; a persistent file store
-  for pending uploads and the tile cache; user-activation awareness on the web; an unmute control in the shared
-  controls.
+  (design.md's platform table lists only a WebSocket for Network); the `PlatformVideoPlayer` defined in this section
+  (07 refers to it and keeps no sketch of its own); a persistent file store for pending uploads and the tile cache;
+  user-activation awareness on the web; an unmute control in the shared controls. 07's package list includes
+  `everink-media`.
 - **08.** Holds the single limits table (adopting the member figures here, with stricter guest figures), who may
   upload, the upload-grant and blob-grant definitions (HMAC-SHA-256, the `/b/` and `/o/` paths) and key rotation,
-  the 60-second presigned-address gap in its threat table, the CORS origin list and the separate media site, the
-  response headers, whether libraries may be shared across tenants (assumed not, or by copy), and global rate
-  limits. It requires, and this section states: images re-encoded and never served as uploaded, SVG refused,
-  `nosniff`, attachment for originals, a sandboxing CSP, a cross-origin resource policy, server-computed hashes,
-  unreferenced uploads cleaned after 24 hours, and no unsandboxed `ffmpeg`-class tool.
+  the upload grant (bound to user, surface, blob and size, valid until the session ends and for at most 24 hours,
+  checked against the revoked-session list on every upload request), the 60-second presigned-address gap in its
+  threat table, the cap on blob ids per grant request, the CORS origin list and the separate media site, the one
+  list of response headers (presigned mode must set the same ones, else proxy mode), the rows "set by section 05"
+  that mirror this section's server-enforced limits, MPL-2.0 on its licence allow-list for the container probes,
+  freezing of guests (frozen guests keep read access and lose upload grants), whether libraries may be shared across
+  tenants (assumed not, or by copy), and global rate limits. It requires, and this section states: images re-encoded
+  and never served as uploaded, SVG refused, `nosniff`, attachment for originals, a sandboxing CSP, a cross-origin
+  resource policy, server-computed hashes, unreferenced uploads cleaned after 24 hours, and no unsandboxed
+  `ffmpeg`-class tool.
 
 ## Questions for the owner
 

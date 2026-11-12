@@ -465,26 +465,54 @@ the stroke's own level relative to the stroke's **anchor** and rounded to a fixe
 the line between its neighbors (thinning), so a typical stroke is 10 to 40 bytes per 100 px of path; the exact
 numbers are measured in the spike. A stroke has at most 20,000 points (`MAX_STROKE_POINTS`, section 08's table).
 
-**The anchor is the center of the stroke's bounding box**, the box of its points grown by the largest half width,
-rounded to the lattice. Reason: an `i32` at 2^-16 reaches +-2^15 units from the anchor. Section 01 keeps an object's
-size below 2^16 units of its own level by re-levelling. With the anchor at the center, every coordinate of a stroke
-inside that band is under 2^15 units from it, so it always fits. With the anchor at the first point, a stroke 2^16
-units long would overflow. The tool computes the center when the pen lifts, subtracts it from every point, and puts
-it in the stroke's `Xform`. Points are immutable once the pen lifts.
+**The stroke rule.** This section owns it, and sections 01, 02 and 04 cite it. Four terms. The stroke's **level** is
+the camera's level at the moment the pen goes down, and it does not change while the stroke is drawn, even if the
+view auto-pans or the camera crosses a level. The **pen-down point** `P0` is the exact `Position` of the first
+sample. A **lattice step** is 2^-16 of a unit of the stroke's level. The **center** `c` is defined below.
+
+1. **Points relative to the pen-down point.** Each sample becomes `q = (x, y)`, integers in lattice steps from `P0`
+   on each axis: the exact difference of positions (01's `Position::delta`), scaled by 2^16 and rounded with
+   `round_ties_even` after the range check. The first point is `(0, 0)`.
+2. **The end-of-stroke limit.** If a new sample would give `|q| >= 2^30` steps (2^14 units) on either axis, the tool
+   ends this stroke at the previous point and starts a new stroke whose pen-down point is that previous point, so
+   the two strokes join without a gap. 2^14 units is 8,192 pixels at the lowest in-level zoom (0.5 pixels per unit).
+   Every stroke therefore has `|q| < 2^30` steps for all its points.
+3. **The extent.** Let `min` and `max` be the per-axis minimum and maximum of the `q` values. Then
+   `max - min <= 2^31 - 2` steps, under 2^15 units. The stroke's box is `[min - g, max + g]` with `g` the largest
+   half width in steps, rounded up (the brush's width is bounded, so the grown box stays inside section 01's size
+   band of 2^16 units); that grown box is what `ExtentOracle` returns.
+4. **The center.** `c = (min + max) >> 1` per axis, an arithmetic shift in `i64`, which is a floor. Because the
+   growth `g` is added on both sides it cancels, so `c` is also the center of the grown box. The final anchor is
+   `A = P0 + c * 2^-16` units. This is an exact position, since 2^-16 is a multiple of the position step 2^-54. It
+   is placed in the stroke's `Xform`.
+5. **Points relative to the final center.** Each stored point is `p = q - c`, in `i64` and then `i32`. For every
+   axis, `|p| <= 2^30 - 1`. The worst case is the top of the range: with `min = -(2^30 - 1)` and `max = 2^30 - 2`,
+   `min + max = -1`, so `c = -1` (the floor), and `max - c = 2^30 - 1`. In general `max - c = ceil((max - min) / 2)`
+   and `c - min = floor((max - min) / 2)`, both at most `2^30 - 1`. So `p` fits an `i32` with a factor of two to
+   spare, and the same is true of the first point `(0, 0) - c`.
+6. **Deltas.** The bytes store the difference between consecutive stored points, the first from `(0, 0)` (the
+   anchor). Two points can be as far apart as `2 * (2^30 - 1) = 2^31 - 2` steps, which still fits an `i32` but needs
+   a zigzag value up to 2^32 - 3, a five-byte varint. The decoder therefore reads each delta as a zigzag varint of
+   at most five bytes into an `i64`, adds it to the running point in `i64`, and refuses the stroke if any resulting
+   point does not fit an `i32`. A stroke that fails this check is refused by the validator (section 08 lists the
+   point count limit; this is the range limit).
+
+The result: a stroke is small enough that its points, its extent and its deltas fit with room to spare. The rule
+also covers a stroke drawn while the view auto-pans, because the limit is measured from `P0`, in the stroke's own
+level, not in screen pixels.
 
 **Preview and final stroke coincide exactly.** While the stroke is drawn, its points (and section 04's remote
-preview) are lattice points relative to the *pen-down position* `P0`. When the pen lifts, the tool takes the lattice
-box `[min, max]` of those points on each axis, grown by the largest half width rounded up to whole lattice steps,
-and computes the center step `c = (min + max) >> 1` (an arithmetic shift, so a floor, in `i64`). The final anchor is
-`P0 + c * 2^-16` units, a whole number of lattice steps from `P0`, and every point is stored as `p - c`. Nothing is
-resampled or rounded again, so each final point is the same world position as its preview point, the outline built
-from them is the same outline moved by an exact integer, and the swap from preview to object (section 04) shows no
-shift. The floor leaves the box at most one step off-center, which the range reasoning above allows for.
+preview) are the `q` values of step 1, relative to `P0`. When the pen lifts, steps 3 to 5 compute `c` and the stored
+points `q - c`. Nothing is resampled or rounded again, so each final point is the same world position as its preview
+point (`P0 + q * 2^-16` equals `A + p * 2^-16` exactly), the outline built from the final points is the same outline
+moved by an exact integer, and the swap from preview to object (section 04) shows no shift. Points are immutable
+once the pen lifts.
 
 ```rust
 pub struct PackedPoints { pub count: u32, pub bytes: Arc<[u8]> }   // field of the Stroke object (section 02)
-// bytes: for each point, zigzag-LEB128 varints of dx, dy (i32 lattice steps from the previous point, the first from
-// the anchor), then one pressure byte (0 = no pressure given, 1..=255). Decoding is integer-only.
+// bytes: for each point, zigzag-LEB128 varints (at most 5 bytes each) of dx, dy: lattice steps from the previous
+// stored point, the first from (0, 0) = the anchor. Decoded as i64; every resulting point must fit an i32 (the stroke
+// rule). Then one pressure byte (0 = no pressure given, 1..=255). Decoding is integer-only.
 pub struct StrokeBrush { pub brush: BrushId, pub base_width: Fixed32, pub style_ver: u8 }  // style block
 ```
 
@@ -851,12 +879,13 @@ which is the threshold doing its job), and it is in no picture of this tile (pic
 `h(o) >= Z_v` in a dense tile: the server did not send it; it is drawn only through the picture, whose membership
 (`h(o) >= Z_v` and extent at least 0.25 px at `Z_v`, that is `Z_v >= h(o) - 4`) does not depend on `eff_min_px`. (3)
 `h(o) >= Z_v` in a sparse tile: it is sent if its extent is at least `eff_min_px` and drawn live; if it is smaller
-it is neither sent nor in a picture, so it is not drawn, which is the size threshold doing its job. Because a tile
-is either dense or sparse, never both, no object is in both a picture and the live set, and no object that passes
-the threshold is in neither. The client applies `eff_min_px` as a cull on the live set too, so an object the server
-has not yet withdrawn (`drop` in `ViewEnd`) does not flicker back in.
+it is neither sent nor in a picture, so it is not drawn, which is the size threshold doing its job. A tile is either
+dense or sparse, never both, so for each object and each tile it touches there is exactly one source (live, picture
+or neither): no object is in both the picture and the live set of the same tile, and no object that passes the
+threshold is in neither. The client applies `eff_min_px` as a cull on the live set too, so an object the server has
+not yet withdrawn (`drop` in `ViewEnd`) does not flicker back in.
 
-**When a picture is used.** The server (section 03) knows the count per cell. If the number of objects with
+**When a picture is used.** The server (section 03) knows the count per tile. If the number of objects with
 `h(o) >= Z_v` touching a tile is above a threshold (starting value 2,000), it sends the picture reference instead of
 those objects, and the client draws the picture. Otherwise it sends the objects and the client rasterizes them. This
 is the only difference: a tile always has exactly one source for small objects.
@@ -878,7 +907,7 @@ document. This weakens the high-level design's "one order across all levels" for
 - Format: lossless WebP or PNG with alpha, premultiplied on load; compression chosen in the spike by size. Expect 5
   to 60 KB per tile (unverified guess).
 - Storage: as blobs in the blob store (section 05), named by the content hash and listed per tile in a table
-  `(octave, cell, tx, ty) -> blob, version, order_min, order_max`.
+  `(octave, tx, ty) -> blob, version, order_min, order_max`.
 
 **Invalidation.** A change to an object marks dirty the tiles that `picture_tiles` returns for its old and new box,
 in each of its five octaves. The builder debounces: it rebuilds a dirty tile after 5 s without a new change to it,
@@ -909,14 +938,14 @@ under the frame time.
 |---|---|---|---|
 | Input, camera, animation | 0.3 | | |
 | Visible-set query | 1.0 | | section 01/core; zero on most frames |
-| Placement of new objects (exact step, cuts) | 1.0 | | section 01's own target is under 1 ms |
+| Placement of new objects (exact step, cuts) | 2.0 | | 01's cut queue budget: 2 ms per frame, the one figure for exact arithmetic; items past it draw from the previous cut |
 | Order, dirty-tile detection | 0.5 | | |
 | Tile raster (time-boxed) | 4.0 | 3.0 | spread across frames; the budget, not the need |
 | Lifted/live objects | 1.0 | 1.0 | selection drag, cut objects |
 | Compose (tiles, live ink, overlay) | 0.5 | 1.0 | |
 | Controls (section 07) | 0.5 | 0.3 | |
 | Present and slack | 1.0 | | |
-| Total | about 10 | about 6 | slack for the rest |
+| Total | about 11 | about 6 | slack for the rest |
 
 The decisive unknown is the rate at which `vello_gpu` rasterizes tiles. If a full-screen re-render of 10,000 objects
 (about 20 tiles) takes 60 ms, then after a large zoom change the view is soft for four frames; that is acceptable.
@@ -941,7 +970,7 @@ measurement to make.
 | Prediction is wrong | A few pixels of tail show for one frame; never stored. |
 | Picture missing, stale or in conflict | The old picture, the marker, or objects are used as described; no blank hole. |
 | Huge object with its cut failing (section 01 returns an error) | The object is skipped for that frame and drawn from the last good cut. |
-| Hostile content: a path with millions of points, or deeply nested groups | The caps (points per stroke, path nodes, glyphs per text block, picture size) are in section 08's limits table, which this section names and does not repeat. The renderer also skips paths over a cap, and a per-tile time-out marks a tile as failed and shows its previous contents. |
+| Hostile content: a path with millions of points, or deeply nested groups | The caps (points per stroke, path nodes, glyphs per text object, picture size) and the per-tile time-out are in section 08's limits table; this section names them and carries no numbers. The renderer skips paths over a cap, and a tile that exceeds the time-out is marked failed and keeps its previous contents. |
 | A stroke with many cuts | Past 64 cuts section 02 replaces the stroke by pieces; until then the outline is rebuilt per change and cached with the object version. |
 
 ## How it is tested
@@ -956,10 +985,10 @@ measurement to make.
 | Two concurrent partial erases both show | Two clients add different cuts to one stroke; both orders give the same outline, with both gaps. Undo of one gesture restores only its gap. |
 | Hit test ignores gaps | A pointer over a gap does not hit the stroke and hits the object beneath; a pointer over a remaining run does. |
 | Group move invalidates by region | Move a group of 10,000 members; only tiles touching its old and new world box re-render, and the members are not visited individually. |
-| Each object is drawn once under `eff_min_px` | Generated scenes at several `eff_min_px` values (0.5, 1, 2, 6); for every object and view octave, count sources: at most one of {live, picture}, and exactly one when its extent is at least `eff_min_px` (live or sparse tile) or at least 0.25 px (dense tile). |
+| Each object is drawn once under `eff_min_px` | Generated scenes at several `eff_min_px` values (0.5, 1, 2, 6); for every object and view octave, for every object and every tile it touches, count sources: at most one of {live, picture}, and exactly one when its extent is at least `eff_min_px` (live or sparse tile) or at least 0.25 px (dense tile). Counted per object and tile, not per view, so an object spanning two tiles of different density is checked in each. |
 | Home octave and picture tiles are pure | Random `ExactBox`es at levels -1000 to 1000: `home_octave` and `picture_tiles` equal an independent big-rational reference; the same box gives the same tiles whatever level it is expressed at; every object has five octaves and at most 20 tiles. |
 | `ExtentOracle` bounds the outline | For random objects of every kind, the oracle's `LocalBox` contains the lattice outline, is bit-identical on native and wasm, and for text equals the stored `TextFrame` size. |
-| The stroke anchor keeps points in range | Random strokes with extent up to 2^16 units: after centering, every point fits `i32` at 2^-16; the same stroke anchored at its first point overflows (the negative control). |
+| The stroke anchor keeps points in range | Random strokes and the extreme cases (points at `-(2^30 - 1)` and `2^30 - 2`, so the floor in `c` gives `max - c = 2^30 - 1`; points exactly at the 2^30 limit that must end the stroke): every stored point is within `2^30 - 1` and fits `i32`; deltas up to `2^31 - 2` round-trip through the five-byte varint decoded as `i64`; a hand-made stroke with a point past `i32` is refused by the decoder. The pen-down preview and the final stroke are compared point by point in world position for exact equality, including a stroke drawn while the view auto-pans across a camera level change. |
 | Live-ink target is only used when given | With `live_ink_target()` returning `None`, the web path draws live ink in the main canvas and nothing panics. |
 | Tile keys are stable across camera levels | Zoom from 0.5 to 2047 px per unit and over a camera level change; the set of keys needed is the same function of `O` before and after the change. |
 | Layout is the same on every target | Golden file of line breaks and glyph positions (to 1/64 unit) for a multilingual corpus, compared native versus wasm. |
