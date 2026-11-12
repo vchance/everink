@@ -14,12 +14,15 @@
 pub mod bytes;
 pub mod change;
 pub mod ids;
+pub mod link_model;
 pub mod object;
 pub mod order;
+pub mod pacing;
 pub mod points;
 pub mod replica;
 pub mod rng;
 pub mod room;
+pub mod wire;
 
 pub use bytes::DecodeError;
 pub use change::{Applied, At, Change, Effect, NewObject, Op};
