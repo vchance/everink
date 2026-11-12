@@ -148,6 +148,9 @@ fn bounds<'a>(values: impl Iterator<Item = &'a Axis>) -> Bounds<'a> {
 /// Cuts one quadratic curve to the window: the square of half-side `half_window` (in steps of 2^-40 of a
 /// camera-level unit) round the origin. The pieces are appended to `out` in order along the curve, each starting
 /// where the one before ended.
+///
+/// The window is whatever the caller wants prepared: section 01's expanded window, not the bare viewport, so
+/// that a small pan needs no new cut.
 pub fn cut_quad(curve: [BigPt; 3], half_window: i64, out: &mut Vec<Piece>) -> CutStats {
     let h = i128::from(half_window.max(1));
     let (window_lo, window_hi) = (Axis::from_i128(-h), Axis::from_i128(h));

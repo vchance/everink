@@ -2,7 +2,9 @@
 //!
 //! `tests/golden/outlines.txt` holds one line per stroke of a fixed corpus: for each of the two builders, the
 //! number of segments and a hash of every coordinate of the outline. It was written on one machine (aarch64)
-//! and must pass byte for byte on the others (x86-64, which has a fused multiply-add, and wasm32). Rewrite it
+//! and must pass byte for byte on the others: x86-64 as it is built by default and with its fused multiply-add
+//! switched on, and wasm32. aarch64 always has a fused multiply-add, so the file itself was written where the
+//! compiler could have used one. Rewrite it
 //! only when an outline algorithm is meant to change: `UPDATE_GOLDEN=1 cargo test -p everink-core --test outlines`.
 
 mod common;

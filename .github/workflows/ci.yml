@@ -76,6 +76,11 @@ jobs:
         run: |
           node --version
           cargo test -p everink-core --target wasm32-wasip1 --locked
+      - name: Golden files with fused multiply-add switched on (x86-64 does not have it on by default)
+        env:
+          RUSTFLAGS: -C target-feature=+fma
+          CARGO_TARGET_DIR: target/fma
+        run: cargo test -p everink-core --test outlines --test golden --locked
       - name: Timing examples build and run
         run: |
           cargo run --release --locked --example bench_positions

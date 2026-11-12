@@ -23,6 +23,7 @@ cargo fmt --all --check                                             # format che
 cargo run --release --example bench_positions                       # timing run (spike question 1)
 cargo test -p everink-core --target wasm32-wasip1 --locked          # the core's tests on wasm32, under Node
 cargo run --release --example bench_cut                             # timing run for the cut and the outline (question 4)
+cargo run --release --example bench_cut --target wasm32-wasip1      # the same on wasm32, under Node
 UPDATE_GOLDEN=1 cargo test -p everink-core --test outlines          # rewrite the outlines golden file
 cargo test -p everink-sync --test object_map <name>                 # one test of the object map
 cargo run --release --example bench_object_map [objects] [depth]    # size and timing run (spike question 7)
@@ -75,8 +76,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `tests/golden/positions.txt` and `tests/golden/outlines.txt` were written on aarch64 and are checked on x86-64
   and wasm32 by CI. Rewrite one only when the arithmetic it records is meant to change, and say so in the PR: a
   difference between machines is a bug, not a reason to regenerate.
-- In `crates/everink-core`, `clippy` refuses `mul_add`, `sin`, `cos`, `powf`, float `min`/`max`/`clamp` and their
-  like (`clippy.toml` there). Do not allow one in shared geometry; an allowance is for a display value or a test,
+- In `crates/everink-core`, `clippy` refuses every float method outside the allowed arithmetic (`mul_add`, the
+  trigonometric, exponential and power functions, `min`/`max`/`clamp`; the list is `clippy.toml` there). It is a
+  list, so a method it does not name gets through: add to it when one is found. Do not allow one in shared geometry; an allowance is for a display value or a test,
   with the reason beside it.
 - Only `everink-core` is tested on wasm32. `everink-sync` has an example that opens sockets, which that target
   does not have.

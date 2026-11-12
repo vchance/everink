@@ -11,7 +11,8 @@ is the owner's to run.
 ## Answers
 
 - **Question 2: positions are the same on wasm32.** The golden file written on aarch64 (1,988 lines) passes
-  byte for byte on wasm32, as it did on x86-64. All of `everink-core`'s tests run there.
+  byte for byte on wasm32, as it did on x86-64. `everink-core`'s tests run there, all but one that needs to
+  catch a panic.
 - **Question 3: stroke outlines are bit-identical** on aarch64, x86-64 and wasm32: one golden file of 1,000
   strokes, written on aarch64, passes on the other two. On the way the spike found that **the outline the
   design specifies leaves holes over the stroke**, and built one that does not ([Finding 1](#findings)).
@@ -38,6 +39,7 @@ is the owner's to run.
 | aarch64 macOS | written here | written here | Apple M4 |
 | wasm32 (`wasm32-wasip1`, Node 26, V8) | passes | passes | Apple M4 |
 | x86-64 Linux | passes | passes | GitHub's `ubuntu-24.04`; the pull request that added this slice records the run |
+| x86-64 Linux with fused multiply-add on | passes | passes | the same run |
 | wasm32 on x86-64 Linux | passes | passes | the same run |
 
 The outlines file holds, for each stroke of a fixed corpus, the number of segments and a hash of every
@@ -47,10 +49,15 @@ point lattice. Its pressure changes at random from point to point, which is roug
 
 **How the outline stays identical.** It uses only `+ - * /` and `sqrt` on `f64`, comparisons, and
 `round_ties_even`; its tables (pressure to width, and the cosines and sines of the round shapes) are literals;
-the result is rounded to the lattice as the last step. x86-64 has a fused multiply-add and the compiler did not
-use it: the file passes there. That settles, for this toolchain, the item section 01 lists as unverified
-("FMA contraction by rustc"). It is a test and not a guarantee: a later compiler could change it, and the test
-is what would notice.
+the result is rounded to the lattice as the last step.
+
+**Fused multiply-add.** Section 01 lists as unverified whether the compiler turns `a * b + c` into one fused
+operation, which rounds once where the plain form rounds twice. The evidence here: aarch64 always has the
+fused operation, and the file written there passes on two targets that cannot use it (wasm32, and x86-64 as it
+is built by default, where the feature is off). So the compiler did not fuse on aarch64. CI also runs both
+golden files on x86-64 with the feature switched on (`-C target-feature=+fma`), where it could fuse and must
+not. That settles the item for this toolchain. It is a test and not a guarantee: a later compiler could change
+it, and these runs are what would notice.
 
 **What wasm32 means here.** `wasm32-wasip1` under Node is the same WebAssembly arithmetic a browser runs, in the
 same engine as Chrome's. It is not a browser: no browser was driven in this part. Other engines (Firefox,
@@ -84,9 +91,13 @@ kept; the table gives the median and the 95th percentile over the 200. A curve "
 **Against the 2 ms budget** (native, ordinary case): 5 curves a frame at 100 levels, 1 at 300, and at 1,000
 levels one curve takes five frames' worth. On wasm32, 1 or 2 at 100 levels and none at 300.
 
-**Against the design's estimates:** 6 to 12 times slower at 100 levels. The design's "10 halvings per level, of
-which the flatness shortcut makes half cheap" holds; what was underestimated is the cost of one halving of a
-long number, about 0.37 µs at 100 levels here. The code is not tuned: every addition and shift makes a new
+**Against the design's estimates:** 6 to 12 times slower at 100 levels, for two reasons. First, the number of
+halvings. Section 01 says in one place that the flatness shortcut, with a straight piece clipped to the window
+in one step, gives "about 5Δ + 12 bisections instead of 10Δ", and in its cost paragraph counts 1,000 for 100
+levels; the two do not agree. The prototype halves a straight piece instead of clipping it (departure 4), which
+keeps all ten halvings a level and makes the second five cheap: a line is one addition per axis where a curve
+is three. Second, the cost of one halving of a long number, about 0.37 µs at 100 levels here, which the
+estimate put far lower. The code is not tuned: every addition and shift makes a new
 number. Two things were tried. Taking a piece's bounds without copying its coordinates changed little.
 Comparing two long coordinates without copying them made the cut about five times faster (1.75 ms to 0.37 ms
 at 100 levels); the copy had been there since slice 1. In-place arithmetic was not tried.
@@ -138,8 +149,11 @@ failed; with the outline's bands turned the other way round, the coverage test a
    previous cut") and budgets 2 ms a frame. At 1,000 levels a single curve takes 11 to 19 ms natively and 42 ms
    on wasm32. The prototype keeps its unfinished pieces on an explicit stack, so stopping and going on is a
    small change; it is not built.
-3. **The design's cost estimates for the cut are low by about ten times at 100 levels.** Its figure at the depth
-   cap ("about 15 ms, budgeted") is close: 11 to 19 ms at 1,000 levels.
+3. **The design's cost estimates for the cut are low by about ten times at 100 levels**, and section 01 gives two
+   different counts of halvings (about 5 per level in one place, 10 in another). Clipping a straight piece in
+   one step, as the design has it, would halve the count and needs a division of long numbers; the prototype
+   did not try it. The design's figure at the depth cap ("about 15 ms, budgeted") is close: 11 to 19 ms at
+   1,000 levels.
 4. **wasm32 is about three to four times slower than native for this arithmetic** under Node 26 (long whole
    numbers: 3 times at 100 levels, 4 at 1,000; the outline's floats: 2.7 times). Section 01 had no figure. The
    re-base and per-frame figures of slice 1 were not re-run on wasm32.
@@ -177,15 +191,21 @@ failed; with the outline's bands turned the other way round, the coverage test a
    "ten halvings per level".
 5. **The window and the pieces are relative to the window's centre**, not to the render origin `R`; the two
    differ by a small offset the caller adds.
+6. **`cut_quad` is given one window.** Section 01 sorts pieces against an expanded window `W'` and clips to a
+   larger `W''`. The caller passes the expanded window as `half_window`; pieces are kept up to four of those
+   across and far ones pulled onto a box sixteen across.
+7. **The float lint lists what is refused**, for `f64` and `f32`; section 01 also names a search of the source in
+   CI, which is not built.
 
 ## What the design should change
 
 1. Section 06, "Outline algorithm": replace the single path with the union of same-way pieces, or say how the
    single path avoids holes; note the segment count (Finding 1).
 2. Section 01, "The cut": the cut of one curve is resumable; the budget is spent per halving, not per object
-   (Finding 2). Replace the cost estimates with these figures, native and wasm32.
-3. Section 01, "Float rules" and its unverified list: FMA contraction was not seen on x86-64 with this toolchain;
-   the outline golden file is the standing check. Add `log2` to the banned list (the camera's display value
+   (Finding 2). Replace the cost estimates with these figures, native and wasm32, and settle whether a level
+   costs five halvings or ten (Finding 3).
+3. Section 01, "Float rules" and its unverified list: no fused multiply-add was seen from this toolchain, on
+   aarch64 or on x86-64 with the feature on; the golden files are the standing check. Add `log2` to the banned list (the camera's display value
    used it; it is now marked as outside shared geometry).
 4. Sections 01 and 07: the first wasm32 figures (Finding 4).
 5. Section 06, "Stored format" and the tests: the pressure table as built, and what the corpus is.
