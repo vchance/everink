@@ -797,8 +797,9 @@ apply on top of the
 restored state; the client is told with `Notice::RestoreHappened`.
 
 A stroke that was in progress when the connection died is not kept by the server: the preview fades on other screens
-(section 04), and the author's device, which saves a stroke to its outbox every 250 ms while it is being drawn
-(section 07), sends it later as an ordinary finished change (owner decision, 2026-11-12). That holds when the
+(section 04), and the author's device, which saves a stroke to its outbox while it is being drawn (every 250 ms, a
+starting value; section 07), sends it later as an ordinary finished change. That the author's device keeps the
+stroke is the owner's decision of 2026-11-12. That holds when the
 app dies as well as when the connection does. The server never commits a stroke on someone's behalf. A change whose
 author's role was removed while offline is refused with `Reject { code: Forbidden }`; the client
 keeps

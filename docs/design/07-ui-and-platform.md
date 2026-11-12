@@ -749,9 +749,9 @@ Namespaces: `doc` (change-log chunks and snapshots per surface, 03), `outbox` (c
   durable `outbox` at most every 250 ms (a starting value), as an unfinished-stroke record. When the pen lifts the
   core replaces that record with the finished stroke as a normal `Change`, which is sent as usual, or on reconnect.
   If the app or tab dies first, the next start finds the unfinished record, finishes the stroke as if the pen had
-  lifted, and sends it once (the record and the change share one `ClientChangeId`, so a duplicate is refused by 03's
-  duplicate window). At most the last 250 ms of a stroke can be lost. The server never commits a stroke on someone's
-  behalf.
+  lifted, and sends it once (the record and the change share one `ClientChangeId`, so a repeat is refused by 03's
+  per-client resubmission check). At most the last 250 ms of a stroke can be lost. The server never commits a stroke
+  on someone's behalf.
 - **Contract.** All implementations (memory, redb, IndexedDB, OPFS) pass one test suite; memory is also what the
   server's headless core uses.
 - **Sign-out.** `Command::SignOut { force }` first tries to send the outbox. If changes remain unsent, and the
@@ -773,9 +773,12 @@ Everink: **`take_invite_secret()` (section 08's name) removes the fragment from 
 embedding app can call `take_invite_secret()` itself before Everink is mounted; the shell also calls it at mount,
 before any `await`, as a safeguard. `Notification::InviteReceived` is the convenience for a page that mounts Everink
 first: the shell hands it the secret. In both cases the app signs the person in, redeems the invite with Everink
-(08) and issues connect tokens that carry the granted role and the link's id. Size and rate limits (message sizes,
-upload sizes, clipboard payload) are in 08's limits table; this section names them and carries no numbers of its
-own.
+(08) and issues connect tokens that carry the granted role and the link's id. The embedding app has two further
+duties when it supplies tokens, which 08 defines: when it redeems an invite it tells Everink whether the person
+already has access it granted directly (`has_direct`), and the first time it grants direct access to a person who
+came only through a link, the token it issues carries `direct: true`; otherwise Everink refuses that token. Size and
+rate limits (message sizes, upload sizes, clipboard payload) are in 08's limits table; this section names them and
+carries no numbers of its own.
 
 ### The embedding API
 
@@ -796,8 +799,10 @@ pub enum Command {
     SetReadOnly(bool),                       // embedder-side only; can only lower what the token allows
     SetUiVisibility(UiVisibility), SetTheme(Theme), SetLocale(String) /* "en" only at first */, SetShortcuts(ShortcutMap),
     Connect, Disconnect, SignOut { force: bool },
-    Invite(InviteCommand),                   // Create{role, expires, max_redemptions}, TurnOff(LinkId), ChangeLink{link, role, max_redemptions, expires},
-                                             // ListPeople(LinkId), SuspendPeople(LinkId), LiftSuspension(UserId), RemovePerson(UserId), DeleteBy(LinkId)
+    Invite(InviteCommand),                   // Create{role, expires, max_redemptions, label}, TurnOff(LinkId),
+                                             // ChangeLink{link, label, role, max_redemptions, expires}, ListPeople(LinkId),
+                                             // SuspendPeople(LinkId), ResumePeople(LinkId), RemovePerson{link: LinkId, user: UserId},
+                                             // DeleteBy(DeleteFilter)  // DeleteFilter::{ByUser(UserId), ByLink(LinkId)}
     Export(ExportRequest),                   // image of the view or selection, via 06
 }
 #[non_exhaustive]
