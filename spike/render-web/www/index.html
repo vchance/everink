@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>render-web: waiting</title>
+<style>
+  body { font: 13px/1.4 ui-monospace, monospace; margin: 12px; }
+  canvas { width: 480px; height: 270px; border: 1px solid #999; background: #fff; }
+  pre { white-space: pre-wrap; }
+</style>
+<p>Everink spike, slice 3c. <code>?strokes=10000&amp;run=cpu,webgl,webgpu&amp;frames=300&amp;pkg=pkg</code>
+(all optional). Each canvas is 3840 x 2160 pixels, shown small.</p>
+<canvas id="webgl" width="3840" height="2160"></canvas>
+<canvas id="webgpu" width="3840" height="2160"></canvas>
+<pre id="out"></pre>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const asked = Number(q.get('strokes') ?? 10000);
+  const strokes = Number.isInteger(asked) && asked > 0 ? asked : 10000;
+  const runs = (q.get('run') ?? 'cpu,webgl,webgpu').split(',');
+  const frames = Number(q.get('frames') ?? 300);
+  const panning = q.get('pan') !== 'no';
+  const pkg = q.get('pkg') ?? 'pkg';
+  const out = document.getElementById('out');
+  const say = (s) => { out.textContent += s + '\n'; };
+  const spread = (v) => {
+    const s = [...v].sort((a, b) => a - b);
+    const at = (p) => s[Math.min(s.length - 1, Math.floor(s.length * p))];
+    return `median ${at(0.5).toFixed(2)}, 95th ${at(0.95).toFixed(2)}, most ${s[s.length - 1].toFixed(2)}`;
+  };
+  // The view composed from the cached tiles on every animation frame while it pans: the time between frames
+  // as the browser gave them, and the processor time each took in the page.
+  const pan = (name, frame) => new Promise((resolve, reject) => {
+    const between = [], took = [];
+    let last, n = 0, hidden = 0;
+    const seen = () => { hidden += 1; };
+    document.addEventListener('visibilitychange', seen);
+    const step = (t) => {
+      try {
+        if (last !== undefined) between.push(t - last);
+        last = t;
+        took.push(frame(-(n % 256), -((n * 2) % 256)));
+        if (++n <= frames) requestAnimationFrame(step);
+        else {
+          const late = between.filter((d) => d > 1000 / 60 * 1.5).length;
+          document.removeEventListener('visibilitychange', seen);
+          say(`${name}, ${frames} frames of a panning view composed from 40 cached tiles:`);
+          if (hidden) say(`  the page was hidden or shown ${hidden} times meanwhile; the browser gives no frames to a hidden page`);
+          const worst = between.indexOf(Math.max(...between));
+          say(`  between frames, ms: ${spread(between)} (before frame ${worst + 1}); ${late} of ${between.length} frames more than half a frame late`);
+          say(`  processor time in the page for a frame, ms: ${spread(took)}`);
+          resolve();
+        }
+      } catch (e) { reject(e); }
+    };
+    // One frame is let pass first: after the page's thread has been busy, the first frame the browser gives
+    // carries the time at which it was asked for, not the time it runs.
+    requestAnimationFrame(() => requestAnimationFrame(step));
+  });
+  try {
+    const t0 = performance.now();
+    const m = await import(`./${pkg}/render_web.js`);
+    await m.default();
+    window.trial = m;   // for looking at a run by hand, from the console
+    say(`${navigator.userAgent}`);
+    say(`module ${pkg} loaded and compiled in ${(performance.now() - t0).toFixed(0)} ms; ${strokes} strokes; visibility ${document.visibilityState}; clock ${crossOriginIsolated ? 'fine (the page is cross-origin isolated)' : 'rounded to 0.1 ms (the page is not cross-origin isolated)'}; screen ${screen.width} x ${screen.height} at ${devicePixelRatio}`);
+    if (runs.includes('cpu') && m.run_cpu) say(m.run_cpu(strokes));
+    if (runs.includes('webgl') && m.run_webgl) {
+      say(m.run_webgl(document.getElementById('webgl'), strokes));
+      m.webgl_frame(0, 0);
+      say(m.webgl_composed_check());
+      if (panning) await pan('WebGL2', m.webgl_frame);
+    }
+    if (runs.includes('webgpu') && m.run_webgpu) {
+      if (!navigator.gpu) say('WebGPU: this browser has none');
+      else {
+        say(await m.run_webgpu(document.getElementById('webgpu'), strokes));
+        if (panning) await pan('WebGPU', m.webgpu_frame);
+      }
+    }
+    say(m.compare());
+    document.title = 'render-web: done';
+  } catch (e) {
+    say(`FAILED: ${e && e.stack ? e.stack : e}`);
+    document.title = 'render-web: failed';
+  }
+</script>

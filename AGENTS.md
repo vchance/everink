@@ -8,8 +8,8 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
 spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with two crates
-(`crates/everink-core`, `crates/everink-sync`) and two trial packages outside it (`spike/text-trial`,
-`spike/render-trial`). Nothing is released or published.
+(`crates/everink-core`, `crates/everink-sync`) and three trial packages outside it (`spike/text-trial`,
+`spike/render-trial`, `spike/render-web`). Nothing is released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
@@ -37,6 +37,10 @@ cargo fmt --manifest-path spike/text-trial/Cargo.toml --check       # its format
 cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml [strokes]   # the renderer trial (question 10)
 cargo clippy --manifest-path spike/render-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/render-trial/Cargo.toml --check     # its format check
+sh spike/render-web/build.sh                                        # the browser trial: builds into www/, prints wasm sizes
+python3 spike/render-web/serve.py                                   # serves it on 127.0.0.1:8765; open that in a browser (question 10)
+cargo clippy --manifest-path spike/render-web/Cargo.toml --target wasm32-unknown-unknown --features webgpu,webgl,cpu --locked -- -D warnings   # its lint
+cargo fmt --manifest-path spike/render-web/Cargo.toml --check       # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
@@ -69,7 +73,12 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   above do not reach it; it has its own, and its own CI job (`text-trial`).
 - `spike/render-trial`: the trial of `vello_gpu` and `vello_cpu` on a scene of stroke outlines (spike slice 3b).
   A package of its own with its own `Cargo.lock`, for the same reason. It builds `crates/everink-core` in, so a
-  change there runs its CI job (`render-trial`) too. It has no tests; its run checks itself.
+  change there runs its CI job (`render-trial`) too. It has no tests; its run checks itself. Its scene is
+  `src/scene.rs`, which the browser trial builds in as well.
+- `spike/render-web`: the same scene in a browser (spike slice 3c): `vello_gpu` on WebGPU and on WebGL2 and
+  `vello_cpu`, built to `wasm32-unknown-unknown`, with the tiles kept as textures and the view composed from
+  them. Another package of its own with its own `Cargo.lock`. `build.sh` needs `wasm-bindgen` 0.2.130;
+  `www/index.html` is the page. The `render-trial` CI job builds and lints it and does not run it.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
@@ -101,6 +110,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   2026-11-12; the trial stays until the yrs adapter exists.
 - `spike/render-trial` needs a GPU for its `vello_gpu` figures. A GitHub-hosted runner has none, so CI runs only
   its processor renderer. Take renderer figures on a machine with a GPU and name it.
+- `spike/render-web` is run by opening its page in a browser whose window is in front: a browser gives no
+  animation frames to a page it is not showing. Name the browser and the machine with its figures. The
+  `wasm-bindgen` command must be the version `Cargo.toml` pins, or the page fails to load.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions
