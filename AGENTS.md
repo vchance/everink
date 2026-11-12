@@ -21,6 +21,9 @@ cargo test -p everink-core --test positions <name>                  # one test
 cargo clippy --workspace --all-targets --locked -- -D warnings      # lint
 cargo fmt --all --check                                             # format check
 cargo run --release --example bench_positions                       # timing run (spike question 1)
+cargo test -p everink-core --target wasm32-wasip1 --locked          # the core's tests on wasm32, under Node
+cargo run --release --example bench_cut                             # timing run for the cut and the outline (question 4)
+UPDATE_GOLDEN=1 cargo test -p everink-core --test outlines          # rewrite the outlines golden file
 cargo test -p everink-sync --test object_map <name>                 # one test of the object map
 cargo run --release --example bench_object_map [objects] [depth]    # size and timing run (spike question 7)
 cargo test -p everink-sync --test wire_and_pacing <name>            # one test of the wire bytes and the pacing rule
@@ -49,8 +52,10 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `docs/naming.md`: why the name, and the availability check.
 - `docs/spike/`: the spike. `README.md` is the plan: the questions, what settles each, the slices. One results
   file per slice.
-- `crates/everink-core`: positions and the camera (spike slice 1). `tests/golden/positions.txt` is the
-  cross-platform golden file.
+- `crates/everink-core`: positions and the camera (spike slice 1), stroke outlines and the cut (slice 3a).
+  `tests/golden/positions.txt` and `tests/golden/outlines.txt` are the cross-platform golden files. Its
+  `clippy.toml` holds the float rules for geometry every client must compute identically.
+- `tools/wasi-run.mjs`, `.cargo/config.toml`: how a wasm32 test binary is run (under Node's WASI).
 - `crates/everink-sync`: the server-ordered object map (spike slice 2a): objects and their registers, the
   server's room, a client's copy, order keys, packed stroke points, canonical bytes. And the connection (slice
   2c): the bytes of a change on the wire, the pacing rule that keeps cursors prompt during a bulk load, and a
@@ -67,9 +72,14 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - The package names in `README.md` are intentions only. Nothing is published on crates.io or npm; publishing is an
   owner decision.
 - `LICENSE-APACHE` is the unmodified text from apache.org; never reflow or edit it.
-- `tests/golden/positions.txt` was written on aarch64 and is checked on x86-64 by CI. Rewrite it only when the
-  position arithmetic is meant to change, and say so in the PR: a difference between machines is a bug, not a reason
-  to regenerate.
+- `tests/golden/positions.txt` and `tests/golden/outlines.txt` were written on aarch64 and are checked on x86-64
+  and wasm32 by CI. Rewrite one only when the arithmetic it records is meant to change, and say so in the PR: a
+  difference between machines is a bug, not a reason to regenerate.
+- In `crates/everink-core`, `clippy` refuses `mul_add`, `sin`, `cos`, `powf`, float `min`/`max`/`clamp` and their
+  like (`clippy.toml` there). Do not allow one in shared geometry; an allowance is for a display value or a test,
+  with the reason beside it.
+- Only `everink-core` is tested on wasm32. `everink-sync` has an example that opens sockets, which that target
+  does not have.
 - Crates are `publish = false`. Do not remove that; publishing is an owner decision.
 - Timing figures in `docs/spike/` name the machine they were measured on. Do not compare them with a CI runner.
   One exception is stated where it is used: `examples/paced_link.rs` needs Linux to bound what the operating
