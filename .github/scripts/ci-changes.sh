@@ -58,10 +58,11 @@ while IFS= read -r -d '' f; do
     # Row 2. Agent-policy files and the CI configuration: no product job reads them (core D2). Their checks are
     # policy-drift and pr-evidence.
     AGENTS.md|*/AGENTS.md|CLAUDE.md|*/CLAUDE.md|PROFILE.md|.agent-rules/*|.claude/*|.githooks/*|.github/*) ;;
-    # Row 3. The core crate: part of the workspace, and built into the renderer trial as well.
-    crates/everink-core/*) rust=true; render=true ;;
+    # Row 3. The core crate: part of the workspace, and built into the renderer trial as well. The root manifest
+    # with it: the core crate takes its dependencies, edition and lints from there.
+    crates/everink-core/*|Cargo.toml) rust=true; render=true ;;
     # Row 4. The rest of the Rust workspace: the crates and everything the build reads.
-    crates/*|Cargo.toml|Cargo.lock|tools/*) rust=true ;;
+    crates/*|Cargo.lock|tools/*) rust=true ;;
     # Row 5. The text-library trial: a package of its own, outside the workspace.
     spike/text-trial/*) text=true ;;
     # Row 6. The renderer trial: another package of its own.

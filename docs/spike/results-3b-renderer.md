@@ -9,21 +9,22 @@ half (WebGPU and WebGL2, and the size of the wasm build) is part 3c. Pen latency
 
 ## Answer so far
 
-On an Apple M4, redrawing a whole 3840 x 2160 view of 10,000 strokes from nothing takes **78 ms with the
-design's outline and 420 ms with the outline slice 3a built to replace it**. Section 06 names this "the first
-measurement to make" and gives its own reading: 60 ms is acceptable (the view is soft for four frames after a
-large zoom change), 400 ms is not.
+On an Apple M4, redrawing a whole 3840 x 2160 view of 10,000 strokes from nothing takes **61 ms with the design's
+outline and 400 ms with the outline slice 3a built to replace it**, with the processor renderer; the GPU
+renderer takes 78 to 110 ms and 420 to 480 ms. Section 06 names this "the first measurement to make" and gives
+its own reading: 60 ms is acceptable (the view is soft for four frames after a large zoom change), 400 ms is not.
 
 - **The cost is on the processor, not the GPU.** `vello_gpu` prepares every path on one processor thread before
-  the GPU sees it; that preparation is 67% to 92% of the time. Waiting for the GPU is 23 to 30 ms for the whole
-  view.
+  the GPU sees it. That preparation is the same work in both renderers and repeats to within a few percent from
+  run to run; it is most of the time for every outline form. Waiting for the GPU adds 23 to 63 ms for the whole
+  view, and that part varied about twofold between sessions.
 - **The cost follows the number of segments in the outlines**, and slice 3a's robust outline has nine times as
   many as the design's (1,485 a stroke against 165). So the two findings of slice 3 meet: the outline that
   leaves no holes is too heavy for the renderer as it stands, and the one that is light leaves holes.
-- **`vello_cpu` is as fast as `vello_gpu` here**, a little faster in every row. On this evidence the GPU
+- **`vello_cpu` is faster than `vello_gpu` here**, in every row and every session. On this evidence the GPU
   renderer does not buy speed for a scene of many small strokes; it may for other content.
 - **A view that is not changing costs none of this.** The tile cache exists so that panning and a steady view
-  draw cached tiles. That path (composing about 20 textures) is not built or measured here.
+  draw cached tiles. That path (composing the view's cached textures) is not built or measured here.
 
 Nothing here is a browser. WebAssembly has one thread and ran slice 3a's arithmetic three to four times slower
 than native, so the browser figures will be worse; part 3c measures them.
@@ -35,8 +36,10 @@ about 60 to 250 pixels long), makes each stroke's outline with `everink-core`, a
 It then draws the view the way section 06 does: in tiles of 512 x 512 pixels, each tile a scene of the strokes
 that touch it, rendered into a texture. It times that with `vello_gpu` 0.4.0 on the machine's GPU (through
 `wgpu` 30.0.2) and with `vello_cpu` 0.4.0 into a pixel buffer, for three forms of outline. As a check, it reads
-the last tile back from both renderers and requires that they drew on the same share of it to within one pixel
-in a hundred.
+the busiest tile back from both renderers and compares their coverage pixel by pixel: the pixels where the two
+differ by more than an eighth of full coverage must be under two in a hundred of the pixels either drew. In
+every run recorded here they differed on none (0 of about 138,000 drawn pixels of a tile that is half covered).
+The check needs a GPU, so it does not run on CI.
 
 It is outside the workspace, with its own lock file, for the reason the text trial is: the renderer brings in
 about 200 packages.
@@ -45,28 +48,32 @@ about 200 packages.
 
 Machine: Apple M4 (aarch64, macOS; GPU "Apple M4", Metal), native, release build, Rust 1.97.1. Command:
 `cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml [strokes]`. The view is
-3840 x 2160: 40 tiles. Each figure is the median of five renders of the whole view after one that is not
-counted, with the least and the most.
+3840 x 2160: 40 tiles. Within a session each figure is the median of five renders of the whole view after one
+that is not counted. The trial was run in five sessions on the same machine (four by the author, one by the
+reviewer of this slice); the tables give the range of those medians.
 
 ### 10,000 strokes (327 a tile on average)
 
-| Outline | Segments a stroke | `vello_gpu`, whole view | ... a tile | `vello_cpu`, whole view | ... a tile |
+| Outline | Segments a stroke | `vello_cpu`, whole view | ... a tile | `vello_gpu`, whole view | ... a tile |
 |---|---|---|---|---|---|
-| Discs and bands (slice 3a's `build`) | 1,485 | 420 ms (418 to 442) | 10.5 ms | 394 ms (393 to 405) | 9.8 ms |
-| Octagons and bands (this trial only) | 889 | 281 ms (278 to 284) | 7.0 ms | 263 ms (261 to 264) | 6.6 ms |
-| Single path (the design's; leaves holes) | 165 | 78 ms (78 to 79) | 2.0 ms | 61 ms (61 to 61) | 1.5 ms |
+| Discs and bands (slice 3a's `build`) | 1,485 | 394 to 407 ms | 10 ms | 420 to 478 ms | 10.5 to 12 ms |
+| Octagons and bands (this trial only) | 889 | 263 to 271 ms | 6.7 ms | 281 to 325 ms | 7 to 8 ms |
+| Single path (the design's; leaves holes) | 165 | 61 to 64 ms | 1.5 ms | 78 to 110 ms | 2 to 2.8 ms |
 
 Where the time goes, for the whole view:
 
 | Outline | Building the scenes (processor) | `vello_gpu`'s own work on the processor | Waiting for the GPU | `vello_cpu` rasterising |
 |---|---|---|---|---|
-| Discs and bands | 386 ms | 2.9 ms | 30 ms | 5.5 ms |
-| Octagons and bands | 249 ms | 2.1 ms | 30 ms | 5.2 ms |
-| Single path | 53 ms | 2.2 ms | 23 ms | 5.0 ms |
+| Discs and bands | 386 to 412 ms | 2.9 to 5.0 ms | 30 to 63 ms | 5.5 ms |
+| Octagons and bands | 249 to 271 ms | 2.1 to 3.6 ms | 30 to 53 ms | 5.2 ms |
+| Single path | 53 to 58 ms | 2.2 to 3.0 ms | 23 to 60 ms | 5.0 ms |
 
 - **Building the scenes** is the calls that hand each stroke's path to the renderer (`fill_path`). In both
   renderers that call flattens the path and makes its coverage strips on the spot, on the calling thread. It is
   the same code for both, and the same time.
+- **Waiting for the GPU** is the least steady figure. The trial submits each tile and waits for it before the
+  next, so the wait includes that synchronisation as well as the GPU's work; a renderer that submitted several
+  tiles at once would wait less. It was 23 to 30 ms in the first session and 28 to 63 ms in the others.
 - **Octagons and bands** is the same union as slice 3a's outline with straight edges and half the corners, built
   in plain floats inside the trial. It is there to show how the cost moves with the outline's form; it is not a
   builder to keep, and it is not the same on every machine.
@@ -87,23 +94,30 @@ With little to draw, `vello_gpu` has a floor of about half a millisecond a tile 
 ### Against the design's budget
 
 Section 06 budgets, for one frame at 60 Hz: 4 ms of processor time for tile raster (time-boxed) and 3 ms of GPU.
+The figures below are the processor renderer's.
 
 | Outline | One tile of 327 strokes | Tiles in a 4 ms box | Frames to redraw the whole view |
 |---|---|---|---|
-| Discs and bands | 10.5 ms | none whole | 105 (1.7 s) at 4 ms a frame |
-| Octagons and bands | 7.0 ms | none whole | 70 (1.2 s) |
-| Single path | 2.0 ms | 2 | 20 (0.33 s) |
+| Discs and bands | 10 ms | none whole | 100 (1.7 s) at 4 ms a frame |
+| Octagons and bands | 6.7 ms | none whole | 67 (1.1 s) |
+| Single path | 1.5 ms | 2 | 16 (0.27 s) |
 
 The time-box is the design's own and it says "to be tuned"; these are what it gives. A tile cannot be stopped
 half-way in this trial, so a tile that takes longer than the box simply overruns it.
 
+Two things about the comparison with section 06. Its reading of 60 and 400 ms is for a redraw of "about 20
+tiles"; a 3840 x 2160 view is 40 tiles of 512 pixels. The total for 10,000 strokes is still comparable, because
+the cost follows the strokes' segments and not the number of tiles. The per-tile figures are not: with the same
+strokes in half as many tiles, each tile would hold about twice as many and take about twice as long.
+
 ## Findings
 
-1. **The renderer's cost for strokes is processor time that grows with the outline's segments, at 20 to 35
-   nanoseconds a segment.** (420 ms for 10,000 strokes of 1,485 segments, each prepared for 1.3 tiles, is 22;
-   78 ms for strokes of 165 segments is 36.) The GPU
-   is not the limit and a faster one would not help. Section 06's budget table has tile raster at 4 ms of
-   processor and 3 ms of GPU a frame; the measured split is nearer 13 to 1.
+1. **The renderer's cost for strokes is processor time that grows with the outline's segments, at 20 to 25
+   nanoseconds a segment.** (Building the scenes for 10,000 strokes of 1,485 segments, each prepared for 1.3
+   tiles, takes 386 ms: 20 ns a segment. For strokes of 165 segments it takes 53 ms: 25 ns.) The GPU is not the
+   limit and a faster one would not help. Section 06's budget table has tile raster at 4 ms of processor and
+   3 ms of GPU a frame; the measured split of processor to GPU time is about 13 to 1 for discs and bands, 8 to 1
+   for octagons and bands, and 2 to 1 for the single path, on the steadiest session.
 2. **Slice 3a's outline is too heavy as it stands.** It removes the holes of the single path by drawing a
    sixteen-cornered disc of curves at every point. For the renderer that is nine times the segments and five
    times the time. Three ways out, none tried beyond the octagon figure above:
@@ -111,11 +125,11 @@ half-way in this trial, so a tile that takes longer than the box simply overruns
    - discs only where the stroke turns sharply or its width changes, and bands elsewhere;
    - one path for the stroke's outside, found by a true union of the pieces. That is the polygon clipping
      section 06 chose to avoid, and it would have to be the same on every machine.
-3. **`vello_cpu` matches `vello_gpu` on this content.** Section 06 puts the processor renderer last, as "best
+3. **`vello_cpu` beats `vello_gpu` on this content.** Section 06 puts the processor renderer last, as "best
    effort" with a banner. On an M4, for many small strokes, it is the faster of the two, and it needs no GPU
    device, no shader compilation and no fallback ladder. Whether that holds for large fills, images and text,
    on slower processors, and on one thread in a browser is not shown here.
-4. **A full redraw is far from one frame either way.** 78 ms is five frames at 60 Hz and 420 ms is twenty-five.
+4. **A full redraw is far from one frame either way.** 61 ms is four frames at 60 Hz and 400 ms is twenty-four.
    The design does not ask for a redraw in a frame; it asks that redraws be rare (the tile cache) and spread
    (the time-box). Both parts are still to be built and measured.
 5. **The scene building is one thread, and tiles are independent.** Natively, several tiles could be prepared at
@@ -125,7 +139,7 @@ half-way in this trial, so a tile that takes longer than the box simply overruns
 ## What this part does not show
 
 - **A browser.** WebGPU, WebGL2, and the size of the wasm build: part 3c.
-- **The tile cache and the compose pass:** drawing about 20 cached tiles as textures, invalidation, eviction,
+- **The tile cache and the compose pass:** drawing the view's cached tiles as textures, invalidation, eviction,
   the cross-fade. The claim that a static scene costs "well under 1 ms" is still an estimate.
 - **Frame rate while panning or zooming.** "10,000 objects at 60 frames a second" depends on the cache; what is
   measured is the redraw the cache avoids.
@@ -134,7 +148,8 @@ half-way in this trial, so a tile that takes longer than the box simply overruns
 - **Moving many lifted objects**, which section 06 calls "the frame-rate case the spike must measure".
 - **Threads**, and `vello_cpu`'s own multi-threaded mode.
 - **A GitHub-hosted runner has no GPU.** CI runs the trial with the processor renderer only, at 2,000 strokes,
-  to keep it building; its figures are not used.
+  to keep it building; its figures are not used, and the comparison of the two renderers does not run there. A
+  software GPU device, if a runner ever has one, is reported and not used.
 
 ## Where the code departs from the design
 
@@ -144,8 +159,9 @@ half-way in this trial, so a tile that takes longer than the box simply overruns
 
 ## What the design should change
 
-1. Section 06, "Performance budget": tile raster is processor time, 20 to 35 ns a segment, and the GPU share is
-   small; replace the 4 ms and 3 ms split with these figures (Finding 1).
+1. Section 06, "Performance budget": tile raster is processor time, 20 to 25 ns a segment, and the GPU share is
+   smaller and less steady; replace the 4 ms and 3 ms split with these figures (Finding 1), and say how many
+   tiles a view is (40 at 3840 x 2160, not about 20).
 2. Section 06, "Outline algorithm": with slice 3a's correction, choose an outline form by what it costs the
    renderer as well as by whether it leaves holes (Finding 2).
 3. Section 06, the backend order: say that the processor renderer matched the GPU one natively for strokes, and

@@ -238,6 +238,12 @@ fn gpu() -> Option<Gpu> {
     }))
     .ok()?;
     let info = adapter.get_info();
+    // A software device (lavapipe, llvmpipe) is not a GPU: its figures would be the processor's under another
+    // name. It is reported and not used.
+    if info.device_type == wgpu::DeviceType::Cpu {
+        println!("GPU: only a software device ({}); not used", info.name);
+        return None;
+    }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("render-trial"),
         required_features: wgpu::Features::empty(),
@@ -253,12 +259,16 @@ fn gpu() -> Option<Gpu> {
 
 /// Renders the whole view in tiles with `vello_gpu`. Returns, per run, the milliseconds for all tiles split
 /// into building the scenes, the renderer's own work on the processor, and waiting for the GPU to finish; and
-/// the share of the first tile's pixels that were drawn on, as a check that something was.
+/// the coverage (alpha) of every pixel of tile number `check` as the last run drew it.
+///
+/// Each tile is submitted and waited for on its own, so "waiting for the GPU" includes the cost of that
+/// synchronisation as well as the GPU's work.
 fn gpu_tiles(
     gpu: &Gpu,
     objects: &[Object],
     tiles: &[((u32, u32), Vec<usize>)],
-) -> (Vec<[f64; 3]>, f64) {
+    check: usize,
+) -> (Vec<[f64; 3]>, Vec<u8>) {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("tile"),
         size: wgpu::Extent3d {
@@ -289,9 +299,10 @@ fn gpu_tiles(
     });
     let mut scene = vello_gpu::Scene::new(TILE, TILE);
     let mut runs = Vec::new();
-    for _ in 0..RUNS {
+    let mut checked = Vec::new();
+    for run in 0..RUNS {
         let mut ms = [0.0f64; 3];
-        for ((tx, ty), touching) in tiles {
+        for (index, ((tx, ty), touching)) in tiles.iter().enumerate() {
             let t = Instant::now();
             scene.reset();
             scene.set_transform(Affine::translate((
@@ -331,14 +342,17 @@ fn gpu_tiles(
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("the GPU finishes");
             ms[2] += t.elapsed().as_secs_f64() * 1e3;
+            if run + 1 == RUNS && index == check {
+                checked = read_alpha(gpu, &texture);
+            }
         }
         runs.push(ms);
     }
-    (runs, drawn_share(gpu, &texture))
+    (runs, checked)
 }
 
-/// Reads the tile texture back and returns the share of its pixels that are not empty.
-fn drawn_share(gpu: &Gpu, texture: &wgpu::Texture) -> f64 {
+/// Reads the tile texture back and returns the alpha of each pixel, row by row.
+fn read_alpha(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u8> {
     let row = (u32::from(TILE) * 4).next_multiple_of(256);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
@@ -380,24 +394,27 @@ fn drawn_share(gpu: &Gpu, texture: &wgpu::Texture) -> f64 {
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("the GPU finishes");
     let data = buffer.slice(..).get_mapped_range().expect("a mapped range");
-    let drawn = data
-        .chunks_exact(row as usize)
+    data.chunks_exact(row as usize)
         .flat_map(|r| r[..usize::from(TILE) * 4].chunks_exact(4))
-        .filter(|p| p[3] != 0)
-        .count();
-    drawn as f64 / (f64::from(TILE) * f64::from(TILE))
+        .map(|p| p[3])
+        .collect()
 }
 
 /// The same with `vello_cpu`, into a pixel buffer. Returns the milliseconds per run for all tiles, split into
-/// building the scenes and rasterising, and the drawn share of the last tile.
-fn cpu_tiles(objects: &[Object], tiles: &[((u32, u32), Vec<usize>)]) -> (Vec<[f64; 2]>, f64) {
+/// building the scenes and rasterising, and the coverage (alpha) of every pixel of tile number `check`.
+fn cpu_tiles(
+    objects: &[Object],
+    tiles: &[((u32, u32), Vec<usize>)],
+    check: usize,
+) -> (Vec<[f64; 2]>, Vec<u8>) {
     let mut ctx = vello_cpu::RenderContext::new(TILE, TILE);
     let mut resources = vello_cpu::Resources::new();
     let mut pixmap = Pixmap::new(TILE, TILE);
     let mut runs = Vec::new();
-    for _ in 0..RUNS {
+    let mut checked = Vec::new();
+    for run in 0..RUNS {
         let mut ms = [0.0f64; 2];
-        for ((tx, ty), touching) in tiles {
+        for (index, ((tx, ty), touching)) in tiles.iter().enumerate() {
             let t = Instant::now();
             ctx.reset();
             ctx.set_transform(Affine::translate((
@@ -413,15 +430,22 @@ fn cpu_tiles(objects: &[Object], tiles: &[((u32, u32), Vec<usize>)]) -> (Vec<[f6
             ctx.flush();
             ctx.render(&mut pixmap, &mut resources);
             ms[1] += t.elapsed().as_secs_f64() * 1e3;
+            if run + 1 == RUNS && index == check {
+                checked = pixmap
+                    .data_as_u8_slice()
+                    .chunks_exact(4)
+                    .map(|p| p[3])
+                    .collect();
+            }
         }
         runs.push(ms);
     }
-    let drawn = pixmap
-        .data_as_u8_slice()
-        .chunks_exact(4)
-        .filter(|p| p[3] != 0)
-        .count();
-    (runs, drawn as f64 / (f64::from(TILE) * f64::from(TILE)))
+    (runs, checked)
+}
+
+/// The share of a tile's pixels that are drawn on.
+fn drawn_share(alpha: &[u8]) -> f64 {
+    alpha.iter().filter(|a| **a != 0).count() as f64 / alpha.len() as f64
 }
 
 fn main() {
@@ -458,10 +482,15 @@ fn main() {
             segments / count,
             tiles.len()
         );
-        let mut gpu_drawn = None;
+        // The tile the two renderers are compared on: the one the most strokes touch.
+        let check = (0..tiles.len())
+            .max_by_key(|i| tiles[*i].1.len())
+            .expect("a view has tiles");
+        let mut gpu_alpha = None;
         if let Some(g) = &gpu {
-            let (runs, drawn) = gpu_tiles(g, &objects, &tiles);
-            gpu_drawn = Some(drawn);
+            let (runs, alpha) = gpu_tiles(g, &objects, &tiles, check);
+            let drawn = drawn_share(&alpha);
+            gpu_alpha = Some(alpha);
             let total: Vec<f64> = runs[1..].iter().map(|r| r[0] + r[1] + r[2]).collect();
             let (med, min, max) = spread(total);
             let part = |i: usize| spread(runs[1..].iter().map(|r| r[i]).collect()).0;
@@ -471,7 +500,7 @@ fn main() {
                 tiles.len() as f64 * 1000.0 / med
             );
             println!(
-                "           of which building the scenes {:.1} ms, the renderer on the processor {:.1} ms, waiting for the GPU {:.1} ms; {:.0}% of the last tile drawn on",
+                "           of which building the scenes {:.1} ms, the renderer on the processor {:.1} ms, waiting for the GPU {:.1} ms; {:.0}% of the busiest tile drawn on",
                 part(0),
                 part(1),
                 part(2),
@@ -494,7 +523,8 @@ fn main() {
         println!(
             "building one scene of the whole view, not in tiles: {med:.1} ms (min {min:.1}, max {max:.1})"
         );
-        let (runs, drawn) = cpu_tiles(&objects, &tiles);
+        let (runs, alpha) = cpu_tiles(&objects, &tiles, check);
+        let drawn = drawn_share(&alpha);
         let total: Vec<f64> = runs[1..].iter().map(|r| r[0] + r[1]).collect();
         let (med, min, max) = spread(total);
         let part = |i: usize| spread(runs[1..].iter().map(|r| r[i]).collect()).0;
@@ -504,21 +534,42 @@ fn main() {
             tiles.len() as f64 * 1000.0 / med
         );
         println!(
-            "           of which building the scenes {:.1} ms, rasterising {:.1} ms; {:.0}% of the last tile drawn on",
+            "           of which building the scenes {:.1} ms, rasterising {:.1} ms; {:.0}% of the busiest tile drawn on",
             part(0),
             part(1),
             drawn * 100.0
         );
-        // A check that the runs drew something, and the same thing: the share of the last tile that is drawn on
-        // must not be nothing, and the two renderers must agree on it to within one pixel in a hundred.
-        assert!(drawn > 0.0, "vello_cpu drew nothing on the last tile");
-        if let Some(g) = gpu_drawn {
-            assert!(
-                (g - drawn).abs() < 0.01,
-                "the renderers disagree: vello_gpu drew on {:.2}% of the last tile, vello_cpu on {:.2}%",
-                g * 100.0,
-                drawn * 100.0
-            );
+        // A check that the runs drew something, and the same thing. The busiest tile must be drawn on; and where
+        // there is a GPU, the two renderers' coverage of it is compared pixel by pixel: the pixels where their
+        // alpha differs by more than an eighth of full must be under two in a hundred of the pixels either drew.
+        // (The edges of shapes differ a little between two rasterisers; a missing shape would differ a lot.)
+        assert!(
+            drawn > 0.05,
+            "vello_cpu drew on only {:.2}% of the busiest tile",
+            drawn * 100.0
+        );
+        match &gpu_alpha {
+            Some(g) => {
+                let either = g
+                    .iter()
+                    .zip(&alpha)
+                    .filter(|(a, b)| **a != 0 || **b != 0)
+                    .count();
+                let differ = g
+                    .iter()
+                    .zip(&alpha)
+                    .filter(|(a, b)| a.abs_diff(**b) > 32)
+                    .count();
+                println!(
+                    "check: on the busiest tile the two renderers differ on {differ} of the {either} pixels either drew ({:.2}%)",
+                    differ as f64 * 100.0 / either as f64
+                );
+                assert!(
+                    differ * 50 < either,
+                    "the renderers disagree on {differ} of {either} drawn pixels of the busiest tile"
+                );
+            }
+            None => println!("check: no GPU, so the two renderers are not compared"),
         }
     }
 }
