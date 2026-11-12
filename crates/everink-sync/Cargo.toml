@@ -1,0 +1,15 @@
+[package]
+name = "everink-sync"
+version = "0.0.0"
+description = "Everink sync: the server-ordered object map (spike)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+everink-core = { path = "../everink-core" }
+
+[lints]
+workspace = true
