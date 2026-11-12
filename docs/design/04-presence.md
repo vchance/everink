@@ -138,9 +138,12 @@ Section 03 chooses **A** for the first version. I agree on cost, not on delay: A
 authenticate, rate-limit, time out and close (sections 03, 07 and 08 all describe one socket), and needs only a
 writer that serves presence first. What it gives up is quantified under "Transport details": with section 03's
 adaptive unsent limit (20 ms of drain) a cursor message waits behind bulk data for about 40 ms at most at any link
-speed above about 1.6 Mbit/s, and more below that. **B** is the fallback and has a trigger: if in the spike the
+speed above about 1.6 Mbit/s, and more below that (the spike measured at most 39 ms from 2 Mbit/s up, in a model
+of the connection; see "Transport details"). **B** is the fallback and has a trigger: if in the spike the
 cursor lag during a bulk view fill still exceeds the target (200 ms end to end, see "Smoothing on the receiver")
-with that rule, on links the product must support, presence moves to a second socket. **C** is not enough alone,
+with that rule, on links the product must support, presence moves to a second socket. The spike did not reach the
+trigger (model and loopback sockets only), and the owner will decide about the fallback after a measurement on a
+real network (2026-11-12); until then the fallback stays in the design as written. **C** is not enough alone,
 because networks that block UDP need the WebSocket path anyway; it is added behind the same message format when
 measurement shows that TCP stalls matter. **D** is rejected: it is the heaviest to run, needs signaling and TURN
 servers, and its only benefit over C is older-browser reach that C already has at 92 percent.
@@ -873,16 +876,24 @@ The who list is a panel (section 07); its data comes from here.
   others: control and `Ack`, `Apply`, bulk view fill). The server never queues a backlog of presence.
 - **Pacing of bulk data (owned by 03).** The server keeps a connection's unsent bytes below `U`, the amount the
   connection drains in about 20 ms, clamped to 4 KiB to 64 KiB (`TCP_NOTSENT_LOWAT` or the writer's own count; the
-  server estimates the drain rate from how fast its writes complete). Bulk data (section 03's `Enter` chunks and any
-  other large message) is written in chunks no larger than `U` and never larger than 16 KiB, and a chunk is written
-  only while unsent bytes are under `U`. Presence is written whenever the socket accepts it, ignoring `U`, but its
+  server estimates the drain rate from how fast its writes complete). Bounding the system's own unsent bytes
+  (`TCP_NOTSENT_LOWAT`) is required for the rule to mean anything, and only the Linux and Android wrapper is safe
+  today; the limit starts at the 4 KiB floor until the first estimate (section 03). Bulk data (section 03's `Enter`
+  chunks and any other large message) is written in chunks no larger than `U` and never larger than 16 KiB, and a
+  chunk is written only while unsent bytes are under `U`. Presence is written whenever the socket accepts it, ignoring `U`, but its
   queue holds one snapshot per receiver at most. 20 ms is the first value the spike tries.
 - **Worst-case wait behind bulk data.** A presence message written now can wait behind every unsent byte plus the
   chunk being written: at most `A = U + chunk`, and the wait is `A / link speed` on the receiver's bottleneck link.
   Where `U` is not clamped, `U / speed` is 20 ms and `chunk / speed` is at most 20 ms, so the wait is **at most
   about 40 ms at any link speed** between the 4 KiB floor (about 1.6 Mbit/s) and the 16 KiB chunk limit (about 6.5
-  Mbit/s); above that the chunk limit and the 64 KiB cap make it smaller. The wait in milliseconds, with two older
-  rules for comparison:
+  Mbit/s); above that the chunk limit and the 64 KiB cap make it smaller. The first table is the arithmetic of this
+  section, written before the spike. The second is what the spike measured: a model of the connection in made-up
+  time (`cargo run --release --example sim_paced_link`; the 95th percentile of the time from a cursor message being
+  made to its last byte being sent, after the first second, bulk data sent without a pause, a cursor arriving 30
+  times a second), and, below it, the same pacer over real sockets on Linux. The spike's results are in
+  `../spike/results-2c-paced-connection.md`.
+
+  The wait in milliseconds, by arithmetic, with two older rules for comparison:
 
   | Downlink | 0.25 Mbit/s | 0.5 | 1 | 2 | 5 | 10 | 20 | 50 | 100 |
   |---|---|---|---|---|---|---|---|---|---|
@@ -890,20 +901,58 @@ The who list is a panel (section 07); its data comes from here.
   | Adaptive, 40 ms drain (comparison only) | 262 | 131 | 80 | 80 | 66 | 53 | 33 | 13 | 6.6 |
   | Old fixed 64 KiB limit (comparison only) | 2621 | 1311 | 655 | 328 | 131 | 66 | 33 | 13 | 6.6 |
 
+  The wait in milliseconds, measured in the model (95th percentile; the system holds up to the limit of unsent
+  bytes, as a real server does):
+
+  | Downlink | 0.25 Mbit/s | 0.5 | 1 | 2 | 5 | 10 | 20 | 50 | 100 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | **20 ms rule** | 257 | 131 | 64 | 39 | 39 | 32 | 26 | 13 | 7 |
+  | 40 ms rule | 257 | 131 | 78 | 78 | 65 | 52 | 33 | 13 | 7 |
+  | Fixed 64 KiB | 2,098 | 1,050 | 524 | 263 | 105 | 53 | 27 | 11 | 6 |
+
+  The model reproduces the arithmetic within 6 ms at every speed. Over real sockets on Linux (a GitHub-hosted
+  x86-64 runner, loopback, a relay at the link's speed, 30.6 MB to send), 95th percentile, the middle of five runs:
+
+  | Downlink | 1 Mbit/s | 5 | 20 |
+  |---|---|---|---|
+  | **20 ms rule** | 135 | 52 | 29 |
+  | Fixed 64 KiB | 721 | 143 | 35 |
+  | Fixed 1 MiB (no rule) | no cursor arrived | 1,715 | 429 |
+
+  These are the model's figures plus what the test's own socket buffers hold, about 10 KiB (82 ms at 1 Mbit/s, 16 ms
+  at 5, 4 ms at 20), which a real path does not have; without it 5 Mbit/s is inside the budget. macOS on the
+  loopback interface held 478 KiB at 1 Mbit/s and gave 2.3 s; see section 03 (the system's unsent bytes must be
+  bounded). Without the rule a cursor waits for the whole send buffer: seconds on a slow link.
+
   Below the floor the bound is lost: with `U` = 4 KiB and a 4 KiB chunk, `A` = 8 KiB = 65,536 bits, so the wait is
   262 ms at 0.25 Mbit/s, 131 ms at 0.5 and 655 ms at 0.1. The floor exists so a chunk is never too small to be worth
   a frame header and a flush. On links below about 1.6 Mbit/s cursors lag during a bulk load; there the server sends
   fewer objects first by raising `eff_min_px` (section 03), which shortens the load.
 - **What the bound means for the 200 ms target.** At RTT 60 ms and 30 Hz the cursor already takes about 153 ms
-  (previous section), leaving 47 ms for queueing. The 40 ms bound fits: the target holds during a bulk load above
-  about 1.4 Mbit/s (below that the 4 KiB floor dominates: `65,536 bit / 0.047 s`; the 1.6 Mbit/s of the previous
+  (previous section), leaving 47 ms for queueing. The 40 ms bound fits: the spike measured at most 39 ms, so **the
+  200 ms target is met from about 2 Mbit/s up and missed at 1 Mbit/s** (64 ms in the model, about 217 ms for the
+  whole path, and 135 ms over loopback sockets). By the arithmetic the target holds during a bulk load above
+  about 1.4 Mbit/s; the spike measured at 1 and 2 Mbit/s and not between, so "from about 2 Mbit/s" is what was
+  measured and 1.4 is where the arithmetic puts the edge (below that the 4 KiB floor dominates: `65,536 bit / 0.047 s`; the 1.6 Mbit/s of the previous
   paragraph is where the floor starts to apply). The 40 ms drain rule would give 80 ms and hold the target only
   above 13.9 Mbit/s, which is why 20 ms was chosen. The cost of a smaller unsent queue matters for throughput only
   if the drain-rate estimate is poor, since the congestion window, not the unsent counter, governs how much is in
   flight. Bytes sent but not yet acknowledged add delay only if a buffer in the network fills (bufferbloat); I did
   not model or measure that (unverified). These are worst cases: the average wait behind a chunk in progress is
   about `U + chunk / 2`, and outside bulk loads the wait is zero.
-- **Fallback trigger: a second WebSocket.** If in the spike the cursor lag during a bulk load still exceeds 200 ms
+- **What would bring 1 Mbit/s inside the target.** Counting every unsent byte in one place, the writer's and the
+  system's together ("one queue" in the spike), gave 33 ms in place of 64 at 1 Mbit/s in the model, which is the
+  difference between missing the 200 ms target there and meeting it. It needs the system's own count of unsent
+  bytes, which this design does not use, and it is not adopted here; the owner decides what to do about 1 Mbit/s
+  after a real-network test (question 4). The limit must also start at the floor, 4 KiB, until
+  the first estimate of the link (section 03): at 16 KiB the first cursors waited 230 ms at 1 Mbit/s.
+- **Fallback trigger: a second WebSocket.** **Status (2026-11-12): the trigger was not reached in the spike, and
+  the owner will decide after a test on a real network.** The spike measured a model and loopback sockets, which have
+  no loss, no congestion control worth the name and no other traffic. In the model the lag does not pass 200 ms from
+  2 Mbit/s up, so the trigger below was not met above the floor; the 200 ms target is met from about 2 Mbit/s up and
+  missed at 1 Mbit/s. Whether to drop the fallback, and whether the target holds at 1 Mbit/s, wait for a
+  real-network measurement. The fallback and the stated target stay as written. If in the spike the cursor lag
+  during a bulk load still exceeds 200 ms
   with the 20 ms rule on a link above the floor (about 1.6 Mbit/s) that the product must support, presence moves to
   its own socket: path `/presence` on the same host, authenticated by the same session credential as the sync
   socket, with its own queue and no bulk data on it. The message format does not change; only the framing around
@@ -953,7 +1002,7 @@ The who list is a panel (section 07); its data comes from here.
 | The client falls behind | `inflight_bytes` rises, the server skips snapshots, the rate drops; ink thins. |
 | The connection drops (one socket) | Sync and presence go together. The client reconnects and sends `PresenceHello` with `resume`; others see the cursor grey after 6 s and removed after 30 s if it does not return; if it returns within 10 min it has the same color. |
 | Fallback only: presence socket drops but the sync socket lives, or the reverse | A half-connected session: the server treats it as Silent for routing after 6 s without a presence message (or without a view update) and the client reconnects the missing socket. |
-| A bulk load on a slow link | Cursors lag by the wait in the transport table, up to about 40 ms above 1.6 Mbit/s with the adaptive limit and more below the 4 KiB floor (262 ms at 0.25 Mbit/s); interpolation extrapolates and eases; the lag ends with the load. |
+| A bulk load on a slow link | Cursors lag by the wait in the transport table, up to about 40 ms above 1.6 Mbit/s with the adaptive limit (39 ms measured in the model from 2 Mbit/s up) and more below the 4 KiB floor (262 ms at 0.25 Mbit/s by arithmetic, 257 ms in the model); interpolation extrapolates and eases; the lag ends with the load. |
 | Room process restarts | Presence starts empty. Clients reconnect and send `PresenceHello` and `Pointer`; cursors reappear in under 2 s. Colors may change. |
 | Many cursors in one place | Cap, `Omitted` count, 50-banner limit. |
 | Two tabs of one person | Same color, one list entry, two cursors. |
@@ -987,7 +1036,7 @@ The who list is a panel (section 07); its data comes from here.
 | Back-pressure | A receiver that reads slowly: the server's queue for it never holds more than one snapshot of unsent presence |
 | Jump and follow | A session with `locatable` off refuses both and a refusal looks like a departed person; the jump rate limit holds; the target receives the follow notice; a follower gets the followed cursor outside the region and cap; manual pan ends a follow; no message to another client contains a view that was not requested (scan of all outputs, shared with 08's N87) |
 | Drag preview | A scripted dragger and viewer: the viewer's preview follows `Move`; after the `Set` arrives exactly one of preview and object is drawn in each frame; a lost `End` times out in 2 s; nothing from a preview reaches the document |
-| One socket keeps cursors timely | Throttled-socket test with a 50 MB view fill running: the wait is measured at 0.25, 1, 5, 20 and 100 Mbit/s with the 20 ms drain rule (and, for comparison, 40 ms) against the transport table (bound about 40 ms above the 4 KiB floor); cursor lag stays under 200 ms where the table says it can; the result decides whether the second-socket fallback is needed |
+| One socket keeps cursors timely | Throttled-socket test with a 50 MB view fill running: the wait is measured at 0.25, 1, 5, 20 and 100 Mbit/s with the 20 ms drain rule (and, for comparison, 40 ms) against the transport table (bound about 40 ms above the 4 KiB floor); cursor lag stays under 200 ms where the table says it can; the result decides whether the second-socket fallback is needed. The spike ran a model at 0.25 to 100 Mbit/s and loopback sockets at 1, 5 and 20 Mbit/s (`../spike/results-2c-paced-connection.md`); the decision waits for a real network |
 | A session sends at most about 30 presence messages a second | Drive a drawing session and a dragging session at full rate: the count stays under 60 a second (08's limit) |
 | Deep positions | A cursor at depth 100 and at the cap: the message decodes, the budget formula uses the real size, and an over-cap position is rejected from the raw bytes |
 | Limits | Rate-limit, size, non-finite number and impossible-position cases are dropped and counted |
@@ -1072,6 +1121,10 @@ come from crates.io on 2026-11-11; their health beyond the update date was not e
 3. **Presence cost.** The default budgets (32 KB/s per receiver, 100 Mbit/s per room) are operating costs for
    whoever runs the server. Are they right as defaults for the first version? At 50 people the worst case needs 22
    KB/s per receiver and 8.8 Mbit/s per room, far below both.
+4. **The second connection and the 1 Mbit/s target.** The owner will decide after a measurement on a real network
+   (2026-11-12): whether to keep the second-WebSocket fallback for presence, and whether the 200 ms cursor target
+   is to hold at 1 Mbit/s. The spike measured a model and loopback sockets only; the target is met from about
+   2 Mbit/s up and missed at 1 Mbit/s there (`../spike/results-2c-paced-connection.md`).
 
 ## Sources
 
@@ -1097,6 +1150,12 @@ come from crates.io on 2026-11-11; their health beyond the update date was not e
   https://crates.io/crates/unicode-security
 - wtransport documentation: https://docs.rs/wtransport/latest/wtransport/
 - Okabe and Ito, Color Universal Design: https://jfly.uni-koeln.de/color/
+
+Spike results used above (in this repository): `../spike/results-2c-paced-connection.md`.
+
+Settled by the spike: the queueing delay of a cursor behind a bulk load (model and loopback sockets on Linux and
+macOS, not a real network); the 20 ms rule compared with a 40 ms rule and fixed limits; that a 40 ms rule buys
+nothing. Still unverified: any real network, WebSocket and TLS framing, and many connections.
 
 Claims left unverified, collected: Valve's 100 ms default interpolation; tldraw's presence rate and timeouts; Yjs's
 15 s renewal; Liveblocks presence size limit; Figma cursor-chat length for FigJam; Miro figures (community

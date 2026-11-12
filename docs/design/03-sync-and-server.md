@@ -453,6 +453,21 @@ kilobytes to a few hundred (100,000 clustered objects compress to well under 100
 8. Finish with `ViewEnd { view_id, up_to: Seq, eff_min_px, far_dropped, pictures, more }`. After it, the client has
    every object in `N` as of `up_to` and receives `Apply` for later changes.
 
+**A change can overtake the object it writes to.** The fill travels in the bulk stream, and accepted changes travel
+in their own stream and go first, so while a view is being filled a change for an object in `pending_enter` can
+reach the client before the object. A client drops a write to an object it does not hold (the object will arrive
+whole), and during a fill that loses the write: the object that arrives afterwards is as it was when the fill began.
+The spike found this when a reviewer made the two streams interleave in a test (`../spike/results-2c-paced-connection.md`,
+Finding 1). The rule, as built and tested on the client: **between the start and the end of a fill, a copy keeps
+writes to objects it does not hold and merges them when the object arrives.** The stamps decide, so a write that the
+object already contains changes nothing. A fill is named by its `view_id`; where a new `SetView` arrives before the
+`ViewEnd` of the last, the held writes must be kept until no open fill can still bring their object (the spike
+tested one fill at a time; overlapping fills need a fill id on the writes, which the prototype does not have).
+Two server-side rules would also work and are not built: write each object's bytes when its chunk is taken and not
+when it is queued, with the server holding back changes to an object that is partly sent; or send a change for an
+object in the view only after the object. Without this rule, in the spike's test of a late joiner on a slow
+connection, the second client ended with objects that differed from the room's.
+
 **Budgets.** A view that would return more than `max_view_objects` or `max_view_bytes` is cut after the objects are
 ordered biggest first. The numbers (50,000 objects, 64 MiB) are in section 08's table; the reasoning is here: a
 screen shows a few thousand objects at most, 50,000 is an order of magnitude above that, and 64 MiB is what a client
@@ -559,7 +574,11 @@ the room answers `Welcome`.
 The frame length is checked against section 08's cap before the body is read (the WebSocket library is configured
 with that maximum, so an oversized frame is refused while its header is parsed; the exact option names are
 unverified). **Bulk data is written in chunks of at most 16 KiB**, so that a cursor update waits behind at most one
-chunk. Object bodies and changes inside messages are `Bytes` produced by section 02, optionally LZ4-compressed
+chunk. A chunk cuts a **byte stream**, not a message: the bulk stream and the stream of accepted changes are each
+cut into chunks that fit under the limit below, with records inside them that the receiver puts back together
+(the spike's `wire` and `pacing` modules, `../spike/results-2c-paced-connection.md`, "Where the code departs from
+the design", 1). Otherwise a message larger than the limit could never be sent on a slow link. In the prototype a
+frame is a class, a length and a payload on plain TCP. Object bodies and changes inside messages are `Bytes` produced by section 02, optionally LZ4-compressed
 (`lz4_flex`) when above 1 KiB, with a flag byte. `permessage-deflate` is not negotiated (08).
 
 **Presence class.** `Presence(Bytes)` is opaque to this section; section 04 defines the payload. A presence payload
@@ -586,7 +605,10 @@ with a `base: Position`. A body is 02's canonical `Doc::body` bytes; on the wire
 `Position` inside it (the anchor of an `Xform`) with 01's `Position::encode_delta(base, out)`, a few bytes when the
 two are on nearby lattice points, and the receiver restores it with `Position::decode_delta(base, input)`, which is
 exact, so the canonical bytes come back identical. 01's encoding falls back to a long difference when positions are
-far apart and still never costs more than a whole position plus a few bytes. The server picks the base per chunk
+far apart and still never costs more than a whole position plus a few bytes. Deltas are needed for speed as well as
+for size: encoding a whole position at 1,000 levels took 1.6 µs in the spike, and an object at that depth takes
+about 3,840 bytes of server memory against 1,325 at depth 0 (`../spike/results-1-positions.md`,
+`../spike/results-2a-object-map.md`). The server picks the base per chunk
 (the centre of the view for `Enter`; the first effect for `Apply`). Incoming positions are checked with
 `check_cap_bytes` on the raw bytes before any number is built.
 
@@ -704,9 +726,21 @@ change. Presence and `Pong` are never held for the commit.
 keeps, per `ClientId`, the highest `ClientChangeId` it has logged and the `(ClientChangeId, Seq)` pairs of the
 changes that client has not yet confirmed receiving an `Ack` for. Every `Submit` and every `Hello` carries
 `acked_upto`, the highest id the client has seen acknowledged, and the room drops the pairs at or below it, so
-the list holds at most the unacknowledged budget in section 08's table and is normally a handful. A frame with `id
-<= highest` is
-not applied again and is answered with its original pair in an `Ack`. The map is saved in every snapshot and
+the list holds at most the unacknowledged budget in section 08's table and is normally a handful. The rule for a frame, by its id:
+
+- `id <= highest` and its pair is still held (not yet confirmed by `acked_upto`): not applied again, answered
+  with its own pair in an `Ack`.
+- `id <= highest` and its pair is no longer held: not applied again, answered with the newest pair of that client.
+  The client has already confirmed it, so it needs only to know the change is not pending.
+- `id > highest`: checked and, if accepted, applied.
+
+Only an accepted change raises `highest`. A refused change is therefore not remembered: sent again with the same
+id it is checked again while no later change of that client has been accepted, so a change refused for a passing
+reason (a parent that was deleted and is then restored) can succeed on a resend. Once a later change has been
+accepted, the refused id is below `highest` and a resend of it is answered as a duplicate and never applied; a
+client that still wants the change sends it again under a new id. The spike's room kept only the highest
+`ClientChangeId` and its pair, which is the second case for every resend
+(`../spike/results-2a-object-map.md`, "Smaller points"). The map is saved in every snapshot and
 rebuilt from the log tail, so it survives a crash. It is trimmed for clients idle 30 days. An idle client costs
 about 40 bytes (4 MB for 100,000 devices); a client that vanished with a full window of unconfirmed changes costs
 up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so at once (an estimate).
@@ -726,8 +760,9 @@ up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so
   is written as soon as the reader task sees `Ping`, without passing through the room actor or the change queue |
   | A | `Apply`, `BlobStatus`, `PictureUpdate` | Never dropped; coalesced under pressure (below) |
   | B | `Enter`, `ViewEnd`, `FetchResult`, `Located`, `Versions` | Bulk; chunks of at most the current unsent limit
-  and never over 16 KiB; lowest priority but never starved: after every 8 chunks of A or B one chunk of the other is
-  served |
+  and never over 16 KiB; lowest priority but never starved: A goes before B, and after 8 chunks of A in a row one
+  chunk of B is served (the spike's rule: bulk gets one chunk in nine when both are long, so an accepted change
+  waits behind at most one bulk chunk) |
 
 - *Pacing, adaptive.* The rule: **keep the connection's unsent bytes below what it drains in about 20 ms, clamped
   to between 4 KiB and 64 KiB, and write bulk data in chunks no larger than that limit and never over 16 KiB.** A
@@ -736,15 +771,42 @@ up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so
   the 47 ms left of the 200 ms cursor budget. The 4 KiB floor takes over below about 1.6 Mbit/s (4 KiB drains in
   20 ms at 1.64 Mbit/s); there the wait is two floors' drain time, 66 ms at 1 Mbit/s and 660 ms at 100 kbit/s.
   On such links the server sends fewer objects first by raising `eff_min_px` for the opening fill, so less bulk
-  data is queued. 20 ms is the first value the spike tries. The bound counts bytes unsent on this host; bytes
+  data is queued. 20 ms was the first value the spike tried, and it stays (below). The bound counts bytes unsent on this host; bytes
   already queued in the network (a router in front of a slow last hop) are not modelled, so such a link can add
   delay beyond the figures here. Examples: 5 Mbit/s gives a limit of 12.5 KB, 13 Mbit/s
   gives 32 KB, and 26 Mbit/s or more gives 64 KiB.
+
+  **What the spike measured** (`../spike/results-2c-paced-connection.md`). Every figure is a 95th percentile of
+  the time from a cursor message being made to its last byte being sent; the budget is the 47 ms this section
+  leaves inside the 200 ms target. In a model of the connection in made-up time, with the rule and with the system
+  holding up to the limit of unsent bytes, a cursor waited 64 ms at 1 Mbit/s, 39 ms at 2 and at 5 Mbit/s and 26 ms
+  at 20; the model reproduces the table of section 04 to within 6 ms at every speed. Over real sockets on Linux
+  (a GitHub-hosted x86-64 runner, loopback, a relay at the link's speed) it was 135 ms at 1 Mbit/s, 52 ms at 5 and
+  29 ms at 20, of which about 10 KiB held in the test's own buffers is 82 ms, 16 ms and 4 ms. Without the rule
+  (1 MiB unsent) the delay was 8.4 s at 1 Mbit/s in the model (no cursor arrived over sockets), 1.7 s at 5 and
+  0.42 s at 20. So the 200 ms target is met from about 2 Mbit/s up and missed at 1 Mbit/s, which the design
+  expected (it held above about 1.4 Mbit/s). The limit settles within 51 ms of the start of a load at every speed
+  tried (the design asked for 500 ms); how fast it follows a later change of speed was tested only in made-up
+  time, with no figure. A 40 ms rule doubles the delay between 2 and 10 Mbit/s and changes nothing
+  elsewhere, so 20 ms stays. Below about 2 Mbit/s the floor, not the rule, sets the delay (a 4 KiB floor is 131 ms
+  of sending at 0.25 Mbit/s). Not measured: a real network, a WebSocket and TLS, many connections, and how long an
+  accepted change waits behind bulk chunks.
+  **What would bring 1 Mbit/s inside the target:** counting every unsent byte in one place, the writer's and the
+  system's together ("one queue" in the spike), gave 33 ms in place of 64 at 1 Mbit/s in the model. It needs the
+  system's own count of unsent bytes, which this design does not use. It is not adopted here; what to do about
+  1 Mbit/s is the owner's to decide after a real-network test (section 04, question 4).
   With tokio it is done in two layers. First, the accepted `TcpStream` gets `TCP_NOTSENT_LOWAT` through the
   `socket2` crate before the WebSocket upgrade, set to the current limit (and set again when the limit changes);
   the kernel then reports the socket writable only when its unsent queue is below it, so `poll_write` returns
-  `Pending` by itself (Linux supports the option; macOS has a similar one; elsewhere unverified). Second, as the
-  rule that works where the option is missing or when TLS or a proxy sits between, the writer task keeps its own
+  `Pending` by itself. **This is a requirement of the server's platform and not a tuning detail**: the writer counts
+  only what it has handed over, whatever the system then holds is delay it cannot see, and it also spoils the
+  estimate of the link's speed, which is made from how fast the system takes bytes. On macOS in the spike, with
+  4 KiB socket buffers at both ends, the system held 478 KiB between the writer and the relay at 1 Mbit/s, the
+  estimate fell to a third of the truth, and the 95th percentile was 2.3 s. The safe `socket2` 0.6.5 wrapper
+  exposes the option on Linux and Android only; macOS has the option but `socket2` and `libc` do not expose it, and
+  the workspace forbids the `unsafe` call that would. The server is Linux, so that is enough for the product; a
+  development machine on macOS shows different behaviour unless it makes that call. Second, and as well as the
+  option, not instead of it, the writer task keeps its own
   count of bytes handed to the WebSocket sink and not yet flushed, and takes a class A or B chunk only when the
   count plus the chunk is under the limit; it flushes after each chunk. The writer is one task per connection that
   loops: take from P, else C, else (if under the limit) A or B, `feed`, `flush`.
@@ -752,9 +814,17 @@ up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so
   records (time, bytes accepted). Because the kernel accepts bytes only as its queue drains (with the option set
   at the limit), bytes accepted per second during a backlog is the drain rate. The writer averages it over windows
   of at least 50 ms (exponentially weighted, weight 1/4 for the newest window), ignores windows with no backlog
-  (an idle link tells nothing), and sets `limit = clamp(rate × 20 ms, 4 KiB, 64 KiB)`. Before the first estimate
-  the limit is 16 KiB. Behind a TLS-terminating proxy the option only covers the hop to the proxy and the estimate
-  then measures that hop; the second layer still holds.
+  (an idle link tells nothing), and sets `limit = clamp(rate × 20 ms, 4 KiB, 64 KiB)`. **Before the first estimate
+  the limit is the floor, 4 KiB** (it was 16 KiB in the first draft). With 16 KiB the first cursor messages after a
+  load begins waited up to 1,018 ms at 0.25 Mbit/s and 230 ms at 1 Mbit/s, over the 200 ms target; with the floor
+  the worst delay in a run was 264 ms and 66 ms (`../spike/results-2c-paced-connection.md`, "The start of a load").
+  The estimate should also be checked against something a buffer cannot fool, the acknowledged bytes the system
+  reports. In the spike's socket run the system's unsent limit was fixed at 4 KiB and the writer kept the unsent
+  bytes in a queue of its own, handing over a chunk whenever that queue was under the current limit; this bounds
+  the same bytes as setting the option to the current limit and changing it with the limit, and the socket figures
+  above are for that arrangement. Behind a TLS-terminating proxy the option only covers the hop to the proxy and the estimate
+  then measures that hop; what the writer's own count is worth there is unverified (the spike measured neither a
+  WebSocket nor TLS).
 - *A slow client:* when its write queue exceeds 4 MiB or 2 s of backlog, the server throws away the queued class A
   messages, adds their ordinals to `dirty`, and when the socket drains sends the current body of each dirty
   object as `Enter` (state-based merge makes the latest state enough). Memory is therefore bounded by the bitmap.
@@ -1138,7 +1208,7 @@ the ceiling is one machine's core and memory (see capacity), the same limit Dura
 ### Capacity estimates
 
 The headline case is the first app, a whiteboard, with about 50 active people per surface (owner decision,
-2026-11-12). Assumptions (all unmeasured; the spike replaces them with numbers):
+2026-11-12). Assumptions (unmeasured unless marked; the spike replaces them with numbers):
 
 | Assumption | Value |
 |---|---|
@@ -1147,8 +1217,8 @@ The headline case is the first app, a whiteboard, with about 50 active people pe
 | Stroke rate per active drawer | 0.3 per second |
 | Presence message | 60 bytes, 30 per second per user |
 | Objects in a large surface | 2 million (the first-version cap) |
-| Object header (section 02) | about 110 bytes near the origin |
-| Stroke body (section 02's typical, packed) | about 1 KB for 200 pen samples; every object is taken to be a stroke |
+| Object header (section 02) | about 110 bytes near the origin (82 bytes measured in the prototype, body fields included) |
+| Stroke body (section 02's typical, packed) | about 1 KB for 200 pen samples (936 bytes measured); every object is taken to be a stroke |
 | Index entry and object table (this section) | about 170 bytes per object |
 
 Derived:
@@ -1160,15 +1230,23 @@ Derived:
 | Presence into a busy room | 50 · 30 · 60 B | 90 KB/s |
 | Presence out, worst case (all see all) | 50 · 49 · 30 · 60 B | 4.4 MB/s, 35 Mbit/s |
 | Presence out, typical (each sees a fifth) | 4.4 MB/s / 5 | 0.9 MB/s |
-| Actor CPU for changes | 15 · (20 µs apply + 50 · 0.1 µs route + encode) | well under 1% of a core |
+| Actor CPU for changes | 15 · (20 µs apply + 50 · 0.1 µs route + encode) | well under 1% of a core. The 20 µs is an estimate that also covers storage and sending, which are not built; the object map's own work on a change was measured at 0.4 to 1.1 µs at depth 0 and about 3 µs at 1,000 levels |
 | Actor CPU for presence worst case | 73,500 per second · about 1 µs | about 7% of a core |
 | First fill of 2,000 objects | 2,000 · 1 KB, LZ4 about 2 times | 1 MB, 0.4 s at 20 Mbit/s |
-| Server memory at the cap, estimate | 2M · (110 B header + 1,000 B stroke body + 170 B index) | about 2.6 GB; about 4 GB if the in-memory form costs 50% more than the packed form |
+| Server memory at the cap, estimate | 2M · (110 B header + 1,000 B stroke body + 170 B index) | about 2.6 GB; about 4 GB if the in-memory form costs 50% more than the packed form. Measured without the spatial index (not built, so its 170 B stays an estimate): 1.3 to 1.5 KB per object estimated and 1.8 to 2.3 KB resident, so the range holds; at depth 100 an object costs 1,590 B and at depth 1,000 3,840 B (estimated, per object) |
+| Load of 1,000,000 objects | estimate: about 5 s to decode and 1 to 2 s to index | measured: 2.6 s to decode, check and build the children index (Apple M4); reading from disk and the spatial index are not in it |
 | Per connection | two bitmaps (up to 100 KB), 256 KB buffers | under 0.5 MB, 50 people is 25 MB |
 | Log growth, busy | 18 KB/s | 65 MB per hour |
 | Log growth, ordinary (5 people, 0.1 strokes/s each) | 0.5 · 1.2 KB | 0.6 KB/s, 2 MB per hour, trimmed at the second snapshot |
 | Commits per second per room | one per commit round trip, 1 to 5 ms | up to 200; usually 20 to 50 |
 | Active rooms per host, memory-bound | 32 GB / (100 MB typical big board) | about 300; about 10,000 for 1,000-object boards |
+
+The measured rows come from `../spike/results-2a-object-map.md` (Apple M4, native, release build, strokes of 200
+points). The storage and sending parts of the work per change, and the spatial index, are still estimates until
+slices 5 and 3 (the results file says "2c and 5"; slice 2c measured the pacing of sending and not its cost
+per change, so sending stays an estimate until the server exists). Memory grows with depth because positions are stored whole: positions are 73% of the state at
+1,000 levels, which is the second measurement (after the speed of section 01) saying that positions should be stored
+and sent as differences from a base.
 
 Presence worst-case fan-out is the largest figure, and it is section 04's to reduce (lower rate when many receive,
 cursors beyond a count shown as a list). Past the 2-million cap, the route is to keep object bodies in the chunk
@@ -1225,7 +1303,8 @@ shards a snapshot job is writing, fits a host with 8 GB; ten times the cap (13 t
 | Snapshot equals log | At any seq, snapshot plus replay equals replay from empty |
 | Chunk dedupe | Two snapshots after N strokes share all but O(N/256) chunks |
 | Restore while editing | Randomized: several clients edit while a restore runs; all converge, and the "before restore" point restores the pre-state |
-| Flow control | Throttled socket test: presence latency stays near 40 ms (the adaptive limit) while a 50 MB view fill is running; slow client is bounded in memory and then disconnected |
+| Flow control | Throttled socket test: presence latency stays near 40 ms (the adaptive limit) while a 50 MB view fill is running; slow client is bounded in memory and then disconnected. The spike ran this at 1, 5 and 20 Mbit/s with 30.6 MB queued (`../spike/results-2c-paced-connection.md`) |
+| A change cannot overtake its object during a fill | A second client joins on a slow connection while the first makes changes; the two streams are mixed; the second client ends with the room's bytes. Without the keep-writes rule the test fails (spike, 2c) |
 | Protocol compatibility | Golden files of every message for version N, decoded by build N+1 in CI; an unknown variant closes with `ProtocolError` |
 | Lease | Two nodes race for a room; the loser's commits are refused |
 | Strict mode | Kill the replica, then the primary, at random points over 10,000 runs: every confirmed change is present after failover; with the replica down, writes are refused after 5 s |
@@ -1233,10 +1312,10 @@ shards a snapshot job is writing, fits a host with 8 GB; ten times the cap (13 t
 | Retention thinning | Simulated 40 days of snapshots: all kept for 24 h, one per hour to 7 days, one per day to 30 days, none after; named versions untouched |
 | Accept or reject, never rewrite | Change with a failing `if_stamp`: rejected whole, log unchanged; `partial_ok` replay gives the same skipped set |
 | Pong outside the change queue | Block the actor for 1 s; `Pong` still arrives within one chunk time |
-| Pacing | Throttled links at 1 and 5 Mbit/s and unlimited, 10 MB queued: unsent bytes stay under the adaptive limit (4 to 64 KiB) plus one chunk, the estimate converges within 500 ms, and a presence update overtakes the queue within about 40 ms (66 ms at 1 Mbit/s, where the floor applies) |
+| Pacing | Throttled links at 1 and 5 Mbit/s and unlimited, 10 MB queued: unsent bytes stay under the adaptive limit (4 to 64 KiB) plus one chunk, the estimate converges within 500 ms (the spike measured 51 ms), and a presence update overtakes the queue within about 40 ms (66 ms at 1 Mbit/s, where the floor applies; the spike measured 39 ms at 2 and 5 Mbit/s and 64 ms at 1 in its model, and 135 ms at 1 Mbit/s over sockets) |
 | Far objects | Surface with one backdrop per level over 1,000 levels: at most `max_far_objects` sent, `far_dropped` correct |
 | Index at depth | Objects at levels 0, 100 and 1,024: `ObjBox` stays about 80 bytes; query equals brute force |
-| Anchors delta-coded | Chunk of 200 objects at level 100 is under a tenth of the whole-position size; decodes to identical positions |
+| Anchors delta-coded (needed for speed and memory as well as for bytes) | Chunk of 200 objects at level 100 is under a tenth of the whole-position size; decodes to identical positions |
 | Nothing before `AuthOk` | A raw client sends garbage, then a valid `Auth` late: no byte comes back before verification |
 | Picture decision | Tile with 1,999 then 2,001 small objects: objects, then picture; counts equal a brute-force count |
 | Nearest and bounds | `Locate` equals a brute-force scan over random surfaces at several depths |
@@ -1297,8 +1376,9 @@ all exact:
 a
 `Reg<T>` stamped with the per-surface `Seq`, so each object's state merges in any order; the server accepts or
 rejects a whole change; a CRDT library is used only inside text objects behind `TextDoc`. This is decided (owner
-decision, 2026-11-12). Which library edits text (Loro, yrs or another) is still open and the spike compares them;
-the spike also still checks the finding that no library syncs part of a document. Used:
+decision, 2026-11-12). The library that edits text is yrs (owner decision, 2026-11-12, on the spike's trial,
+`../spike/results-2b-text-libraries.md`), and the trial confirmed the finding that no library syncs part of a
+document. Used:
 
 - `Doc::apply(&Change, &ApplyCtx { seq, author, ext }) -> Result<Applied, ApplyError>`, where
   `Applied { effects: Vec<ObjectEffect>, skipped }` and `ObjectEffect { id, ordinal, old_box, new_box, deleted,
@@ -1355,12 +1435,12 @@ default 2,000,000), `max_far_objects`, and the three view limits `max_view_objec
 
 Answered on 2026-11-11 and 2026-11-12 and now stated in the Design: the merge model, the first app and its planning
 figure, replayed offline changes, who may restore, retention and thinning of versions, the two durability modes, the
-protocol window of 6 months, and the cap of 2 million objects. Still open:
+protocol window of 6 months, the cap of 2 million objects, and the text library. Still open:
 
-1. **Which library edits text** (Loro, yrs or another). The merge model does not depend on the answer: Everink's own
-   object map is ordered by the server and a library is used only inside text objects. The spike compares the
-   candidates on text, and also re-checks the finding that no library syncs part of a document (one document per
-   object, for example yrs subdocuments, is a route to partial copies that is unproven at scale, section 02).
+1. **Which library edits text.** Decided on 2026-11-12: **yrs** (section 02, `../spike/results-2b-text-libraries.md`).
+   The merge model does not depend on the answer: Everink's own object map is ordered by the server and a library is
+   used only inside text objects. The spike confirmed that no library syncs part of a document, so one small
+   document per text object stands.
 2. **Whether a hosted offering (if any) should run on Cloudflare Durable Objects.** The room model is the same, and
    the core compiles to WebAssembly, but the storage layer and the actor would need to be rebuilt for that
    platform. Not recommended for the first version; the `RoomStore` trait keeps the option open.
@@ -1392,7 +1472,13 @@ protocol window of 6 months, and the cap of 2 million objects. Still open:
 - crates.io pages for tokio, axum, tokio-tungstenite, fastwebsockets, postcard, bincode, prost, ciborium, rmp-serde,
   rusqlite, rstar, roaring, lz4_flex, blake3, zstd, wtransport, loro (1.17.1, MIT), yrs (0.28.1, MIT);
   all read 2026-11-11 through the crates.io API.
-- Not verified: that `TCP_NOTSENT_LOWAT` is available on every target (Linux assumed; macOS similar option) and the
+- Spike results, in this repository: `../spike/results-1-positions.md`, `../spike/results-2a-object-map.md`,
+  `../spike/results-2b-text-libraries.md`, `../spike/results-2c-paced-connection.md`.
+- Settled by the spike: that `TCP_NOTSENT_LOWAT` works on Linux (the pacing run, 2c) and that its safe wrapper in
+  `socket2` 0.6.5 covers Linux and Android only; the pacing figures; the object map's memory, load time and work
+  per change (2a).
+- Not verified: that `TCP_NOTSENT_LOWAT` is available on every target (Linux measured; macOS has it but it is not
+  exposed safely; others unknown) and the
   WebSocket library's maximum-frame option names; the Yjs partial-replica limitation; hierarchical grids as a named
   technique; SQLite versus redb
   speed; S3 put latency; all capacity figures; Figma's current multiplayer sizing.

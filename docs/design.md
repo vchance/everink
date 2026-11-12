@@ -169,8 +169,9 @@ The document is a map from object id to object. Within an object:
 
 Everink holds this map itself, ordered by the server, and uses a CRDT library only for the text inside text
 objects (owner decision, 2026-11-12; [`design/02-document-model.md`](design/02-document-model.md)). The reason is
-that each client holds part of a surface, and none of the candidate libraries (Loro, yrs, Automerge) documents a
-way to sync part of a document. The spike still checks that finding, and compares the libraries for text.
+that each client holds part of a surface, and none of the candidate libraries (Loro, yrs, Automerge) syncs part of
+a document: the spike tried each and confirmed it. The library for text is **yrs** (owner decision, 2026-11-12, on
+the evidence in [`spike/results-2b-text-libraries.md`](spike/results-2b-text-libraries.md)).
 The server may refuse a change outright: one that would put a group inside itself, or that breaks a role or a
 limit. **Undo is per user:** it reverses your own changes and leaves everyone else's alone. There are no locks.
 Other people's selections are shown in their color, which is usually enough to stop two people grabbing the same
@@ -387,7 +388,7 @@ Each rule the design depends on has a test that fails if the rule is broken, wri
 
 | Rule | Proved by | Step |
 |---|---|---|
-| A point drawn at any depth is found at exactly the same place later, on every client | round-trip tests over random positions and levels; two clients compare | 0 |
+| An object never moves, a jump to a position lands exactly, one zoom step keeps the point under the pointer, and following a thing while zooming out and back keeps it in place, at any depth | tests of each property over random positions and levels (all four pass in the spike, [`spike/results-1-positions.md`](spike/results-1-positions.md)); zooming back by hand about a fixed point is not exact at depth, so home, saved places and jumps are the way back to an exact spot | 0 |
 | A shape from many levels up has the same outline and bounds on every client | byte-for-byte comparison on x86-64, aarch64 and WebAssembly, and tests against a second big-number library | 1 |
 | Concurrent changes converge to the same state on every client | randomized tests applying the same changes in different orders | 0 |
 | Delete and a concurrent edit agree | the same randomized tests, with deletes | 0 |
@@ -421,7 +422,9 @@ Proposed, not measured:
   devices (the first version of this target, 20 ms, did not say what was measured).
 - 60 frames per second with 10,000 objects in view, at level 0 and at level 100 alike.
 - Zooming continuously through a level boundary shows no jump.
-- Cutting large shapes down to the view stays within a budget of 2 ms per frame while panning at level 100.
+- Cutting large shapes down to the view stays within a budget of 2 ms per frame while panning at level 100. The
+  budget is shared with re-basing the held objects, which the spike measured at 1.3 ms for 10,000 objects at depth
+  100 and 4.5 ms at 1,000 levels on an Apple M4 (slower elsewhere), so a re-base is spread over frames.
 - Opening a surface: first content in under one second, whatever the surface's total size.
 - Cursor updates 30 times a second; a remote cursor lags by under 200 ms on a good connection, of which
   smoothing is under 100 ms.
@@ -435,7 +438,7 @@ Each step is usable on its own and is the unit the detailed designs will follow.
 
 | Step | Result |
 |---|---|
-| 0. Spike | One stroke type, two clients, a server, native and web, with level-and-cell positions. Picks the CRDT library and measures the targets. |
+| 0. Spike | One stroke type, two clients, a server, native and web, with level-and-cell positions. Picks the CRDT library (yrs, chosen 2026-11-12) and measures the targets; slices 1 and 2 are done, see [`spike/`](spike/README.md). |
 | 1. Single-user canvas | Camera with unlimited pan and zoom, ink, shapes, select, move, undo, saved locally, first toolbars, the text-entry bridge. |
 | 2. Shared surface | Whole-surface sync, cursors with names and colors, live ink, tokens and invite links. |
 | 3. View-scoped sync | Server spatial index across levels, view subscriptions, cursor routing by view, client cache, jump to person. |
@@ -460,7 +463,8 @@ https://github.com/vchance/everink/pull/5.
 
 The fifteen decisions on the detailed design (2026-11-11 and 2026-11-12) are listed in
 [`design/README.md`](design/README.md) › Owner decisions. Among them: the first app is a whiteboard, and Everink
-holds its own object map with a CRDT library only for text. Still open: which library edits text.
+holds its own object map with a CRDT library only for text, and that library is yrs (2026-11-12). The owner will
+decide the second connection for presence, and the 1 Mbit/s cursor target, after a measurement on a real network.
 
 ## The detailed design
 

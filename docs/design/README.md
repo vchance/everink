@@ -3,8 +3,10 @@
 Status: design, 2026-11-12, with the owner's fifteen decisions of 2026-11-11 and 2026-11-12 built in (listed under
 [Owner decisions](#owner-decisions)). Eight sections break down the high-level design in [`../design.md`](../design.md).
 Each was researched and written separately, against prior art and the current state of the libraries it would use,
-and then reconciled with the others. Nothing here is built or measured. Every number is a starting value, and each
-section ends with the claims it could not verify.
+and then reconciled with the others. Nothing here is released. The first spike slices (positions, the object map,
+the text libraries and the paced connection, in [`../spike/`](../spike/README.md)) have measured some of the numbers,
+and the sections say which; every other number is a starting value. Each section ends with the claims it could not
+verify and, where the spike settled one, a note saying so.
 
 ## Sections
 
@@ -32,9 +34,9 @@ These are the decisions that cross section boundaries. The section named first h
 | Depth cap | Levels within ±1024; an encoded position is at most about 3.1 KB. | 01, 08 |
 | Placement | Level, anchor, rotation and scale are one value that is replaced whole. | 01, 02 |
 | Groups | A child is placed relative to its parent, so moving a group is one write. A child is at most 8 levels from its group. | 02, 01, 03 |
-| Merge | The object map is Everink's own and is ordered by the server: each field is last-writer-wins by the surface's sequence number. A CRDT library is used only for the text inside text objects. Owner decision; which library is still open. | 02, 03 |
+| Merge | The object map is Everink's own and is ordered by the server: each field is last-writer-wins by the surface's sequence number. A CRDT library is used only for the text inside text objects, and that library is yrs (owner decisions; yrs chosen 2026-11-12). | 02, 03 |
 | What is sent | An object is sent when it crosses the padded view and covers at least one pixel, with a budget that raises the threshold on dense views. Size decides, not level. The client sends its exact view; the server adds the padding. | 03, 06 |
-| Connection | One WebSocket carries changes and presence. Presence has its own queue, served first; bulk data is paced to what the link drains in about 20 ms, so a cursor waits about 40 ms at most behind it on links faster than about 1.6 Mbit/s. Data already queued in the network is not counted. A second socket is the fallback if the spike shows this is not enough. | 03, 04, 07, 08 |
+| Connection | One WebSocket carries changes and presence. Presence has its own queue, served first; bulk data is paced to what the link drains in about 20 ms, so a cursor waits about 40 ms at most behind it on links faster than about 1.6 Mbit/s. Data already queued in the network is not counted. The spike measured at most 39 ms from 2 Mbit/s up in a model, and 52 ms at 5 Mbit/s and 29 ms at 20 over loopback sockets, of which about 16 and 4 ms are the test's own buffers; the 200 ms target is missed at 1 Mbit/s. A second socket is the fallback; the owner decides about it after a real-network test. | 03, 04, 07, 08 |
 | Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine. | 06, 01, 02 |
 | Partial erase | A stroke carries a set of cuts, so two people erasing parts of one stroke both take effect. | 02, 06 |
 | Renderer | `vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind Everink's own interface. Frames come from a cache of 512-pixel tiles. | 06 |
@@ -49,10 +51,11 @@ The research overturned or sharpened these points. [`../design.md`](../design.md
 
 - **Offsets are fixed-point, not floating-point.** Floating-point offsets cannot be compared exactly in bounded
   space and have several encodings of one value (01).
-- **No CRDT library documents syncing part of one document.** View-scoped sync needs each client to hold part of
-  a surface. The only route found in Loro, yrs or Automerge is one small document per object (yrs subdocuments,
-  for example), which is unproven at scale. Two sections reached this separately, from documentation and not from
-  trial, so the spike tests it first (02, 03).
+- **No CRDT library syncs part of one document.** View-scoped sync needs each client to hold part of
+  a surface. Two sections reached this from documentation, and the text trial then tried Loro, yrs and Automerge:
+  none syncs part of a document, and the only route is one small document per object (a yrs sub-document, for
+  example), which is why the object map is Everink's own and a library is used only for text bodies (02, 03;
+  `../spike/results-2b-text-libraries.md`).
 - **The server may refuse a change:** a move that would make a group contain itself, a role or limit violation, a
   move into a deleted group. "Everything always merges" is too strong (02).
 - **Frames are not redrawn from the objects each time.** A tile cache makes a still scene nearly free; holding
@@ -98,14 +101,14 @@ documents with measurements, before anything is built on them.
 
 | Question | Section | What settles it |
 |---|---|---|
-| Can any of Loro, yrs or Automerge sync part of a document? | 02, 03 | A code check and a small trial of each |
-| Which library edits text best in one small document per text object? | 02 | Size and memory per document; whether the server can inspect an update before applying it |
-| Does Everink's own object map hold up? | 02, 03 | 100,000 strokes: memory per object, open time, randomized convergence tests |
-| What does exact position arithmetic cost? | 01 | Re-base and cut timings at levels 0, 100 and 1,000 |
+| Can any of Loro, yrs or Automerge sync part of a document? | 02, 03 | A code check and a small trial of each. Answered: no ([results 2b](../spike/results-2b-text-libraries.md)) |
+| Which library edits text best in one small document per text object? | 02 | Size and memory per document; whether the server can inspect an update before applying it. Answered: yrs is the smallest and fastest; chosen by the owner on 2026-11-12 ([results 2b](../spike/results-2b-text-libraries.md)) |
+| Does Everink's own object map hold up? | 02, 03 | 100,000 strokes: memory per object, open time, randomized convergence tests. Answered: yes, with counting order keys at the ends ([results 2a](../spike/results-2a-object-map.md)) |
+| What does exact position arithmetic cost? | 01 | Re-base and cut timings at levels 0, 100 and 1,000. Answered for arithmetic and re-base, and positions are identical on aarch64 and x86-64 ([results 1](../spike/results-1-positions.md)); the cut is slice 3 |
 | Are outlines bit-identical everywhere? | 01, 06 | The same strokes on x86-64, aarch64 and wasm32, compared byte for byte |
 | Does the renderer carry the load? | 06 | `vello_gpu` on WebGPU and on WebGL2: tile throughput, 10,000 objects, the size of the wasm build |
 | What is pen latency really? | 06 | A 240 frames-per-second camera on named devices, with and without the low-latency canvas |
-| Do cursors stall during a bulk load on one connection? | 04, 03 | Cursor delay while a client loads a large surface over a slow link |
+| Do cursors stall during a bulk load on one connection? | 04, 03 | Cursor delay while a client loads a large surface over a slow link. Answered on a model and loopback sockets: no from about 2 Mbit/s up; a real-network test is still to come ([results 2c](../spike/results-2c-paced-connection.md)) |
 | Which controls toolkit? | 07 | The same toolbar and text field built twice, with Everink's own small toolkit and with egui: composition, a screen reader, wasm size and effort, native and web |
 | Does the owner's further candidate make sense here? | 06, 07 | A project the owner asked to have considered, evaluated behind the renderer interface next to the Vello path; its details are kept outside this repository |
 | How fast is storage? | 03 | Commit latency and load time for one SQLite file per room |
@@ -138,7 +141,11 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
 
 ### Still open
 
-- **Which library edits text** (Loro, yrs or another). The spike compares them.
+- **Which library edits text.** Decided on 2026-11-12: **yrs**, on the evidence of the text trial
+  ([results 2b](../spike/results-2b-text-libraries.md)); the trial package stays until the yrs adapter exists.
+  Kept here so the row can be found.
+- **The second connection for presence, and the 1 Mbit/s cursor target.** The owner will decide after a measurement
+  on a real network (2026-11-12). The fallback stays in the design as written.
 - **The controls toolkit.** Chosen after the spike.
 - **The further candidate the owner named.** Evaluated in the spike and used only if it makes sense; any question
   it raises about naming or licensing is the owner's.
@@ -148,8 +155,9 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
 
 ## What is not verified
 
-- **Every performance figure is an estimate** from operation counts or stated assumptions. The spike replaces
-  them.
+- **Every performance figure is an estimate** from operation counts or stated assumptions, except the ones a
+  section marks as measured in the spike (positions, the object map, the text libraries, the paced connection;
+  one machine, plus a CI runner for a few figures). The spike replaces the rest.
 - **Claims about other products** (Figma, Miro, tldraw, Excalidraw, Liveblocks) often rest on secondary sources.
   Each section marks which.
 - **Library facts** (versions, licenses, behavior) were read on 2026-11-11 and are marked where a primary source

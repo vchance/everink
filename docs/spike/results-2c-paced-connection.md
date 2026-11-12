@@ -38,6 +38,10 @@ figure in this table is a 95th percentile.
 - **Two more corrections to the design:** the limit must start small, and the rule only works if the operating
   system is also kept from holding unsent bytes.
 
+**Decided since:** on 2026-11-12 the owner chose to decide two things after cursor lag has been measured over a
+real network path: whether to keep the second connection as a fallback, and what to do about 1 Mbit/s. Until
+then the design keeps the fallback and its stated target.
+
 ## What was built
 
 | Part | What it is |
@@ -274,5 +278,5 @@ Slice 2 is complete, so this is the point the plan set for deciding what is kept
 
 - **`crates/everink-sync`: keep.** The object map answered its question and the rest of the product builds on
   it; `wire` and `pacing` are what the server will use. The link model stays as the pacer's test bench.
-- **`spike/text-trial`: keep until the owner has chosen a text library**, then remove (results of slice 2b).
+- **`spike/text-trial`: keep until the yrs adapter exists** (owner decision, 2026-11-12), then remove.
 - **`examples/paced_link.rs`: keep until the server exists**, then replace with a test against the real server.
