@@ -11,3 +11,4 @@ CLAUDE.local.md
 
 # Rust build output
 /target
+/spike/text-trial/target

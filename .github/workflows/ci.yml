@@ -25,6 +25,7 @@ jobs:
     permissions: { contents: read, actions: read }   # the lane reads earlier runs of this workflow
     outputs:
       rust: ${{ steps.select.outputs.rust }}
+      text: ${{ steps.select.outputs.text }}
       all: ${{ steps.select.outputs.all }}
       carry_failure: ${{ steps.select.outputs.carry_failure }}
     steps:
@@ -76,9 +77,33 @@ jobs:
           cargo run --release --locked --example bench_positions
           cargo run --release --locked --example bench_object_map
 
+  # The text-library trial (spike slice 2b): a package outside the workspace, with the three candidate libraries.
+  # It runs only when the trial or the toolchain changes, and on the full runs.
+  text-trial:
+    name: text-trial
+    needs: [changes]
+    if: ${{ needs.changes.outputs.all == 'true' || needs.changes.outputs.text == 'true' }}
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
+    timeout-minutes: 20
+    env:
+      MANIFEST: spike/text-trial/Cargo.toml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Format check
+        run: cargo fmt --manifest-path "$MANIFEST" --check
+      - name: Clippy, warnings are errors
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets --locked -- -D warnings
+      - name: Tests (what each library does, and damaged bytes)
+        run: cargo test --manifest-path "$MANIFEST" --locked
+      - name: Size and timing run builds and runs
+        run: cargo run --release --locked --manifest-path "$MANIFEST"
+
   ci-result:
     name: ci-result
-    needs: [changes, lint, test]
+    needs: [changes, lint, test, text-trial]
     if: ${{ always() }}
     runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
     timeout-minutes: 2

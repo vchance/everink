@@ -8,7 +8,8 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
 spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with two crates
-(`crates/everink-core`, `crates/everink-sync`). Nothing is released or published.
+(`crates/everink-core`, `crates/everink-sync`) and one trial package outside it (`spike/text-trial`). Nothing is
+released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
@@ -22,6 +23,10 @@ cargo fmt --all --check                                             # format che
 cargo run --release --example bench_positions                       # timing run (spike question 1)
 cargo test -p everink-sync --test object_map <name>                 # one test of the object map
 cargo run --release --example bench_object_map [objects] [depth]    # size and timing run (spike question 7)
+cargo test --locked --manifest-path spike/text-trial/Cargo.toml     # the text-library trial (its own package)
+cargo run --release --locked --manifest-path spike/text-trial/Cargo.toml   # its size and timing run (questions 5, 6)
+cargo clippy --manifest-path spike/text-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
+cargo fmt --manifest-path spike/text-trial/Cargo.toml --check       # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
@@ -46,6 +51,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `crates/everink-sync`: the server-ordered object map (spike slice 2a): objects and their registers, the
   server's room, a client's copy, order keys, packed stroke points, canonical bytes. Depends on `everink-core`
   only.
+- `spike/text-trial`: the trial of Loro, yrs and Automerge (spike slice 2b). A package of its own with its own
+  `Cargo.lock`, outside the workspace, so the three libraries never enter the main build. The workspace commands
+  above do not reach it; it has its own, and its own CI job (`text-trial`).
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
@@ -60,6 +68,10 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   to regenerate.
 - Crates are `publish = false`. Do not remove that; publishing is an owner decision.
 - Timing figures in `docs/spike/` name the machine they were measured on. Do not compare them with a CI runner.
+- `spike/text-trial` has tests that assert a library's recorded limit (for example that yrs panics on some
+  damaged bytes). When one fails after a version change, the library changed: update
+  `docs/spike/results-2b-text-libraries.md`, do not just flip the assertion. Which library edits text is the
+  owner's decision; the trial does not make it.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions

@@ -13,7 +13,7 @@ Yes, with one correction to the design.
 - **It converges.** Copies that are given the same accepted changes end in the same bytes, whatever order the
   writes arrive in, with repeats, and when whole-object snapshots overlap the stream of changes.
 - **It is small and fast enough.** 100,000 strokes take about 1.3 KB of memory each, which is the design's
-  estimate, and open in 0.14 s. The server's work on one change is under a microsecond at depth 0, and 1 to 3
+  estimate, and open in 0.14 s. At that size the server's work on one change is under a microsecond at depth 0, and 1 to 3
   microseconds with positions 100 to 1,000 levels down.
 - **The design's rule for order keys does not work for the common case.** Putting each new object in front of
   the others reaches the 64-byte key limit after about 450 objects. The prototype counts instead, and 100,000

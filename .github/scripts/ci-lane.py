@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 
-PRODUCT_JOBS = ("lint", "test")
+PRODUCT_JOBS = ("lint", "test", "text-trial")
 # How many runs' job lists one decision may fetch. Past this the lane stops looking and runs, so a long row of
 # skip runs can never make the `changes` job slow.
 MAX_JOB_LOOKUPS = 40

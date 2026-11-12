@@ -4,7 +4,8 @@
 # Selection fails closed: an empty or unreadable file list, or a path that matches no pattern, selects everything.
 #
 # Usage: ci-changes.sh <event> <before-sha-or-empty> <after-sha-or-empty>
-# Writes `rust=<bool>`, `all=<bool>` and `carry_failure=<bool>` to $GITHUB_OUTPUT (or stdout when it is unset).
+# Writes `rust=<bool>`, `text=<bool>`, `all=<bool>` and `carry_failure=<bool>` to $GITHUB_OUTPUT (or stdout when
+# it is unset).
 set -euo pipefail
 
 event="${1:-}"
@@ -13,9 +14,10 @@ after="${3:-}"
 out="${GITHUB_OUTPUT:-/dev/stdout}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+text=false
 emit() {
-  printf 'rust=%s\nall=%s\ncarry_failure=%s\n' "$1" "$2" "${4:-false}" >>"$out"
-  printf 'selection: rust=%s all=%s carry_failure=%s (%s)\n' "$1" "$2" "${4:-false}" "$3"
+  printf 'rust=%s\ntext=%s\nall=%s\ncarry_failure=%s\n' "$1" "$text" "$2" "${4:-false}" >>"$out"
+  printf 'selection: rust=%s text=%s all=%s carry_failure=%s (%s)\n' "$1" "$text" "$2" "${4:-false}" "$3"
 }
 
 list=$(mktemp)
@@ -56,8 +58,13 @@ while IFS= read -r -d '' f; do
     # policy-drift and pr-evidence.
     AGENTS.md|*/AGENTS.md|CLAUDE.md|*/CLAUDE.md|PROFILE.md|.agent-rules/*|.claude/*|.githooks/*|.github/*) ;;
     # Row 3. The Rust workspace: the crates and everything the build reads.
-    crates/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|clippy.toml) rust=true ;;
-    # Row 4. Anything else is unknown, and unknown paths escalate.
+    crates/*|Cargo.toml|Cargo.lock) rust=true ;;
+    # Row 4. The text-library trial: a package of its own, outside the workspace.
+    spike/text-trial/*) text=true ;;
+    # Row 5. The pinned toolchain builds both, and the format and lint settings at the root are read by both
+    # (the tools look in parent directories).
+    rust-toolchain.toml|rustfmt.toml|clippy.toml) rust=true; text=true ;;
+    # Row 6. Anything else is unknown, and unknown paths escalate.
     *) all=true ;;
   esac
 done <"$list"

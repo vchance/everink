@@ -1,6 +1,6 @@
 # The spike
 
-Status: started 2026-11-12. Slice 1 and the first part of slice 2 are done; the rest is planned.
+Status: started 2026-11-12. Slice 1 and the first two parts of slice 2 are done; the rest is planned.
 
 The spike is step 0 of the order of work in [`../design.md`](../design.md). Its purpose is to replace the largest
 guesses in the detailed design with measurements before anything is built on them. It is one stroke type, two
@@ -43,7 +43,7 @@ criterion for each.
 | Slice | Contents | Answers | Kept afterwards |
 |---|---|---|---|
 | 1. Positions | The Cargo workspace, CI, and `everink-core` with the position type, its canonical bytes, the camera, tests and a timing run | 1, 2 (two of three targets) | Yes: `crates/everink-core` |
-| 2. Object map and sync | 2a: the server-ordered object map and its convergence tests (`crates/everink-sync`). 2b: the text-library trials. 2c: a server, two headless clients and the paced connection | 5, 6, 7, 8 | Decided from the results, at the end of the slice |
+| 2. Object map and sync | 2a: the server-ordered object map and its convergence tests (`crates/everink-sync`). 2b: the text-library trials (`spike/text-trial`, a package outside the workspace). 2c: a server, two headless clients and the paced connection | 5, 6, 7, 8 | Decided from the results, at the end of the slice |
 | 3. Rendering and ink | Vello natively and in the browser, the tile cache, stroke outlines, the cut, the wasm32 target | 2 (wasm32), 3, 4, 10, 11 | Decided from the results |
 | 4. Controls and the further candidate | The same toolbar both ways; the owner's candidate behind the renderer interface | 12, 13 | Decided from the results |
 | 5. Storage | One SQLite file per room: commit and load timings | 9 | Decided from the results |
@@ -53,4 +53,5 @@ criterion for each.
 | Slice | Results | Summary |
 |---|---|---|
 | 1 | [results-1-positions.md](results-1-positions.md) | Exact arithmetic costs almost nothing per frame at any depth (0.004 ms for 10,000 objects). Subtraction and re-basing at depth cost about three times the design's estimate, and a re-base does not reliably fit in a frame at depth, so it has to be spread. Positions match one golden file byte for byte on aarch64 and x86-64. Zooming back to a spot by hand is not exact at depth; an object's position and a jump to it are. |
-| 2a | [results-2a-object-map.md](results-2a-object-map.md) | The object map holds up. Copies converge whatever order writes arrive in. 100,000 strokes take about 1.3 KB of memory each, as the design estimated, and open in 0.14 s; the server's work on a change is under a microsecond at depth 0 and 1 to 3 microseconds with positions 100 to 1,000 levels down. One correction: the design's rule for order keys runs out of room after about 450 objects put in front one after another, so "front" and "back" count instead. |
+| 2a | [results-2a-object-map.md](results-2a-object-map.md) | The object map holds up. Copies converge whatever order writes arrive in. 100,000 strokes take about 1.3 KB of memory each, as the design estimated, and open in 0.14 s; at 100,000 objects the server's work on a change is under a microsecond at depth 0 and 1 to 3 microseconds with positions 100 to 1,000 levels down. One correction: the design's rule for order keys runs out of room after about 450 objects put in front one after another, so "front" and "back" count instead. |
+| 2b | [results-2b-text-libraries.md](results-2b-text-libraries.md) | None of Loro, yrs or Automerge can sync part of a document, so one small document per text object stands. yrs is the smallest and fastest by a wide margin (12 bytes per keystroke, 2 KB of memory per 200-character document, 3 µs for a checked keystroke); Loro is the only one that never panicked on damaged bytes and never let damage change the text, at about 14 times the memory on the machine measured. A client can get past the server's length check by sending updates out of order unless the server refuses updates that have to wait; the design must add that. No candidate passes the design's bar on every count. The choice is the owner's. |

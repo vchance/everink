@@ -1,0 +1,24 @@
+# The text-library trial of spike slice 2b. It is a package of its own, outside the workspace, so that the three
+# candidate libraries and what they bring in never enter the main build or the workspace's lock file. Nothing here
+# is a decision: which library edits text is the owner's (AGENTS.md > Owner decisions).
+[package]
+name = "text-trial"
+version = "0.0.0"
+description = "Everink spike: a trial of Loro, yrs and Automerge for one small document per text object."
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+loro = "=1.17.1"
+yrs = "=0.28.1"
+automerge = "=0.12.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace]
