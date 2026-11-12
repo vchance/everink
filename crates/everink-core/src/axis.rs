@@ -246,3 +246,53 @@ impl Ord for Axis {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `cell()` is the value divided by 2^64 rounded toward minus infinity, and `frac()` is what is left, on
+    /// both the inline and the big path, for negative values as well.
+    #[test]
+    fn cell_is_the_floor_and_frac_the_remainder() {
+        // Inline values, against the integer's own floor division.
+        let two_64 = 1i128 << 64;
+        for v in [
+            0,
+            1,
+            -1,
+            two_64 - 1,
+            two_64,
+            -two_64,
+            -two_64 - 1,
+            -two_64 + 1,
+            i128::MAX,
+            i128::MIN,
+            -5 * two_64 - 7,
+        ] {
+            let a = Axis::from_i128(v);
+            assert_eq!(a.cell(), BigInt::from(v.div_euclid(two_64)), "cell of {v}");
+            assert_eq!(a.frac(), v.rem_euclid(two_64) as u64, "frac of {v}");
+        }
+        // Big values: a cell and an offset are put together and must come apart again. A negative cell with a
+        // non-zero offset is the case a truncating division gets wrong.
+        for bits in [70u32, 127, 128, 200, 1000] {
+            for negative in [false, true] {
+                for frac in [0u64, 1, u64::MAX] {
+                    let mut cell = (BigInt::from(1) << bits) + BigInt::from(12345);
+                    if negative {
+                        cell = -cell;
+                    }
+                    let a = Axis::from_cell_frac(cell.clone(), frac);
+                    assert!(!a.is_small());
+                    assert_eq!(
+                        a.cell(),
+                        cell,
+                        "{bits} bits, negative {negative}, frac {frac}"
+                    );
+                    assert_eq!(a.frac(), frac);
+                }
+            }
+        }
+    }
+}

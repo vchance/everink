@@ -82,6 +82,7 @@ impl Camera {
         self.level
     }
 
+    /// The point at the middle of the view. Exact.
     pub fn center(&self) -> &Position {
         &self.center
     }

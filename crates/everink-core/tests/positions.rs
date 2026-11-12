@@ -255,8 +255,7 @@ fn cell_and_frac_are_the_high_and_low_part() {
         let cell = rng.big(rng.0 % 300);
         let frac = rng.next();
         let a = cell_frac(cell.clone(), frac);
-        // The cell is the value divided by 2^64, rounded down (this library's shift rounds down).
-        assert_eq!(big_of(&a) >> 64u32, cell);
+        // The cell itself is private to the crate; its floor rule is tested next to it in `src/axis.rs`.
         assert_eq!(a.frac(), frac);
         // The representation is canonical: a value that fits 128 bits is held inline.
         assert_eq!(a.is_small(), i128::try_from(big_of(&a)).is_ok());
