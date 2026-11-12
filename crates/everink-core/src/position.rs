@@ -41,10 +41,19 @@ impl Rel {
     }
 }
 
+/// The largest level difference this crate will shift across. A position that came from the network passed
+/// `check_cap_bytes`, so its level is within the depth cap (1,024 by default) and it never comes near this. The
+/// bound exists so that positions built directly cannot ask for a shift of billions of bits.
+pub const MAX_SHIFT_LEVELS: i64 = 1 << 20;
+
 fn level_bits(from: Level, to: Level) -> u32 {
     let d = i64::from(to.0) - i64::from(from.0);
     assert!(d >= 0, "level_bits needs to >= from");
-    u32::try_from(d * i64::from(LEVEL_SHIFT)).expect("level difference fits the depth cap")
+    assert!(
+        d <= MAX_SHIFT_LEVELS,
+        "levels are {d} apart, beyond the {MAX_SHIFT_LEVELS} this crate will shift across"
+    );
+    (d * i64::from(LEVEL_SHIFT)) as u32
 }
 
 impl Position {

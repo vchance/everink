@@ -6,9 +6,9 @@
 | Classification | prototype (spike stage): design documents and the first spike code (`crates/everink-core`). Nothing is released. Everink is a planned infinite, multi-user drawing surface with one core for native and WebAssembly (`docs/vision.md`) |
 | Accountable owner | Von Chance (vchance) — owner-reserved decisions (R8); approver of exceptions and D-overrides |
 | Supported platforms | Linux x86-64: `CI` (build, lint, tests). macOS aarch64: `manual` (the owner's Mac; the golden file is written there). wasm32 and Windows: `nobody` yet; wasm32 arrives with spike slice 3 |
-| Toolchain | Rust 1.97.1, pinned in `rust-toolchain.toml` with `rustfmt` and `clippy`; edition 2024; one Cargo workspace (`Cargo.toml`, `Cargo.lock` committed). Dependencies: `num-bigint` 0.5.1 and `num-traits` 0.2.19 (both MIT OR Apache-2.0). Crates are `publish = false`: publishing is an owner decision |
+| Toolchain | Rust 1.97.1, pinned in `rust-toolchain.toml` with `rustfmt` and `clippy`; edition 2024; one Cargo workspace (`Cargo.toml`, `Cargo.lock` committed). Dependencies: `num-bigint` 0.5.1 and `num-traits` 0.2.19; for tests only, `dashu-int` 0.6.2 as a second big-integer library to check against (all MIT OR Apache-2.0). Crates are `publish = false`: publishing is an owner decision |
 | Required services for tests | none |
-| CI runners and storage (D9, D11) | `public: GitHub-hosted` (owner call-out 2026-11-10, "gitrunners will be guthub", linked from `AGENTS.md` › Owner decisions): every job names the standard hosted label `ubuntu-24.04` directly, with no placement gate; no `RUNS_ON_*` variable exists (`RUNS_ON_SMALL__VCHANCE`, which named an Ubicloud label, was removed on 2026-11-10 before the switch); jobs: `policy-drift`, `pr-evidence`, and in `ci`: `changes`, `lint`, `test`, `ci-result`; ci-result: defined in `ci` and required by `merge.sh`; nothing is placed, so it checks job results only; scheduled lane: none (no `schedule:` trigger); self-hosted pools reached from here: none; artifact store and caches (D11): none: no job writes artifacts or caches |
+| CI runners and storage (D9, D11) | `public: GitHub-hosted` (owner call-out 2026-11-10, "gitrunners will be guthub", linked from `AGENTS.md` › Owner decisions): every job names the standard hosted label `ubuntu-24.04` directly, with no placement gate; no `RUNS_ON_*` variable exists (`RUNS_ON_SMALL__VCHANCE`, which named an Ubicloud label, was removed on 2026-11-10 before the switch); jobs: `policy-drift`, `pr-evidence`, and in `ci`: `changes`, `lint`, `test`, `ci-result`; ci-result: defined in `ci` and required by `merge.sh`; nothing is placed, so it checks job results only; scheduled lane: `ci` hourly at minute 23 (the integration lane; a public repository's jobs are not placed, so there is no operator placement to check); self-hosted pools reached from here: none; artifact store and caches (D11): none: no job writes artifacts or caches |
 
 ## Public repository settings (set 2026-11-10; owner settings, core R8)
 The decisions and their links are in `AGENTS.md` › Owner decisions. An agent reports a change it finds here; it does
@@ -40,7 +40,8 @@ Web surfaces: none yet. When the browser shell lands, its in-repo e2e suite is t
 
 ## Check selection (impact-based; core D2)
 The `ci` workflow's first job, `changes`, runs `.github/scripts/ci-changes.sh`, which holds the mapping below in
-this order. A path that matches no row, or a file list that is empty or cannot be computed, selects every job.
+this order. On the hourly schedule the same job runs `.github/scripts/ci-lane.py`, which decides whether the branch
+head still needs a full run. A path that matches no row, or a file list that is empty or cannot be computed, selects every job.
 
 | Changed paths | Checks that run on the PR | Evidence recorded as |
 |---|---|---|
@@ -49,14 +50,16 @@ this order. A path that matches no row, or a file list that is empty or cannot b
 | `crates/**`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml` | `lint` (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`) and `test` (`cargo test --workspace --locked`, then the timing example) | per check (CI), with the test count |
 | Any other path, or an uncertain mapping | every job | per check (CI) |
 
-Escalation triggers: with one component, `lint` and `test` are already the full suite; `workflow_dispatch` runs every job.
+Escalation triggers: with one component, `lint` and `test` are already the full suite; `workflow_dispatch` and the
+scheduled lane run every job.
 
 ## Lanes
 | Lane | What runs | When | Owner of a failure |
 |---|---|---|---|
 | PR (fast) | `pr-evidence` (every PR), `policy-drift` (policy paths), and `ci` (`changes`, the selected of `lint` and `test`, `ci-result`) on GitHub-hosted `ubuntu-24.04` (D9 public mode; no placement) | every PR commit | author |
-| Integration batch | `ci` on each push to `main`, with the same selection over the pushed commits; it re-runs the jobs and does not carry the pull request's result | every merge | whoever merged (core D5) |
-| Scheduled | none: `ci` has no `schedule` trigger. With one component every Rust change already runs every job; a change confined to `.github/**` is first exercised by the next Rust change or a `workflow_dispatch` (core D2) | — | owner |
+| Push to `main` | `ci` with the same selection over the pushed commits; it re-runs the jobs and does not carry the pull request's result | every merge | whoever merged (core D5) |
+| Integration batch | `ci` on the hourly schedule (minute 23): every job on the head of `main`, unless a scheduled or dispatched run that executed its jobs already covers that head (then it runs nothing and passes, or carries that run's failure), or the head moved and the last covering run succeeded less than 4 hours ago (then it waits). Any error reading earlier runs means it runs. The decision table is `.github/scripts/ci-lane.py`, whose self-test runs in every `changes` job. A head is covered within about 5 hours of a merge. A run that executed nothing is not evidence | hourly; a full run only when `main` moved | owner; the agent checks at the start of a session that the newest commit on `main` is not more than about 8 hours ahead of the last covering run |
+| Scheduled | the integration batch above; nothing else (no advisory, matrix or soak runs yet) | — | owner |
 | Release | none (nothing is released) | — | owner |
 | Manual with evidence | none | — | owner |
 
@@ -75,7 +78,7 @@ Escalation triggers: with one component, `lint` and `test` are already the full 
   No owner acceptance step (owner decision 2026-11-01). Emergency: declared only by Von Chance (vchance); the PR
   names the declarer; follow-up PR within 7 days.
 - Whoever merges follows the default branch's push run of `ci` to its end and owns a failure there (core D5, 0.1.23).
-- Flakes (core D2, 0.1.23): no check here is a test, so none is expected; any flake is tallied in issue `Flaky tests` (to be opened at the first flake) and a repeat within 14 days is fixed or quarantined by a profile change.
+- Flakes (core D2, 0.1.23): the tests are deterministic (fixed seeds, no clock, no network), so none is expected; any flake is tallied in issue `Flaky tests` (to be opened at the first flake) and a repeat within 14 days is fixed or quarantined by a profile change.
 - Server-side enforcement: none configured. A public repository on the Free plan may have a ruleset; adding one is an
   owner setting. The `gh pr merge` guard (agent-rules
   `templates/merge-guard.md`; in the repo: `.agent-rules/merge.sh`) is the only mechanism and this is a known gap.
@@ -108,9 +111,9 @@ Moved into `AGENTS.md › Overrides` only once the owner accepts it; until then 
 |---|---|---|---|
 | Build output | `target/` in the checkout or worktree (ignored by git) | `cargo clean` | any time; it is rebuilt on demand |
 | Worktrees | `.claude/worktrees/*` | `git worktree remove <path> && git worktree prune` | branch merged, `git status` clean |
-| CI runner artifacts | none (policy workflows only, no artifacts) | — | — |
+| CI runner artifacts | none: no job writes artifacts or caches (core D11); each run builds from scratch on a runner that is thrown away | — | — |
 | Cloud / paid | none: GitHub-hosted minutes are free for a public repository | — | — |
 
 ## Budgets
 - CI: `pr-evidence` and `policy-drift` under a minute each; `ci` a few minutes (no build cache, by core D11) — to measure on the first runs.
-- Performance: per-frame position work for 10,000 objects under 0.05 ms, and a re-base inside 2 ms per frame up to depth 100 (measured: `docs/spike/results-1-positions.md`). Measured on the owner's Mac (Apple M4); CI machines are not a benchmark reference.
+- Performance: one budget so far, per-frame position work for 10,000 objects under 0.05 ms at any depth (measured 0.004 ms on an Apple M4, native; `docs/spike/results-1-positions.md`). A re-base is not yet inside a per-frame budget at depth: 1.3 ms at 100 levels on that machine, more on slower ones. WebAssembly is not measured. CI machines are not a benchmark reference.

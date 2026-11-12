@@ -12,6 +12,8 @@ publish = false
 [workspace.dependencies]
 num-bigint = "0.5.1"
 num-traits = "0.2.19"
+# Test only: a second big-integer library, as an independent reference for the arithmetic.
+dashu-int = "0.6.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

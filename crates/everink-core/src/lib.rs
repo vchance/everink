@@ -10,7 +10,7 @@ pub mod position;
 pub mod wire;
 
 pub use axis::Axis;
-pub use camera::Camera;
+pub use camera::{Camera, CameraError};
 pub use position::{Delta, Level, Position, Rel};
 pub use wire::{DecodeError, DepthCap};
 

@@ -20,11 +20,13 @@ cargo test -p everink-core --test positions <name>                  # one test
 cargo clippy --workspace --all-targets --locked -- -D warnings      # lint
 cargo fmt --all --check                                             # format check
 cargo run --release --example bench_positions                       # timing run (spike question 1)
+python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
 ```
 The toolchain is pinned in `rust-toolchain.toml`. A PR that adds a crate, a target or a check also adds its
-commands here and a matching `Check selection` row in `PROFILE.md` and case in `.github/scripts/ci-changes.sh`.
+commands here, a matching `Check selection` row in `PROFILE.md`, a case in `.github/scripts/ci-changes.sh`, and, for a new
+product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 
 ## Layout
 - `README.md`: what Everink is and the planned packages (`everink-core`, `everink-sync`, `everink-native`, `everink-web`).
@@ -40,7 +42,8 @@ commands here and a matching `Check selection` row in `PROFILE.md` and case in `
 - `crates/everink-core`: positions and the camera (spike slice 1). `tests/golden/positions.txt` is the
   cross-platform golden file.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
-- `.github/workflows/ci.yml`, `.github/scripts/ci-changes.sh`: product CI and its path-to-job mapping.
+- `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
+  `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
 - `LICENSE-MIT`, `LICENSE-APACHE`: the two licenses; everything here is under either, at the user's option.
 
 ## Gotchas

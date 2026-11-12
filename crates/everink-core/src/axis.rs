@@ -103,7 +103,9 @@ impl Axis {
                         return Axis(Repr::Small(shifted));
                     }
                 }
-                Axis(Repr::Big(BigInt::from(*v) << bits))
+                // Through `from_big`, so the result is canonical even when it fits 128 bits after all
+                // (-1 << 127 does).
+                Axis::from_big(BigInt::from(*v) << bits)
             }
             Repr::Big(b) => Axis(Repr::Big(b << bits)),
         }
@@ -129,7 +131,13 @@ impl Axis {
         {
             return Axis(Repr::Small(s));
         }
-        Axis::from_big(self.to_big() + other.to_big())
+        match (&self.0, &other.0) {
+            (Repr::Big(a), Repr::Big(b)) => Axis::from_big(a + b),
+            (Repr::Big(a), Repr::Small(b)) | (Repr::Small(b), Repr::Big(a)) => {
+                Axis::from_big(a + BigInt::from(*b))
+            }
+            (Repr::Small(a), Repr::Small(b)) => Axis::from_big(BigInt::from(*a) + BigInt::from(*b)),
+        }
     }
 
     pub fn sub(&self, other: &Axis) -> Axis {
@@ -138,11 +146,17 @@ impl Axis {
         {
             return Axis(Repr::Small(s));
         }
-        Axis::from_big(self.to_big() - other.to_big())
+        match (&self.0, &other.0) {
+            (Repr::Big(a), Repr::Big(b)) => Axis::from_big(a - b),
+            (Repr::Big(a), Repr::Small(b)) => Axis::from_big(a - BigInt::from(*b)),
+            (Repr::Small(a), Repr::Big(b)) => Axis::from_big(BigInt::from(*a) - b),
+            (Repr::Small(a), Repr::Small(b)) => Axis::from_big(BigInt::from(*a) - BigInt::from(*b)),
+        }
     }
 
     /// The value as `mantissa * 2^exponent` with a 53-bit mantissa, rounded to nearest, ties to even. Returns
-    /// `(negative, mantissa, exponent)`; the mantissa is 0 for zero and otherwise in `[2^52, 2^53]`.
+    /// `(negative, mantissa, exponent)`. The mantissa is 0 for zero. A value of 53 bits or fewer is returned as
+    /// itself with exponent 0; a longer one has a mantissa in `[2^52, 2^53]` (2^53 when rounding carried).
     ///
     /// This is written here and not left to the big-integer crate so that the rounding rule is the same on every
     /// target.

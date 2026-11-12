@@ -77,9 +77,17 @@ pub fn check_cap_bytes(bytes: &[u8], cap: &DepthCap) -> Result<(), DecodeError> 
         if len > cap.max_cell_bytes() {
             return Err(DecodeError::CellBeyondCap);
         }
+        // `len` is at most the cap in bytes here, so this cannot overflow.
         let body = r.take(len as usize + 8)?;
-        if len > 0 && body[0] == 0 {
-            return Err(DecodeError::NotCanonical);
+        if len > 0 {
+            if body[0] == 0 {
+                return Err(DecodeError::NotCanonical);
+            }
+            // The cap is in bits: count the bits of the top byte, not whole bytes.
+            let bits = (len - 1) * 8 + u64::from(8 - body[0].leading_zeros());
+            if bits > u64::from(cap.max_cell_bits) {
+                return Err(DecodeError::CellBeyondCap);
+            }
         }
     }
     if r.at != bytes.len() {

@@ -1,6 +1,8 @@
-# Product CI (core D2). A first `changes` job maps the changed paths to components (the mapping is
-# .github/scripts/ci-changes.sh, in the order of PROFILE.md › Check selection); each product job runs only when its
-# component changed. `ci-result` is the one required check: it fails if any job failed or was canceled.
+# Product CI (core D2). A first `changes` job decides what runs: on a pull request or a push it maps the changed
+# paths to components (.github/scripts/ci-changes.sh, in the order of PROFILE.md › Check selection); on the hourly
+# schedule it is the integration lane, which runs every job on the branch head unless that head is already covered
+# (.github/scripts/ci-lane.py). `ci-result` is the one required check: it fails if any job failed or was canceled,
+# or if the lane is carrying an earlier failure on the same head.
 # Public repository: every job names a GitHub-hosted label directly, with no placement gate (core D9). Nothing is
 # stored on GitHub: no caches, no artifacts (core D11).
 name: ci
@@ -8,6 +10,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: '23 * * * *'   # hourly, off the top of the hour; a run that finds the head covered costs only `changes`
   workflow_dispatch:
 permissions: { contents: read }
 concurrency:
@@ -18,18 +22,24 @@ jobs:
     name: changes
     runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
     timeout-minutes: 3
+    permissions: { contents: read, actions: read }   # the lane reads earlier runs of this workflow
     outputs:
       rust: ${{ steps.select.outputs.rust }}
       all: ${{ steps.select.outputs.all }}
+      carry_failure: ${{ steps.select.outputs.carry_failure }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with: { persist-credentials: false, fetch-depth: 0 }
+      - name: The lane's decision table still holds
+        run: python3 -I .github/scripts/ci-lane.py --self-test
       - id: select
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
         run: .github/scripts/ci-changes.sh "$EVENT" "$BEFORE" "$AFTER"
 
   lint:
@@ -42,7 +52,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with: { persist-credentials: false }
       - name: Toolchain (pinned by rust-toolchain.toml)
-        run: rustup show
+        run: rustup toolchain install
       - name: Format check
         run: cargo fmt --all --check
       - name: Clippy, warnings are errors
@@ -58,7 +68,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with: { persist-credentials: false }
       - name: Toolchain (pinned by rust-toolchain.toml)
-        run: rustup show
+        run: rustup toolchain install
       - name: Tests (x86-64; includes the cross-platform golden file written on aarch64)
         run: cargo test --workspace --locked
       - name: Timing example builds and runs
@@ -72,7 +82,8 @@ jobs:
     timeout-minutes: 2
     env:
       NEEDS: ${{ toJSON(needs) }}
+      CARRY_FAILURE: ${{ needs.changes.outputs.carry_failure }}
     steps:
-      - name: Fail if any job failed or was canceled
+      - name: Fail if any job failed or was canceled, or the lane carries a failure
         run: |
-          python3 -c 'import json,os,sys; n=json.loads(os.environ["NEEDS"]); bad=[k for k,v in n.items() if v["result"] in ("failure","cancelled")]; print("results:", {k:v["result"] for k,v in n.items()}); sys.exit(1 if bad else 0)'
+          python3 -c 'import json,os,sys; n=json.loads(os.environ["NEEDS"]); bad=[k for k,v in n.items() if v["result"] in ("failure","cancelled")]; carry=os.environ.get("CARRY_FAILURE")=="true"; print("results:", {k:v["result"] for k,v in n.items()}, "carry_failure:", carry); sys.exit(1 if bad or carry else 0)'

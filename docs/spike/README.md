@@ -50,4 +50,4 @@ criterion for each.
 
 | Slice | Results | Summary |
 |---|---|---|
-| 1 | [results-1-positions.md](results-1-positions.md) | Exact arithmetic is cheap per frame at any depth. Subtraction and re-basing at depth cost three to four times the design's estimate; a re-base at 1,000 levels is over the 2 ms budget and has to be spread or avoided. Positions match one golden file byte for byte on aarch64 and on x86-64; wasm32 follows in slice 3. |
+| 1 | [results-1-positions.md](results-1-positions.md) | Exact arithmetic costs almost nothing per frame at any depth (0.004 ms for 10,000 objects). Subtraction and re-basing at depth cost about three times the design's estimate, and a re-base does not reliably fit in a frame at depth, so it has to be spread. Positions match one golden file byte for byte on aarch64 and x86-64. Zooming back to a spot by hand is not exact at depth; an object's position and a jump to it are. |
