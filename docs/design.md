@@ -437,7 +437,7 @@ Each step is usable on its own and is the unit the detailed designs will follow.
 |---|---|
 | 0. Spike | One stroke type, two clients, a server, native and web, with level-and-cell positions. Picks the CRDT library and measures the targets. |
 | 1. Single-user canvas | Camera with unlimited pan and zoom, ink, shapes, select, move, undo, saved locally, first toolbars, the text-entry bridge. |
-| 2. Shared surface | Whole-surface sync, cursors with names and colors, live ink, tokens and share links. |
+| 2. Shared surface | Whole-surface sync, cursors with names and colors, live ink, tokens and invite links. |
 | 3. View-scoped sync | Server spatial index across levels, view subscriptions, cursor routing by view, client cache, jump to person. |
 | 4. Text, images, libraries | Text editing, paste and drop, blob store and media worker, built-in and user libraries. |
 | 5. Bounded surfaces, roles, versions, offline | Surface limits, owner/editor/viewer, named versions, reconnect merge. |

@@ -797,8 +797,9 @@ apply on top of the
 restored state; the client is told with `Notice::RestoreHappened`.
 
 A stroke that was in progress when the connection died is not kept by the server: the preview fades on other screens
-(section 04), and the author's device saves the stroke locally and sends it later as an ordinary finished change
-from its outbox (owner decision, 2026-11-12). The server never commits a stroke on someone's behalf. A change whose
+(section 04), and the author's device, which saves a stroke to its outbox every 250 ms while it is being drawn
+(section 07), sends it later as an ordinary finished change (owner decision, 2026-11-12). That holds when the
+app dies as well as when the connection does. The server never commits a stroke on someone's behalf. A change whose
 author's role was removed while offline is refused with `Reject { code: Forbidden }`; the client
 keeps
 it in a "not accepted" list and shows it (section 07 decides how) instead of discarding it silently.
@@ -919,7 +920,8 @@ runs in one of two modes, chosen by the operator (per deployment, or per tenant 
 
 - `auto`: created by the snapshot rule above, plus one immediately before a restore and one before any change that
   deletes more than 1,000 objects. Thinned with age, see Retention.
-- `named`: created when an editor member or the owner saves a version (owner decision, 2026-11-12). The room takes a
+- `named`: created when an editor member or the owner saves a version (the same rule as restoring, which the owner
+  decided on 2026-11-12; saving and deleting follow from it). The room takes a
   snapshot of the current state at `seq` right
   now (it is cheap: dirty chunks only) and marks it `named` with the name and author.
 

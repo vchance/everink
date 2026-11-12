@@ -194,8 +194,6 @@ pub struct SessionIdx(pub u16);
 
 /// Millisecond clock of the room, wraps every 49.7 days; compare with wrapping subtraction.
 pub struct RoomMs(pub u32);
-
-
 ```
 
 A room supports at most 65,535 live sessions by this index width; the real cap is in section 08's limits table.
@@ -232,7 +230,7 @@ the spike to decide.
 /// What a client sends. Sizes are payload bytes at depth 0, P = P(0) = 19.
 pub enum ToServer {
     /// First presence message after the connection is up. About 20 bytes. `resume` lets a reconnect keep session and
-        /// color. The name is not here: it comes from the token (section 08).
+    /// color. The name is not here: it comes from the token (section 08).
     PresenceHello { proto: u8, resume: Option<[u8; 16]>, locale_dir: u8 },
     /// Hot path, up to 30 per second. 9 + P = 28 bytes. Not sent while an ink or drag message is (they carry the
     /// pointer themselves), so a session never sends more than about 30 presence messages a second.
@@ -341,7 +339,6 @@ pub enum ToClient {
 pub struct PeerInfo {
     pub who: SessionIdx, pub user: UserKey /* opaque; same for two tabs of one person */,
     pub name: String,            // sanitized, disambiguated, <= 24 grapheme clusters (see names)
-    
     pub color: ColorSlot, pub glyph: Glyph,
     pub locatable: bool,         // section 08's per-session flag; false hides the jump action
 }
@@ -745,16 +742,20 @@ The pen's samples are collected by the client in the order they arrive, thinned 
   - On other screens, when the server declares the connection lost (6 s without a message) it removes the live ink,
     and receivers freeze the preview for the time they have already waited and then fade it out over 300 ms. The
     stroke thus vanishes about 6 seconds after the last point.
-  - On the drawer's device, the client keeps the stroke: it finishes it locally as an ordinary stroke (the pen lift
-    commits it to the local copy and the offline queue, with the `ObjectId` it already announced), and saves the
-    queue to local storage as soon as the loss is detected, not only at the lift.
-  - When the connection returns, the queue sends the finished stroke as one `Op::Create`. Others then see the whole
-    stroke appear at once as an ordinary new object, with no preview and no animation, however long afterwards
-    (seconds to minutes, or after a restart of the app). It takes its place in the order by the normal rules, which
-    is on top if nothing else was added after it was made on the drawer's device, and may be under objects others
-    drew meanwhile.
-  - If the device is destroyed before it saved anything, the stroke is lost; nothing the server holds could restore
-    it.
+  - On the drawer's device, the stroke survives a lost connection and also the app dying. While a stroke is being
+    drawn, online or offline, the device saves the points so far, with the `ObjectId` it already announced, to its
+    durable outbox at most every 250 ms (section 07 owns the mechanism). If only the connection is lost, the client
+    keeps drawing and finishes the stroke locally when the pen lifts, as an ordinary stroke in the offline queue.
+    If the app crashes or the tab is closed mid-stroke, even while connected, then at the next start an unfinished
+    stroke found in the outbox is finished as if the pen had lifted there.
+  - When the connection is up, the queue sends the finished stroke once as one `Op::Create` (the same `ObjectId`
+    makes a resend harmless). Others then see the whole stroke appear at once as an ordinary new object, with no
+    preview and no animation, however long afterwards (seconds to minutes, or after a restart of the app). It takes
+    its place in the order by the normal rules, which is on top if nothing else was added after it was made on the
+    drawer's device, and may be under objects others drew meanwhile. For others nothing else changes: the preview
+    fades after the timeout and the finished stroke arrives later.
+  - What can be lost: at most the last 250 ms of the stroke if the app dies, and the whole stroke only if the
+    device itself is lost. Nothing the server holds could restore it.
 - **Limits.** One live stroke per session; points kept by the server per stroke are capped at section 08's
   points-per-stroke limit (20,000, in section 08's table); live strokes per room at `max_live_strokes`. A stroke
   that exceeds the point cap still commits normally, only its preview stops growing.
@@ -815,7 +816,7 @@ The who list is a panel (section 07); its data comes from here.
 - The server sends list changes only to sessions that have the panel open (`WhoSubscribe { open: true }`). Others
   receive nothing but the count (once per 5 s). This prevents the join storm: 2000 people joining in a minute would
   otherwise send 2000 x 2000 = 4 million updates. Changes are batched to one message per second per subscriber.
-- Two sessions of one person are shown once, with a device count.  An entry shows the glyph and color, name, state,
+- Two sessions of one person are shown once, with a device count. An entry shows the glyph and color, name, state,
   and a "jump" button unless the person is not `locatable`.
 
 ### Jump to and follow
@@ -960,7 +961,7 @@ The who list is a panel (section 07); its data comes from here.
 | Position arithmetic out of range (`Delta::to_f64` returns `Far`) | The cursor jumps to the new sample. |
 | Clock offset estimate jumps | `D` slews 1 ms a frame, so a correction of 100 ms takes 100 frames; an offset step larger than 500 ms resets all buffers. |
 | A hostile name | Sanitized, truncated, drawn as plain text; a confusable of another present name is disambiguated. |
-| The drawer disconnects mid-stroke | See Live ink. |
+| The drawer disconnects or the app dies mid-stroke | See Live ink: the stroke is kept by the drawer's device and arrives later. |
 | Receiver's view changes during interpolation | Interpolation is in world offsets, converted at draw time, so the cursor follows the world, not the screen. |
 
 ## How it is tested
@@ -980,7 +981,8 @@ The who list is a panel (section 07); its data comes from here.
 | Color assignment | The first 14 sessions in a room all differ in color; a rejoin gets the same pair; with 100 sessions, no pair has more than 2 holders; the palette passes the pairwise distance test under normal vision and the three simulated deficiencies; the black/white text choice meets 4.5:1 for every slot |
 | Names | A corpus of hostile names (bidi overrides, zero-width joiners, stacked combining marks, very long, confusables, empty, markup, emoji sequences) produces bounded, plain, collision-free banners; no person can display a name equal to another present person's |
 | Live ink swap | A scripted drawer and viewer: for every frame between the last `Points` and the object arriving, exactly one of preview and object is drawn (no frame with none or both); the outlines differ by at most a quarter pixel; `End` before the object, and the object before `End`, both work |
-| Drawer disconnect | Cut the drawer's connection mid-stroke: other screens fade the preview within 7 s and no object appears; the drawer's device keeps the stroke, also across an app restart; reconnect: the whole finished stroke appears once on every screen as an ordinary object; the server never creates a stroke itself |
+| Drawer disconnect | Cut the drawer's connection mid-stroke: other screens fade the preview within 7 s and no object appears; the drawer's device keeps the stroke; reconnect: the whole finished stroke appears once on every screen as an ordinary object; the server never creates a stroke itself |
+| Drawer app dies | Kill the drawer's app mid-stroke while it is still connected, restart it: the unfinished stroke is found in the outbox, finished and sent, and appears exactly once on every screen (also when the restart is after a reconnect and a resend); at most the last 250 ms of points are missing |
 | Timeouts | Fake clock tests for Active, Idle, Away, Silent, Gone, and hidden-tab behavior |
 | Back-pressure | A receiver that reads slowly: the server's queue for it never holds more than one snapshot of unsent presence |
 | Jump and follow | A session with `locatable` off refuses both and a refusal looks like a departed person; the jump rate limit holds; the target receives the follow notice; a follower gets the followed cursor outside the region and cap; manual pan ends a follow; no message to another client contains a view that was not requested (scan of all outputs, shared with 08's N87) |

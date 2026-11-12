@@ -199,8 +199,9 @@ Frame strategy, for 10,000 objects at 60 fps:
 
 The softness during fast zoom is the same trade map renderers make, and it is shown for a few frames only.
 
-A further renderer candidate named by the owner (2026-11-12) is evaluated in the spike behind the `Backend` trait,
-with its details kept outside this repository. Nothing in this design depends on it until it has been measured.
+The owner also asked (2026-11-12) that a project of theirs be considered where it makes sense. It is evaluated in
+the spike behind the `Backend` trait, with its details kept outside this repository, and it is used only if it
+makes sense. Nothing in this design depends on it until it has been measured.
 
 ## Design
 
@@ -228,9 +229,9 @@ with its details kept outside this repository. Nothing in this design depends on
   for text. Nothing in this section depends on it.
 
 **Spike plan, rendering part.** Measure first: the tile raster rate of `vello_gpu` on 10,000 objects (see the
-performance budget); the cost of moving many lifted objects; and the stroke path from pen sample to GPU submit. A
-further candidate renderer named by the owner is evaluated in the same spike behind the `Backend` trait, with its
-details kept outside this repository; nothing depends on it until it has been measured.
+performance budget); the cost of moving many lifted objects; and the stroke path from pen sample to GPU submit. The
+further candidate the owner asked to have considered is evaluated in the same spike behind the `Backend` trait,
+with its details kept outside this repository; nothing depends on it until it has been measured.
 
 
 ### Crate layout
@@ -1109,7 +1110,7 @@ are carried in a third-party notices file). Versions are those on crates.io on 2
 ## Questions for the owner
 
 Answered on 2026-11-12 and stated in the Design: browsers and the processor-only path, the eraser default,
-languages, the first app, the merge model, the controls toolkit and the extra renderer candidate. Still open:
+languages, the first app, the merge model, the controls toolkit and the further candidate for the spike. Still open:
 
 1. **Quality versus speed after zoom.** The tile cache trades a few soft frames after fast zoom for 60 fps. If the
    owner would rather have exact sharpness at some frame cost, say so, and the design moves to option 2.

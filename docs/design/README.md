@@ -17,7 +17,7 @@ section ends with the claims it could not verify.
 | 05 | [Media: images, video, fonts and the blob store](05-media.md) | Accepted formats, the image pyramid, uploads, garbage collection, synchronized video, fonts |
 | 06 | [Rendering, ink, text and level of detail](06-rendering-and-ink.md) | The renderer and its fallbacks, the tile cache, the ink pipeline, text layout, overview pictures |
 | 07 | [Controls, platform API, shells and embedding](07-ui-and-platform.md) | The controls toolkit, the platform traits, the two shells, accessibility, text entry, the embedding API |
-| 08 | [Identity, roles, limits and the threat model](08-identity-and-security.md) | Tokens, share links, the permission matrix, every numeric limit, the threat model |
+| 08 | [Identity, roles, limits and the threat model](08-identity-and-security.md) | Tokens, invite links, the permission matrix, every numeric limit, the threat model |
 
 Each section has the same shape: scope, the problem, what others do, options considered, the design, failure
 modes, how it is tested, dependencies, what it assumes of other sections, questions for the owner, sources.
@@ -107,7 +107,7 @@ documents with measurements, before anything is built on them.
 | What is pen latency really? | 06 | A 240 frames-per-second camera on named devices, with and without the low-latency canvas |
 | Do cursors stall during a bulk load on one connection? | 04, 03 | Cursor delay while a client loads a large surface over a slow link |
 | Which controls toolkit? | 07 | The same toolbar and text field built twice, with Everink's own small toolkit and with egui: composition, a screen reader, wasm size and effort, native and web |
-| Is there a better renderer? | 06 | A further renderer candidate named by the owner, evaluated behind the renderer interface next to the Vello path; its details are kept outside this repository |
+| Does the owner's further candidate make sense here? | 06, 07 | A project the owner asked to have considered, evaluated behind the renderer interface next to the Vello path; its details are kept outside this repository |
 | How fast is storage? | 03 | Commit latency and load time for one SQLite file per room |
 
 ## Owner decisions
@@ -121,11 +121,11 @@ decision where it applies.
 | 1 | Merge model | Everink's own object map, ordered by the server; a CRDT library only for text | 02, 03 |
 | 2 | First app | A whiteboard | all |
 | 3 | Browsers without WebGPU | WebGPU and WebGL2 supported; the processor-only path is best effort | 06, 07 |
-| 4 | Controls toolkit | Decided after the spike, which builds the same toolbar both ways; a further renderer candidate named by the owner is evaluated too | 07, 06 |
+| 4 | Controls toolkit | Decided after the spike, which builds the same toolbar both ways. The owner also asked that a project of theirs be considered in this architecture where it makes sense; it is used only if it does | 07, 06 |
 | 5 | Offline edits | The offline edit wins when it arrives | 02 |
 | 6 | Restoring a version | The owner and editors; everyone is told right after | 03, 08 |
 | 7 | Jump and follow | On by default; a person can opt out; the followed person is told | 04, 08 |
-| 8 | Guests | No anonymous guests. A share link is an invitation: the person signs in through the embedding app before it grants anything | 08, 04, 05, 07 |
+| 8 | Guests | No anonymous guests. A link is an invitation: the person signs in through the embedding app before it grants anything | 08, 04, 05, 07 |
 | 9 | Depth cap | 1,024 levels each way by default; the operator sets the ceiling; an owner can lower it | 01, 08 |
 | 10 | Eraser | Whole objects by default; the partial stroke eraser is a second tool | 06, 02 |
 | 11 | Media | Animated images refused; video outside H.264 and VP9 refused unless the operator adds a converter; originals for the owner and editors; custom fonts allowed unless flagged against embedding | 05, 08 |
@@ -140,8 +140,8 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
 
 - **Which library edits text** (Loro, yrs or another). The spike compares them.
 - **The controls toolkit.** Chosen after the spike.
-- **The further renderer candidate.** Evaluated in the spike; using code of the owner's that is not public would
-  need the owner to license it.
+- **The further candidate the owner named.** Evaluated in the spike and used only if it makes sense; any question
+  it raises about naming or licensing is the owner's.
 - Each section's "Questions for the owner" lists what remains for that part, for example canvas rotation and how
   pasted objects are sized (01), undoing your own creation after others edited it (02), whether people may choose
   their cursor color (04), SVG import (05), blend modes (06), how far embedders may customize the controls (07).

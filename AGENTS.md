@@ -77,6 +77,11 @@ first; WCAG 2.2 AA for the built-in controls.
 - **No anonymous guests** (2026-11-12). This replaces "guest share links" in the decision of 2026-11-11 above: a
   share link is an invitation, and the person signs in through the embedding app before it grants anything.
 
-Ask, do not decide: which CRDT library edits text, the controls toolkit (after the spike), publishing or reserving
-package names, registering domains, licensing or naming any non-public code of the owner's, and opening the
+- **A further candidate for the spike** (2026-11-12). The owner asked that a project of theirs be considered in
+  this architecture, to be used only if it makes sense ("we can build out more backends as needed"), and that it
+  stay unnamed in this repository for now ("Keep it unnamed for now"). Its details are kept outside this
+  repository.
+
+Ask, do not decide: which CRDT library edits text, the controls toolkit (after the spike), whether to use, name or
+describe that further candidate here, publishing or reserving package names, registering domains, and opening the
 repository to outside contributors.

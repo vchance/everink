@@ -28,7 +28,7 @@ It leaves these to other sections:
 | Blob store, image and video files, playback clock, fonts | 05 |
 | Stroke point format, outline, brush engine, drawing and hit-testing of cuts, text layout | 06 |
 | Tool behavior, selection UI, text entry | 07 |
-| Roles, the table of limits, rate caps, share links | 08 |
+| Roles, the table of limits, rate caps, invite links | 08 |
 
 `Position` is section 01's type: a level plus one fixed-point integer per axis, about 19 bytes at the origin and
 about 2.5 bytes more per level. This section treats it as opaque and uses only the operations listed under "What
@@ -528,8 +528,9 @@ move first, it sees that its pending move would form a cycle among objects it ho
   05) counts current state, retained snapshots and named versions as live; `blobs_in_state` (part 14) is the pure
   function that lists the blobs of one document state; section 03's `blobs_in_store` loads each stored state and
   calls it.
-- **Versions.** Creating and deleting named versions is for editor members and the owner; restoring is for the owner
-  and editor members (owner decision, 2026-11-12; sections 03 and 08). A restore is itself a server-authored change
+- **Versions.** Restoring is for the owner and editor members (owner decision, 2026-11-12; sections 03 and 08).
+  Creating and deleting named versions follows the same rule; the owner's decision was about restoring, and this
+  extends it. A restore is itself a server-authored change
   that writes the old state on top, using `Doc::diff_to` (section 14).
 - **Who can still reference a tombstone?** (a) A connected client's undo stack (in memory, at most 100 entries per
   session; a refused undo is reported and dropped). (b) An offline client: a client away longer than the retention
@@ -593,7 +594,7 @@ which ones applied. This is the exact meaning of "undo reverses only my changes"
   changed the register.
 - Because the conditions are checked by the server, undo works on objects that left the client's cache. The client
   need not hold them.
-- Undo is per session. Two devices of one user have separate stacks; The stack is not saved across reloads (first
+- Undo is per session. Two devices of one user have separate stacks; the stack is not saved across reloads (first
   version).
 
 **Text** inside an open text object uses the text library's own undo for that user (section 10) while the editor is
@@ -701,7 +702,8 @@ pub trait TextDoc {
   paragraph is text up to a newline; paragraph alignment is the object-level `defaults.align` in the first version
   (lists and headings are later).
 - **What the first version includes (whiteboard).** The first app is a whiteboard (owner decision, 2026-11-12), so
-  text is for labels, sticky notes and short passages. The first version supports **bold, italic, size and color**
+  text is for labels, sticky notes and short passages. Proposed here, not an owner decision: the first version
+  supports **bold, italic, size and color**
   as marks, and per-object alignment (`defaults.align`). The `Marks` fields `underline`, `strike`, `font` and `link`
   exist in the model so that old documents and clients keep them (unknown parts are kept, part 12), but the first
   version's tools do not offer them. **Lists, headings, links and per-run font choice wait.** Lists are left out

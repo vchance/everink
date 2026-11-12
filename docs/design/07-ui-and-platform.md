@@ -151,8 +151,8 @@ What each must show in the spike, on the same fixed scope, measured and written 
 | Frame cost | Layout, painting and accessibility update within the 1 ms per frame planning figure |
 | Maintenance and license | Both are MIT OR Apache-2.0 today; release cadence and breaking-change history over the spike period |
 
-The owner has also named a further renderer candidate to evaluate in the spike. It is a renderer and not a controls
-toolkit, so it does not bear on this choice; section 06 covers renderer candidates.
+The owner also asked that a project of theirs be considered where it makes sense; it is evaluated in the spike, its
+details are kept outside this repository, and nothing here depends on it until then.
 
 ### Windowing and event loop
 
@@ -743,12 +743,15 @@ Namespaces: `doc` (change-log chunks and snapshots per surface, 03), `outbox` (c
   cannot fit, the UI says "Unsaved changes cannot be kept offline; stay connected"; (5) Safari's cap on
   script-written storage for sites not visited for a while (7 days) is unverified and on the test list, as it
   affects offline claims.
-- **A stroke in progress when the connection dies** (owner decision, 2026-11-12). Drawing never needs the network:
-  the stroke carries on locally, the preview fades on other screens (04), and when the pen lifts the core writes the
-  finished stroke as a normal `Change` into the durable `outbox`, which is sent on reconnect. While the connection
-  is down the in-progress samples are also journaled into `outbox` at most every 250 ms (a starting value), so a
-  killed tab loses at most that interval and the stroke can be finished and sent as a finished stroke on the next
-  start. The server never commits a stroke on someone's behalf.
+- **A stroke in progress when the connection or the app dies** (owner decision, 2026-11-12: nothing is lost unless
+  the device itself is lost). Drawing never needs the network: the stroke carries on locally and the preview fades
+  on other screens (04). While a stroke is being drawn, online or offline, the points so far are saved to the
+  durable `outbox` at most every 250 ms (a starting value), as an unfinished-stroke record. When the pen lifts the
+  core replaces that record with the finished stroke as a normal `Change`, which is sent as usual, or on reconnect.
+  If the app or tab dies first, the next start finds the unfinished record, finishes the stroke as if the pen had
+  lifted, and sends it once (the record and the change share one `ClientChangeId`, so a duplicate is refused by 03's
+  duplicate window). At most the last 250 ms of a stroke can be lost. The server never commits a stroke on someone's
+  behalf.
 - **Contract.** All implementations (memory, redb, IndexedDB, OPFS) pass one test suite; memory is also what the
   server's headless core uses.
 - **Sign-out.** `Command::SignOut { force }` first tries to send the outbox. If changes remain unsent, and the
@@ -765,12 +768,14 @@ reconnect timing is the core's, jittered and persisted across restarts as needed
 supplies an async `TokenProvider`, called at connect and when a token is about to expire (effect `GetToken`). There
 are no anonymous guests (owner decision, 2026-11-12): everyone is identified by the embedding app, and the first
 frame on the socket is only `auth { token }`. An invite address, if the page address carries one, is not used by
-Everink: **at mount, before any `await`, the shell's `take_invite_secret()` (section 08's name) removes the fragment from
-the visible address (`history.replaceState`)** and hands the invite to the embedding app as
-`Notification::InviteReceived`; the app
-signs the person in, redeems the invite with Everink (08) and issues connect tokens that carry the granted role and
-the link's id. Size and rate limits (message sizes, upload sizes, clipboard payload) are in 08's limits table; this
-section names them and carries no numbers of its own.
+Everink: **`take_invite_secret()` (section 08's name) removes the fragment from the visible address
+(`history.replaceState`) and returns the secret**. A page usually reads the secret before it has a token, so the
+embedding app can call `take_invite_secret()` itself before Everink is mounted; the shell also calls it at mount,
+before any `await`, as a safeguard. `Notification::InviteReceived` is the convenience for a page that mounts Everink
+first: the shell hands it the secret. In both cases the app signs the person in, redeems the invite with Everink
+(08) and issues connect tokens that carry the granted role and the link's id. Size and rate limits (message sizes,
+upload sizes, clipboard payload) are in 08's limits table; this section names them and carries no numbers of its
+own.
 
 ### The embedding API
 
@@ -791,7 +796,8 @@ pub enum Command {
     SetReadOnly(bool),                       // embedder-side only; can only lower what the token allows
     SetUiVisibility(UiVisibility), SetTheme(Theme), SetLocale(String) /* "en" only at first */, SetShortcuts(ShortcutMap),
     Connect, Disconnect, SignOut { force: bool },
-    Invite(InviteCommand),                   // Create{role, expires}, TurnOff(LinkId), SuspendPeople(LinkId), DeleteBy(LinkId)
+    Invite(InviteCommand),                   // Create{role, expires, max_redemptions}, TurnOff(LinkId), ChangeLink{link, role, max_redemptions, expires},
+                                             // ListPeople(LinkId), SuspendPeople(LinkId), LiftSuspension(UserId), RemovePerson(UserId), DeleteBy(LinkId)
     Export(ExportRequest),                   // image of the view or selection, via 06
 }
 #[non_exhaustive]
@@ -903,7 +909,7 @@ Pens live on tablets, so these constrain the first design:
 | IndexedDB or OPFS unavailable (private window, blocked data) | `Storage` falls back to memory; the status says changes will not be kept if the tab closes |
 | Wheel misclassified, or a browser reserves a shortcut | Sticky class and a visible "scroll wheel: zoom or pan" setting; the shortcut table avoids reserved keys and the embedder can disable bindings |
 | Two Everink instances in one page, or an embedder that hides all controls | Each instance has its own shadow root, textarea, mirror and storage scope; with controls hidden, shortcuts and the objects list still work and the embedder owns its controls' accessibility |
-| A stroke is in progress when the connection dies | The stroke continues locally, its preview fades on other screens, and it is sent as a finished stroke from the `outbox` after reconnect; the server never commits it for the author |
+| A stroke is in progress when the connection or the app dies | The stroke continues locally and its preview fades on other screens. Its points are saved to the `outbox` every 250 ms, online or offline; after an app death the next start finishes it as if the pen had lifted and sends it once. At most the last 250 ms is lost; the server never commits a stroke for the author |
 | Sign-out with unsent changes | `UnsentChanges(count)`; nothing is cleared until `force: true` |
 | Token provider fails or is slow | `TokenNeeded`; the surface stays usable offline; sync reconnects when a token arrives |
 
@@ -921,7 +927,7 @@ Pens live on tablets, so these constrain the first design:
 | IME on desktop and phones | Manual matrix per release for Latin accent composition (dead keys) on macOS, Windows (US-International), Linux (IBus, Fcitx 5; X11 and Wayland), iOS Safari and Android Chrome keyboards; the rows for Japanese, Pinyin and Korean are kept in the list and run when other scripts are added |
 | Toolkit comparison | The spike table under Options is filled for both candidates on the same toolbar and hex field; the choice is recorded with the numbers |
 | Renderer backends | Browser tests run on the WebGPU and WebGL2 paths; the processor-only path has a smoke test that it opens and a stroke can be drawn, with no performance claim |
-| Stroke in progress when the connection dies | Scripted: cut the connection mid-stroke, finish the stroke, restore the connection, and assert one finished stroke arrives once; kill the tab mid-stroke offline and assert the journaled samples are recovered as a finished stroke |
+| Stroke in progress when the connection or the app dies | Scripted: cut the connection mid-stroke, finish the stroke, restore the connection, and assert one finished stroke arrives once; kill the app mid-stroke while connected, restart, and assert the stroke appears exactly once; kill it offline mid-stroke and assert the journaled points are recovered as a finished stroke |
 | Accessibility tree is complete | Property test over the widget arena: every actionable widget has a role and a non-empty name; every `TreeUpdate` is consistent (no node without parent, stable ids) |
 | Mirror equals the tree and is safe | Snapshot test of `TreeUpdate` to DOM; `axe-core` over the mirror (unverified fit); a fuzz test with names containing markup asserts they appear as text and no element or attribute is injected (the mirror uses `textContent` only) |
 | Screen readers work | Manual pass per release with NVDA, VoiceOver (macOS, iOS), Orca, TalkBack over a fixed script: find tool, change color, hear the objects list, edit text |
@@ -990,8 +996,7 @@ embedders would inherit its conditions). Test-only tools such as `axe-core` (MPL
 - **06 (rendering):** a scene API for `SceneFragment` painted in the same frame as the canvas; the shared text
   service (Parley); the wgpu device; `request_frame()` and the pen-sample stream (coalesced samples, timestamps)
   delivered by this section; the `desynchronized` canvas it asks for through `live_ink_target`; selection-to-PNG;
-  and the `Backend` fallback chain (`vello_gpu` on WebGPU, then WebGL2, then `vello_cpu`), plus its evaluation of
-  any further renderer candidate.
+  and the `Backend` fallback chain (`vello_gpu` on WebGPU, then WebGL2, then `vello_cpu`).
 - **08 (identity):** the token is an opaque string through `TokenProvider`; the invite address and its redemption by
   the embedding app, with connect tokens that carry the link id; `Capabilities` per role for disabling controls;
   every limit (media, clipboard, message sizes) in its table; the rules for who may create, delete or restore

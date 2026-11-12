@@ -233,7 +233,8 @@ Payload (JSON object, at most 2 KiB after decoding, duplicate keys rejected, UTF
 | `iat` | integer seconds | yes | Not more than 60 s in the future. |
 | `exp` | integer seconds | yes | `exp - iat <= 600`. The verifier rejects longer lives, so a configuration mistake cannot mint a year-long token. 30 s of clock leeway. |
 | `jti` | string | yes | 16..=64 bytes, random. Logged and audited; used for revocation and, if the tenant turns it on, single use. |
-| `via` | string | no | `Option<LinkId>`: the invite link this person came through (16 hex characters). Checked at connect and at every refresh against the link's state (see Invite links). Absent for people who did not come through a link. |
+| `via` | string | no | `Option<LinkId>`: the invite link this person came through (16 hex characters). Checked at connect and at every refresh against the link's state (see Invite links). Absent for people who did not come through a link; it must stay unchanged for the life of a session. |
+| `direct` | bool | no | The embedding app's explicit statement that it grants this access directly, not through any invite link. Only meaningful without `via`; with `via` the token is refused. Required whenever the person has a `Redemption` on this surface and the token has no `via` (see Invite links); every acceptance on that basis is audited. |
 | `loc` | bool | no | Default for "others may jump to me" (default true). The person can still change it. |
 
 Unknown claims are ignored and never trusted. Colors are chosen by the server, not by a claim, so a token cannot
@@ -275,7 +276,7 @@ cost of one embedder round trip per connect.
 | | Operator admin | Tenant admin |
 |---|---|---|
 | Who | The party running the server | One embedding app, for its own tenant only |
-| Operations | Register a tenant and its keys; set tenant quotas and ceilings; suspend or resume a tenant; delete a tenant; set the tenant admin key list; read any audit trail | Set its revocation floor; add or remove its own connect keys, up to the operator's limit (4); delete a surface; erase a user; read its own audit trail |
+| Operations | Register a tenant and its keys; set tenant quotas and ceilings; suspend or resume a tenant; delete a tenant; set the tenant admin key list; read any audit trail | Set its revocation floor; add or remove its own connect keys, up to the operator's limit (4); delete a surface; erase a user; list a surface's invite links and redemptions, turn a link off, suspend or resume a link's people, remove a person who came through a link; read its own audit trail |
 | Key list | Operator admin keys, in the server's own configuration, not per tenant | Up to 4 tenant admin keys per tenant, set by the operator only, so a stolen tenant admin key cannot lock the tenant out of recovery |
 | Token `typ` | `everink-operator+jwt` | `everink-tenant-admin+jwt` |
 
@@ -407,7 +408,9 @@ struct Redemption {
 
 1. The embedding app's page loads. The web shell offers one function, `take_invite_secret()`, which reads
    `location.hash`, calls `history.replaceState` to remove the fragment, and returns the secret to the page's code.
-   Native shells receive the link through the embedding app's own deep link and hand over the secret the same way.
+   The page can call it before Everink is mounted (before the core is loaded and before any token exists), because
+   it reads the secret before the person has signed in. Native shells receive the link through the embedding app's
+   own deep link and hand over the secret the same way.
 2. The page signs the person in with the embedding app's own sign-in. If sign-in redirects away, the page keeps the
    secret in `sessionStorage` until the redemption succeeds, then deletes it. The secret never goes to Everink from
    the browser.
@@ -431,9 +434,9 @@ interchangeable with it:
 | Field | Value |
 |---|---|
 | `typ` | `everink-redeem+jwt` |
-| `iss`, `aud` | The tenant id; `everink-redeem:<deployment id>` |
+| `iss`, `aud` | `iss` must equal the tenant in the path; `aud` is `everink-redeem:<deployment id>` |
 | `sub` | The signed-in person's user id. This is the identity that is recorded. |
-| `surface` | Must equal the surface in the path. |
+| `surface` | Must equal the surface in the path, or the token is refused. |
 | `bh` | SHA-256 of the request body, base64url, so a token cannot be paired with another secret. |
 | `iat`, `exp` | `exp - iat <= 60`; 10 s of clock leeway. |
 | `jti` | 128 random bits, single use, kept until `exp` in the shared store (as the admin tokens' `jti`). |
@@ -455,15 +458,32 @@ interchangeable with it:
 - **An unredeemed secret grants nothing.** Nothing can be done with the secret alone: the WebSocket takes only
   `auth { token }`, and a token needs the embedding app's signature.
 
-**Connecting and refreshing with `via`.** When a connect token carries `via`, the server checks, in addition to the
-checks in the handshake: the link exists on this surface and is not Off (an expired link still counts, because
-expiry only ends new redemptions); a `Redemption` for this `sub` exists and is Active; and the token's role is not
-above the link's role. The session's effective role is the lower of the token's role and the link's role, and Viewer
-while the link is suspended. The same checks run at every `refresh`. A failure closes the socket (4403). The
-embedding app can therefore not extend a link's reach, and a link's role change applies to the next message of every
-open session.
+**Connecting and refreshing with `via`.** The server checks the token against what it knows about the person on this
+surface, in addition to the checks in the handshake:
 
-**Owner actions on a link,** all by the owner (or the tenant admin):
+- **Token with `via`:** the link exists on this surface and is not Off (an expired link still counts, because expiry
+  only ends new redemptions); a `Redemption` for this `sub` on that link exists and is Active; and the token's role
+  is not above the link's role. The session's effective role is the lower of the token's role and the link's role,
+  and Viewer while the link is suspended. A token with both `via` and `direct` is refused.
+- **Token without `via`, person with a `Redemption`:** if this `sub` has a `Redemption` on this surface in any state
+  (Active or Removed, on a link that is on, off or expired), the token is accepted only if it carries `direct:
+  true`. Without it the token is refused with 4403, whatever the state of the redemption or the link. A `direct:
+  true` acceptance is written to the audit trail (person, role, the redemptions that existed). So a stale grant in
+  the embedding app cannot bring back a removed person, and cannot lift a link's role cap by accident, by issuing a
+  token without `via`.
+- **Token without `via`, person without a `Redemption`:** accepted as usual. `direct` is not needed.
+- **Refresh:** the same checks run, and `via` (including its absence) and `direct` must equal the session's. A
+  refresh token whose `via` differs from the session's, whether dropped, added or changed, closes the socket with
+  4403; the client reconnects with a fresh token.
+
+A failure closes the socket (4403). The embedding app can therefore not extend a link's reach by accident or by a
+stale grant. This rests on three things: Everink caps the effective role by the link's role; `via` cannot change
+inside a session; and escaping a link's controls needs an explicit `direct: true`, which is audited. It does not
+stop the embedding app from granting access directly on purpose: it is trusted for identity, and the audit trail
+shows when it did. A link's role change applies to the next message of every open session.
+
+**Owner actions on a link,** by the owner; the tenant admin can also turn a link off, suspend or resume its people
+and remove a person, and list links and redemptions, but cannot create a link or change its role:
 
 - **Turn off.** State becomes Off. In the same step the room closes every session with `via` equal to the link
   (4403), puts those sessions on the revoked list (blob reads and uploads stop at once), and refuses new tokens that
@@ -533,7 +553,7 @@ makes the effective role Viewer.
 | Remove a person who came through an invite link | Y | n | n | room |
 | Change surface settings (limits within the ceilings, bounds, home, name, jump and follow for invited people) | Y | n | n | room |
 | Lower the surface's depth cap (never raise it past the operator's ceiling) | Y | n | n | room |
-| Create, list, change, turn off invite links; see who redeemed them | Y | n | n | room and tenant admin API |
+| Create, list, change, turn off invite links; see who redeemed them | Y | n | n | room; the tenant admin API can also list, turn off, suspend and remove people, but not create or change a link |
 | Manage members | N/A | N/A | N/A | the embedder's tokens |
 | Delete the surface | Y | n | n | tenant admin API; room for the owner |
 | Export the whole surface | Y | Y | tenant setting, default n | export endpoint |
@@ -592,7 +612,11 @@ says "set by section N" has its number and reasoning in that section; this table
 list to load, and the number is repeated here only when it is a security cap.
 
 Every number is a **default**, set per tenant and lowerable per surface by the owner within the tenant's ceiling.
-There is one set of numbers for everyone: with no anonymous guests there are no stricter guest figures. Byte sizes
+There is one set of numbers for everyone: with no anonymous guests there are no stricter guest figures. This is a
+reduction of protection compared with the earlier guest design and is stated plainly: people who came through an
+invite link get the full limits of their role, so up to `max_redemptions` people from a leaked or forwarded editor
+link can use editor limits (2 GiB videos, fonts, the full write budget). Whether such people should have tighter
+limits is an open question (question 7). Byte sizes
 assume about 12 bytes per stroke point on the wire (section 03 may adjust, and then these follow it).
 
 In the last column, "Own proposal" marks a number this section chose because no other section gave one; it is a
@@ -891,8 +915,11 @@ X-Content-Type-Options: nosniff
   `'unsafe-eval'` must never be needed: the web shell and its generated glue must not use string-to-code APIs. The
   CI test loads the shell under this policy and fails on any violation report. (Trusted Types compatibility with
   the generated glue is unverified and may force dropping that last directive.)
-- **No dynamic code,** no remote scripts, no inline scripts, no third-party scripts on pages that can hold an invite
-  secret in the fragment. Scripts are self-hosted, so Subresource Integrity is not the main control.
+- **No dynamic code,** no remote scripts, no inline scripts, no third-party scripts on any page of the embedding
+  app's origin for as long as an invite secret is held there: in the fragment, in memory, or in `sessionStorage`
+  across a sign-in redirect. The alternative that avoids holding the secret on the page at all: the page posts the
+  secret to the embedding app's backend before sign-in, and the backend holds it in a server-side session across
+  sign-in. Scripts are self-hosted, so Subresource Integrity is not the main control.
 - **Cross-origin isolation** (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
   require-corp`) is needed only if the web shell uses threads through `SharedArrayBuffer` (web.dev). It has costs:
   every cross-origin resource needs a `Cross-Origin-Resource-Policy` header or CORS (the blob store sends them), and
@@ -920,7 +947,7 @@ requested. Which invite link a person came through is shown to the owner only.
 
 | Logged (operational log) | Never logged |
 |---|---|
-| Time, request id, tenant, surface, session id, role, whether `via` is present, operation name, outcome code, sizes, timings | Tokens, tickets, upload grants, share-link secrets, signed addresses, query strings of blob requests, message contents, display names, object contents |
+| Time, request id, tenant, surface, session id, role, whether `via` is present, operation name, outcome code, sizes, timings | Tokens, redeem tokens, upload grants, invite secrets, signed addresses, query strings of blob requests, message contents, display names, object contents |
 | Remote address truncated to /24 (IPv4) or /48 (IPv6) | Full remote address (kept in memory only for rate limiting) |
 
 The secret types print as `[redacted]` in `Debug` and `Display`, so a stray `{:?}` cannot leak them. A test
@@ -935,7 +962,8 @@ greps log output of the integration tests for the test secrets.
 | Automatic snapshots | 30 days (high-level design) |
 | Named versions | Until deleted |
 | Unreferenced uploads | 24 hours |
-| Invite links and their redemptions | While the link exists; after it is turned off, hash and metadata 90 days for the audit trail, then deleted |
+| Invite links | While the link exists; after it is turned off, the secret hash and metadata are kept 90 days for the audit trail, then deleted |
+| Redemptions (every state, including Removed) | For the life of the surface, so the check on tokens without `via` keeps working; at most 5 links x 1,000 people |
 | Automatic restore points | Thinned with age up to 30 days (see the limits table) |
 
 **Deletion of a surface.** The owner (or the tenant through the admin interface) deletes a surface. The room closes,
@@ -989,11 +1017,12 @@ struct AuditEvent {
 
 Recorded: session open and close (with role, `kid` and `via`); a role seen to change on refresh (old, new); denied
 operations (aggregated per session per minute, so a flood does not flood the log); link created, role changed,
-turned off, expired, extended; invite redeemed or refused; person removed from a link; a link's people suspended or
-resumed; jump and follow switched for invited people; `Op::DeleteBy`; version created, restored (with the "before
-restore" point), deleted; surface settings changed; surface deleted; export; key added or removed; revocation floor
-set; tenant suspended; `erase_user`. Who may read: owners see their surface's rows; the tenant admin sees the
-tenant's. Row content never includes message bodies.
+turned off, expired, extended; invite redeemed or refused; a token accepted with `direct: true` for a person who has
+a redemption; person removed from a link; a link's people suspended or resumed; jump and follow switched for invited
+people; `Op::DeleteBy`; version created, restored (with the "before restore" point), deleted; surface settings
+changed; surface deleted; export; key added or removed; revocation floor set; tenant suspended; `erase_user`. Who
+may read: owners see their surface's rows; the tenant admin sees the tenant's. Row content never includes message
+bodies.
 
 ### Supply chain
 
@@ -1055,7 +1084,7 @@ creator; supply-chain attacker. The operator is trusted (accepted residual risk)
 | T10 | E: viewer writes | Viewer | The server decodes each object change itself and checks every field against the role; whole change refused | N28 to N34 | None known beyond bugs in the decoder | V8, V2 |
 | T11 | E: hand-made or raw text update bypassing checks | Viewer | Object changes are the server's own typed format, never a library blob; text updates are accepted only for text objects the role may edit, applied to a checked copy | N35 | Text-library limits on inspecting an update (open, question 1) | V8, V2 |
 | T12 | S: a display name imitates another person | Any person | Names come only from the embedding app, which is trusted for them; control, format and bidirectional characters removed; length cap; no badge and no comparison with other names (owner decision, 2026-11-12) | N36, N38 | Look-alike names are possible and are the embedding app's to prevent | V2 |
-| T13 | T: an editor defaces, directly or through a link | Editor, person with an editor link | Suspend a link's people; remove a person; `Op::DeleteBy` by user or by link; turn the link off; versions with a "before restore" point; limits | N39 to N42 | Visible damage until an owner acts (accepted, high-level design) | V2 |
+| T13 | T: an editor defaces, directly or through a link | Editor, person with an editor link | Suspend a link's people; remove a person; `Op::DeleteBy` by user or by link; turn the link off; versions with a "before restore" point; limits | N39 to N42 | Visible damage until an owner acts (accepted, high-level design). People who came through an editor link have full editor limits, so a leaked link gives up to `max_redemptions` people the full write budget; no tighter limit applies (question 7) | V2 |
 | T14 | R: deny having restored a version, changed a link | Owner or editor | Audit trail with hash chain, actor, session | N43, N44 | The operator can rewrite the table and recompute the chain unless it is anchored outside | V16 |
 | T15 | D: flooding changes, presence, uploads | Any client | GCRA at three scopes; caps; bans; auto-suspend of a link's people; upload grants bound to the session and cancelled by an upload floor when the session ends or loses upload rights, and by the lease epoch when the room restarts | N40b, N45 to N50 | A large distributed flood from many addresses; needs the operator's network protection | V2, V13 |
 | T16 | D: slow-loris, half-open sockets | Network | Deadlines on headers, auth frame, messages; ping; queue caps | N51 to N54 | Network-layer attacks below TLS | V13 |
@@ -1074,8 +1103,8 @@ creator; supply-chain attacker. The operator is trusted (accepted residual risk)
 | T28 | I: operator reads everything | Operator | None (decision 5) | none | Accepted | V14 |
 | T29 | E: hostile embedder reaches beyond its tenant | Embedder | Tenant scope; operator and tenant admin separate, a tenant cannot change its own quotas; separate `typ` and key lists | N81 to N85, N95, N97 | An embedder can read and delete everything in its own tenant, by design | V8 |
 | T30 | D: noisy tenant starves others | Embedder or its users | Per-tenant quotas set by the operator only, and work queues | N96, N97 | One process shares CPU; strong isolation needs separate processes | V13 |
-| T31 | S/E: use a token whose invite link is turned off or whose person was removed | Person; embedding app with a stale grant | Everink checks `via` against the link and the redemption at connect and at every refresh; open sessions are closed when a link is turned off or a person removed; the embedding app cannot extend the link's role | N18d, N21 | The embedding app keeps issuing such tokens; each is refused. Access after expiry is by design (expiry only stops new redemptions) | V7, V8 |
-| T32 | E: redeem an invite for many accounts to evade the limit | Person with a secret; embedder backend | `max_redemptions` distinct people; failures rate-limited; each redemption is a signed-in person of the embedding app and appears in the owner's list | N18b, N20 | An embedding app that mints accounts freely can fill the limit; the owner removes them | V6, V2 |
+| T31 | S/E: use a token whose invite link is turned off or whose person was removed, or drop `via` to escape the link's controls | Person; embedding app with a stale grant | Everink checks `via` against the link and the redemption at connect and at every refresh; `via` must not change in a session (4403); a token without `via` for a person who has a `Redemption` is refused unless it carries `direct: true`, and that is audited; open sessions are closed when a link is turned off or a person removed; the role is capped by the link | N18d, N18g to N18i, N21 | The embedding app can still grant access directly on purpose with `direct: true`; each such grant is audited. Access after expiry is by design (expiry only stops new redemptions) | V7, V8 |
+| T32 | E: redeem an invite for many accounts to evade the limit | Person with a secret; embedder backend | `max_redemptions` distinct people; failures rate-limited; each redemption is a signed-in person of the embedding app and appears in the owner's list | N18b, N20 | An embedding app that mints accounts freely can fill the limit; the owner removes them. Everyone redeemed through an editor link has full editor limits, so a forwarded link can bring up to `max_redemptions` people with 2 GiB videos, fonts and the full write budget (question 7) | V6, V2 |
 
 ## Failure modes
 
@@ -1104,7 +1133,7 @@ also checks the audit entry and, where relevant, the absence of a side effect.
 | Cross-tenant | N13 token A, path B. N81 to N85: for each storage, blob, room, audit and rate-limit function, a test with two tenants using the same surface id and the same hash shows no cross-read or write; a compile-time test that no public function takes a surface id without a `TenantScope`. N95: connect-key signature on an admin endpoint. N97: a tenant admin token cannot set or raise a quota, change a ceiling or touch another tenant, and operator, tenant admin and connect tokens are not interchangeable. N97a an admin token with a reused `jti` is refused, also after a restart. N96: one tenant at its quota does not slow another's p99 beyond a set figure. |
 | Origin and handshake | N14 hostile `Origin` refused. N15 a request with cookies and no token gets nothing. Pre-authentication: no data before `auth_ok`; 5-second timeout; frame over 4 KiB; second frame; 65th pre-auth socket from one address. |
 | Logging | N16 integration tests run with known secrets and grep every log and error body. N17 `Debug` of every secret type prints `[redacted]`. |
-| Invite links | N18 an unredeemed secret grants nothing: it cannot open a socket, and a token with `via` for a person who never redeemed is refused. N18a wrong secret, expired, off, removed and unknown give identical answers on redemption (byte for byte, within a timing tolerance). N18b the redemption limit: person 101 is refused, and a redeemed invite is not accepted for a different user beyond the limit. N18c redeeming again for the same user is accepted and records nothing new. N18d a token whose link is turned off, or whose person was removed, is refused at connect and at refresh. N18f an expired link refuses a new redemption; a person who redeemed before expiry still connects and refreshes after it; turning the link off then ends their access. N18e a redeem token with a mismatched body hash, reused `jti`, wrong `typ` or a connect token is refused. N19 a secret from another surface. N20 rate limit on failures. N21 turning a link off closes its sessions in under 1 s and puts them on the revoked list. N22 expiry leaves open sessions open and refuses the next new redemption; extending the link accepts new redemptions again. Storage test: the table never holds a secret, and a row shows only the hash. |
+| Invite links | N18 an unredeemed secret grants nothing: it cannot open a socket, and a token with `via` for a person who never redeemed is refused. N18a wrong secret, expired, off, removed and unknown give identical answers on redemption (byte for byte, within a timing tolerance). N18b the redemption limit: person 101 is refused, and a redeemed invite is not accepted for a different user beyond the limit. N18c redeeming again for the same user is accepted and records nothing new. N18d a token whose link is turned off, or whose person was removed, is refused at connect and at refresh. N18f an expired link refuses a new redemption; a person who redeemed before expiry still connects and refreshes after it; turning the link off then ends their access. N18e a redeem token with a mismatched body hash, reused `jti`, wrong `typ`, an `iss` that is not the tenant in the path, or a `surface` that is not the surface in the path is refused; a redeem token offered on the WebSocket as `auth { token }`, or as an admin token, and a connect token or admin token offered at the redeem endpoint, are refused. N18g a token without `via` for a person after removal, and after the link was turned off, is refused at connect and on refresh, with and without `direct` absent. N18h a refresh whose `via` is dropped, added or changed closes the socket with 4403. N18i a token with `direct: true` for a person with a `Redemption` is accepted and produces an audit row; `direct: true` together with `via` is refused. N19 a secret from another surface. N20 rate limit on failures. N21 turning a link off closes its sessions in under 1 s and puts them on the revoked list. N22 expiry leaves open sessions open and refuses the next new redemption; extending the link accepts new redemptions again. Storage test: the table never holds a secret, and a row shows only the hash. |
 | Role matrix | A generated test over the table: for every `Operation` and every role (owner, editor, viewer, and a person with `via` at each role) the expectation in the matrix is asserted, plus the change is not applied, and other clients see nothing. N23 to N27: a person with a link tries each owner-only operation. N28 to N34: a viewer tries each change type, live ink, upload, version operations, an original download. The matrix in this document and the test table are generated from one source file and checked for equality in CI. |
 | Server-checked changes | N35 a viewer sends a well-formed object change, and a well-formed text update; both refused. A change with one denied op among permitted ones applies none. |
 | Display names | N36 bidi override, zero-width, control, combining flood in a token's `name`: removed, and an all-removed name becomes the placeholder. N38 over-length name is cut at 64 grapheme clusters. A fuzz target on the cleaner. |
@@ -1184,7 +1213,11 @@ the merge model on 2026-11-11 and 2026-11-12; they are applied above. What is st
    surface, and 30 days of lifetime for new redemptions (people who redeemed keep access after expiry; the owner
    turns the link off, removes people or suspends them to end it). Are these numbers right for a whiteboard of about
    50 active people?
-7. **Publishing, domains and the public repository** stay the owner's (AGENTS.md). Provenance and attestation steps
+7. **Tighter limits for people who came through an invite link.** With no guests there are no stricter figures, so
+   people from a leaked or forwarded editor link get full editor limits. Should they have tighter ones (for
+   example images only and a smaller write budget), and should that be set per link or per tenant? The design
+   applies none today.
+8. **Publishing, domains and the public repository** stay the owner's (AGENTS.md). Provenance and attestation steps
    need the repository to be public or the plan to support them (unverified).
 
 ## Sources
