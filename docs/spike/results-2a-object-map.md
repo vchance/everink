@@ -13,7 +13,8 @@ Yes, with one correction to the design.
 - **It converges.** Copies that are given the same accepted changes end in the same bytes, whatever order the
   writes arrive in, with repeats, and when whole-object snapshots overlap the stream of changes.
 - **It is small and fast enough.** 100,000 strokes take about 1.3 KB of memory each, which is the design's
-  estimate, and open in 0.13 s. The server's work on one change is under a microsecond.
+  estimate, and open in 0.14 s. The server's work on one change is under a microsecond at depth 0, and 1 to 3
+  microseconds with positions 100 to 1,000 levels down.
 - **The design's rule for order keys does not work for the common case.** Putting each new object in front of
   the others reaches the 64-byte key limit after about 450 objects. The prototype counts instead, and 100,000
   objects in front need a 4-byte key. See [Finding 1](#finding-1-order-keys-must-count-at-the-ends).
@@ -45,20 +46,21 @@ system reports it; it includes the allocator's rounding and the pages a growing 
 | | 100,000, depth 0 | 100,000, depth 100 | 100,000, depth 1,000 | 1,000,000, depth 0 |
 |---|---|---|---|---|
 | Memory per object, estimated | 1,325 B | 1,590 B | 3,840 B | 1,513 B |
-| Memory per object, resident | 1,840 B | 2,164 B | 4,582 B | 2,263 B |
+| Memory per object, resident | 1,840 B | 2,164 B | 4,582 B | 2,122 B |
 | State as bytes, per object | 1,018 B | 1,270 B | 3,520 B | 1,019 B |
 | ... of which not points | 82 B | 334 B | 2,584 B | 83 B |
-| Open from bytes (median of 9) | 127 ms | 147 ms | 232 ms | 2,203 ms |
-| ... spread (min to 95th percentile) | 124 to 146 ms | 140 to 160 ms | 218 to 264 ms | 1,985 to 2,409 ms |
-| Server accepts a new stroke | 0.72 µs | 1.36 µs | 3.17 µs | 0.87 µs |
-| Server accepts a move | 0.45 µs | 1.38 µs | 3.48 µs | 0.61 µs |
-| Client copy merges a new stroke | 0.16 µs | 0.24 µs | 0.52 µs | 0.71 µs |
-| Client copy merges a move | 0.16 µs | 0.26 µs | 0.55 µs | 0.31 µs |
-| Client copy ignores a stale move | 0.06 µs | 0.09 µs | 0.06 µs | 0.26 µs |
+| Open from bytes, median of 9 (min to 95th percentile) | 138 ms (131 to 153) | 150 ms (147 to 186) | 232 ms (224 to 297) | 2,601 ms (2,194 to 2,821) |
+| Server accepts a new stroke | 0.69 µs (0.67 to 0.85) | 1.09 µs (1.08 to 1.16) | 2.93 µs (2.58 to 3.19) | 1.09 µs (0.84 to 1.40) |
+| Server accepts a transform write | 0.42 µs (0.41 to 0.48) | 1.07 µs (0.95 to 1.08) | 3.10 µs (2.80 to 3.27) | 0.66 µs (0.53 to 0.69) |
+| Client copy merges a new stroke | 0.16 µs (0.16 to 0.17) | 0.17 µs (0.17 to 0.18) | 0.40 µs (0.39 to 0.82) | 0.26 µs (0.19 to 0.77) |
+| Client copy merges a transform write | 0.13 µs (0.13 to 0.17) | 0.20 µs (0.17 to 0.21) | 0.50 µs (0.40 to 0.91) | 0.26 µs (0.18 to 0.63) |
+| Client copy ignores a stale write | 0.06 µs (0.06 to 0.06) | 0.07 µs (0.06 to 0.09) | 0.08 µs (0.06 to 0.09) | 0.20 µs (0.10 to 0.22) |
 | Longest order key | 4 B | 4 B | 4 B | 4 B |
 
-The object struct is 256 bytes; a stroke's packed points are 936 bytes (4.68 per point). The per-change times are
-one pass over all the objects, not repeated, so they show the size of the cost and not its spread. "Open" is
+The object struct is 256 bytes; a stroke's packed points are 936 bytes (4.68 per point). Each per-change time is
+the time of one pass over all the objects divided by their number; the pass is run five times, and the table
+gives the median with the minimum and maximum. A "transform write" is one `Set` of the transform register, which
+is what dragging an object on the surface sends; moving an object in the tree (`SetSlot`) is not timed. "Open" is
 decoding and checking every object, rebuilding the children index, and checking the tree.
 
 ### Against the design's estimates
@@ -68,8 +70,8 @@ decoding and checking every object, rebuilding the children index, and checking 
 | Stroke of 200 samples, packed | about 1 KB (section 02) | 936 B | matches |
 | Fixed part of an object near the origin | about 110 B (section 02) | 82 B, body fields included | smaller: no creator link, no provenance yet |
 | Server memory per object | 1.3 KB, or 2 KB if memory costs 50% more than the packed form (section 03) | 1.3 to 1.5 KB estimated, 1.8 to 2.3 KB resident | the range the design gave; the spatial index is not built yet and will add to it |
-| Load of 1,000,000 objects | about 5 s to decode and 1 to 2 s to index, "unmeasured" (section 03) | 2.2 s to decode, check and build the children index | faster; reading from disk and the spatial index are not in it |
-| Server work per change | about 20 µs (section 03) | 0.5 to 0.9 µs at depth 0 | the map is not the cost; the estimate also covers storage and sending, which are not built |
+| Load of 1,000,000 objects | about 5 s to decode and 1 to 2 s to index, "unmeasured" (section 03) | 2.6 s to decode, check and build the children index | faster; reading from disk and the spatial index are not in it |
+| Server work per change | about 20 µs (section 03) | 0.4 to 1.1 µs at depth 0, about 3 µs at 1,000 levels | the map is not the cost; the estimate also covers storage and sending, which are not built |
 
 ### Depth
 
@@ -77,7 +79,7 @@ A position 100 levels down adds about 250 bytes to an object and 1,000 levels do
 and in the state bytes alike. At 1,000 levels the positions are 73% of the state. This is the second measurement
 that says positions should be stored and sent as differences from a nearby base
 ([slice 1](results-1-positions.md) found the same for speed). Per-change time also grows with depth, by a factor
-of about four at 1,000 levels, and stays in microseconds.
+of four to seven at 1,000 levels, and stays in microseconds.
 
 ## What the tests show
 
@@ -152,6 +154,9 @@ down and tested.
   the pair of the newest change, which is what the prototype returns. Section 03 should say that, or keep more.
 - **A refused change is not remembered.** Sent again, it is checked again. That is harmless here, and it means a
   change refused for a passing reason (a parent that was deleted and is then restored) can succeed on a resend.
+- **A state from outside is checked for more than its tree.** Opening a state also refuses an ordinal used
+  twice and an object made by change number 0. A state that claims the last `Seq` or the last ordinal opens,
+  and the room then refuses changes (`RoomFull`) instead of wrapping around.
 - **"No two operations write the same register" includes creation.** The prototype refuses a change that creates
   an object and then writes one of its registers, because both would carry the same `Seq`. Section 02 does not
   say; it should.

@@ -2,8 +2,8 @@
 //!
 //! Run with `cargo run --release --example bench_object_map [objects] [depth]`. The defaults are 100,000
 //! objects with anchors at depth 0; `100000 100` puts the anchors 100 levels down.
-//! A step that is repeated gives its minimum, median and 95th percentile; a step that is one pass over all the
-//! objects says so.
+//! Every timed step is repeated and gives its spread: opening a state nine times, each pass over all the
+//! objects five times.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -18,6 +18,8 @@ use everink_sync::{
 
 const POINTS_PER_STROKE: usize = 200;
 const OPEN_RUNS: usize = 9;
+/// How often each pass over all the objects is repeated.
+const PASS_RUNS: usize = 5;
 
 /// Resident memory of this process in bytes, as the operating system reports it, or `None` where `ps` is not
 /// available. Used as a second opinion on the room's own estimate.
@@ -162,17 +164,21 @@ fn run(n: usize, depth: i32) {
         })
         .collect();
 
-    // 1. The server accepts every stroke.
-    let mut room = Room::new(cap, 7);
-    let mut creates: Vec<Applied> = Vec::with_capacity(n);
-    let t = Instant::now();
-    for c in &changes {
-        creates.push(accept(&mut room, client, c));
+    // 1. The server accepts every stroke. Each run fills a new room.
+    let mut times = Vec::new();
+    let mut filled = None;
+    for _ in 0..PASS_RUNS {
+        let mut room = Room::new(cap, 7);
+        let mut creates: Vec<Applied> = Vec::with_capacity(n);
+        let t = Instant::now();
+        for c in &changes {
+            creates.push(accept(&mut room, client, c));
+        }
+        times.push(per_object_us(t, n));
+        filled = Some((room, creates));
     }
-    println!(
-        "server accepts a new stroke:        {:8.2} us each (one pass)",
-        per_object_us(t, n)
-    );
+    let (mut room, creates) = filled.expect("at least one run");
+    line("server accepts a new stroke:", times);
     let packed: usize = room
         .objects()
         .map(|o| match o.body() {
@@ -216,66 +222,74 @@ fn run(n: usize, depth: i32) {
         med * 1e3 / n as f64
     );
 
-    // 3. A client's copy merges every stroke.
+    // 3. A client's copy merges every stroke. Each run fills a new copy.
+    let mut times = Vec::new();
     let mut replica = Replica::new(ClientId([2; 16]), UserId(2));
-    let t = Instant::now();
-    for a in &creates {
-        replica.apply(a);
+    for _ in 0..PASS_RUNS {
+        replica = Replica::new(ClientId([2; 16]), UserId(2));
+        let t = Instant::now();
+        for a in &creates {
+            replica.apply(a);
+        }
+        times.push(per_object_us(t, n));
     }
-    println!(
-        "client copy merges a new stroke:    {:8.2} us each (one pass)",
-        per_object_us(t, n)
-    );
+    line("client copy merges a new stroke:", times);
     assert_eq!(replica.encode_objects(), room.encode_objects());
     drop(creates);
 
-    // 4. One register write per object: a move. This is the common change once a surface is drawn.
-    let moves: Vec<Change> = ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| Change {
-            id: ClientChangeId((n + i) as u64 + 1),
-            observed: room.head(),
-            ops: vec![Op::Set {
-                id: *id,
-                value: Value::Xform(Xform {
-                    anchor: anchor(&mut rng, depth),
-                    linear: IDENTITY_LINEAR,
-                }),
-                if_stamp: None,
-            }],
-        })
-        .collect();
-    let mut log: Vec<Applied> = Vec::with_capacity(n);
-    let t = Instant::now();
-    for c in &moves {
-        log.push(accept(&mut room, client, c));
-    }
-    println!(
-        "server accepts a move:              {:8.2} us each (one pass)",
-        per_object_us(t, n)
-    );
-    let t = Instant::now();
-    for a in &log {
-        replica.apply(a);
-    }
-    println!(
-        "client copy merges a move:          {:8.2} us each (one pass)",
-        per_object_us(t, n)
-    );
-    assert_eq!(replica.encode_objects(), room.encode_objects());
+    // 4. One register write per object: a new transform, which is what dragging an object on the surface
+    //    sends. (Moving it in the tree, `SetSlot`, is not timed.) Each run writes every object once more.
+    let (mut server, mut merge, mut stale) = (Vec::new(), Vec::new(), Vec::new());
+    for run in 0..PASS_RUNS {
+        let writes: Vec<Change> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| Change {
+                id: ClientChangeId((n * (run + 1) + i) as u64 + 1),
+                observed: room.head(),
+                ops: vec![Op::Set {
+                    id: *id,
+                    value: Value::Xform(Xform {
+                        anchor: anchor(&mut rng, depth),
+                        linear: IDENTITY_LINEAR,
+                    }),
+                    if_stamp: None,
+                }],
+            })
+            .collect();
+        let mut log: Vec<Applied> = Vec::with_capacity(n);
+        let t = Instant::now();
+        for c in &writes {
+            log.push(accept(&mut room, client, c));
+        }
+        server.push(per_object_us(t, n));
+        let t = Instant::now();
+        for a in &log {
+            replica.apply(a);
+        }
+        merge.push(per_object_us(t, n));
+        assert_eq!(replica.encode_objects(), room.encode_objects());
 
-    // 5. The same moves again, newest first: each must be looked at and ignored.
-    let t = Instant::now();
-    for a in log.iter().rev() {
-        replica.apply(a);
+        // 5. The same writes again, newest first: each must be looked at and ignored.
+        let t = Instant::now();
+        for a in log.iter().rev() {
+            replica.apply(a);
+        }
+        stale.push(per_object_us(t, n));
+        assert_eq!(replica.encode_objects(), room.encode_objects());
     }
-    println!(
-        "client copy ignores a stale move:   {:8.2} us each (one pass)",
-        per_object_us(t, n)
-    );
-    assert_eq!(replica.encode_objects(), room.encode_objects());
+    line("server accepts a transform write:", server);
+    line("client copy merges a transform write:", merge);
+    line("client copy ignores a stale write:", stale);
     room.check_tree().expect("a tree");
+}
+
+/// Prints the minimum, median and maximum of the runs of one pass, in microseconds per object.
+fn line(what: &str, times: Vec<f64>) {
+    let runs = times.len();
+    let (min, med, _) = stats(times.clone());
+    let max = times.iter().cloned().fold(0.0, f64::max);
+    println!("{what:38} {med:6.2} us each, median of {runs} runs (min {min:.2}, max {max:.2})");
 }
 
 fn main() {

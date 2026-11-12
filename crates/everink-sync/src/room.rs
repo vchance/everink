@@ -40,6 +40,9 @@ pub enum RejectCode {
     BadOrder,
     /// No order key of the allowed length fits at that place.
     OrderKeyFull,
+    /// The room has used every `Seq` or every ordinal. Not reachable by counting; a state from outside can
+    /// claim to be there.
+    RoomFull,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,7 +127,10 @@ impl Room {
         {
             return Outcome::Duplicate { highest, seq };
         }
-        let seq = Seq(self.head.0 + 1);
+        let Some(next) = self.head.0.checked_add(1) else {
+            return Outcome::Rejected(RejectCode::RoomFull);
+        };
+        let seq = Seq(next);
         let plan = match self.plan(user, seq, change) {
             Ok(plan) => plan,
             Err(code) => return Outcome::Rejected(code),
@@ -189,6 +195,12 @@ impl Room {
                         return Err(RejectCode::IdExists);
                     }
                     self.check_new(new)?;
+                    // The ordinal this object gets, and the one after it, must both exist.
+                    let ordinal = self
+                        .next_ordinal
+                        .checked_add(plan.created)
+                        .filter(|o| *o < u32::MAX)
+                        .ok_or(RejectCode::RoomFull)?;
                     let order = self.resolve(&mut plan, new.parent, &new.at, new.id)?;
                     // A new object's registers all carry this change's number, so no later operation of the
                     // same change may write one.
@@ -197,7 +209,7 @@ impl Room {
                     }
                     let object = Object::new(
                         new.id,
-                        Ordinal(self.next_ordinal + plan.created),
+                        Ordinal(ordinal),
                         user,
                         seq,
                         Slot {
@@ -336,7 +348,8 @@ impl Room {
         front: bool,
         moving: ObjectId,
     ) -> Option<OrderKey> {
-        let untouched = |(_, id): &&(OrderKey, ObjectId)| !plan.touched.contains_key(id);
+        let untouched =
+            |(_, id): &&(OrderKey, ObjectId)| !plan.touched.contains_key(id) && *id != moving;
         let committed = self.children.get(&parent).and_then(|set| {
             if front {
                 set.iter().rev().find(untouched)
@@ -385,12 +398,21 @@ impl Room {
         room.head = head;
         room.next_ordinal = next_ordinal;
         let mut last: Option<ObjectId> = None;
+        let mut ordinals: HashSet<u32> = HashSet::new();
         for _ in 0..count {
             let object = Object::decode_from(&mut r, &cap)?;
             if last.is_some_and(|l| l >= object.id) {
                 return Err(DecodeError::Invalid("objects out of order"));
             }
             last = Some(object.id);
+            if object.created.0 == 0 {
+                return Err(DecodeError::Invalid(
+                    "an object created before the first change",
+                ));
+            }
+            if !ordinals.insert(object.ordinal.0) {
+                return Err(DecodeError::Invalid("an ordinal used twice"));
+            }
             if object.rev() > head || object.ordinal.0 >= next_ordinal {
                 return Err(DecodeError::Invalid(
                     "an object newer than the state says it is",

@@ -677,6 +677,24 @@ fn front_and_back_are_resolved_against_every_sibling() {
     );
     want.insert(101, mid);
     assert_eq!(d.room.children(None).collect::<Vec<_>>(), want);
+    // Putting the front object in front again, or the back one behind again, moves nothing and does not use
+    // up a key: its own key is not counted among the siblings it is placed against.
+    let (top, bottom) = (*want.last().unwrap(), want[0]);
+    let (top_key, bottom_key) = (key(&d, &top), key(&d, &bottom));
+    for _ in 0..3 {
+        d.accept(0, vec![mv(top, None)]);
+        d.accept(
+            0,
+            vec![Op::SetSlot {
+                id: bottom,
+                parent: None,
+                at: At::Back,
+                if_stamp: None,
+            }],
+        );
+    }
+    assert_eq!(d.room.children(None).collect::<Vec<_>>(), want);
+    assert_eq!((key(&d, &top), key(&d, &bottom)), (top_key, bottom_key));
     // The wrong way round is refused.
     let id = object_id(&mut d.rng);
     let wrong = d.new_op(id, None, At::Between(Some(above), Some(below)), true);
@@ -1039,6 +1057,38 @@ fn the_bytes_of_a_state_are_canonical_and_bad_bytes_are_refused() {
         Some(DecodeError::TrailingBytes)
     );
     assert!(Room::decode_all(&bytes[..bytes.len() - 1], CAP, 1).is_err());
+    // A state that claims to have used every number opens, and then refuses changes; it does not wrap around.
+    let mut full = Vec::new();
+    full.extend_from_slice(&[0xff; 9]);
+    full.extend_from_slice(&[0x01, 0x00, 0x00]);
+    let mut at_the_end = Room::decode_all(&full, CAP, 1).unwrap();
+    assert_eq!(at_the_end.head(), Seq(u64::MAX));
+    let mut rng = SplitMix64(77);
+    let make = Change {
+        id: ClientChangeId(1),
+        observed: Seq(0),
+        ops: vec![Op::Create(NewObject {
+            id: object_id(&mut rng),
+            parent: None,
+            at: At::Front,
+            xform: xform(&mut rng),
+            name: None,
+            body: Body::Group { clip: false },
+        })],
+    };
+    assert_eq!(
+        at_the_end.submit(client_id(0), UserId(0), &make),
+        Outcome::Rejected(RejectCode::RoomFull)
+    );
+    // The same for ordinals: head 0, next ordinal at its last value.
+    let no_ordinals = [0x00, 0xff, 0xff, 0xff, 0xff, 0x0f, 0x00];
+    let mut at_the_end = Room::decode_all(&no_ordinals, CAP, 1).unwrap();
+    assert_eq!(
+        at_the_end.submit(client_id(0), UserId(0), &make),
+        Outcome::Rejected(RejectCode::RoomFull)
+    );
+    assert!(at_the_end.is_empty());
+
     // A state whose objects form a loop is refused when it is opened.
     let mut d = Desk::new();
     let a = d.create(None, At::Front, true);
@@ -1067,5 +1117,34 @@ fn the_bytes_of_a_state_are_canonical_and_bad_bytes_are_refused() {
     assert_eq!(
         Room::decode_all(&looped, CAP, 1).err(),
         Some(DecodeError::Invalid("a tree that is not a tree"))
+    );
+    // Two objects with one ordinal, and an object made by change number 0, are refused. The ordinal is the
+    // byte after the id, and `created` two bytes after that.
+    let (a_bytes, b_bytes) = (oa.encode(), ob.encode());
+    let rebuild = |first: &[u8], second: &[u8]| {
+        let mut out = state[..3].to_vec();
+        out.extend_from_slice(first);
+        out.extend_from_slice(second);
+        out
+    };
+    let (lo, hi) = if a < b {
+        (a_bytes, b_bytes)
+    } else {
+        (b_bytes, a_bytes)
+    };
+    assert!(Room::decode_all(&rebuild(&lo, &hi), CAP, 1).is_ok());
+    let mut same_ordinal = hi.clone();
+    same_ordinal[16] = lo[16];
+    assert_eq!(
+        Room::decode_all(&rebuild(&lo, &same_ordinal), CAP, 1).err(),
+        Some(DecodeError::Invalid("an ordinal used twice"))
+    );
+    let mut made_at_zero = hi.clone();
+    made_at_zero[18] = 0;
+    assert_eq!(
+        Room::decode_all(&rebuild(&lo, &made_at_zero), CAP, 1).err(),
+        Some(DecodeError::Invalid(
+            "an object created before the first change"
+        ))
     );
 }
