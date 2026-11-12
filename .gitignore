@@ -8,3 +8,6 @@
 !.claude/rules/
 !.claude/hooks/
 CLAUDE.local.md
+
+# Rust build output
+/target

@@ -7,21 +7,24 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
-idea and research stage: the repository holds only documents (`README.md`, `docs/`), no code, build or tests yet.
+spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with one crate
+(`crates/everink-core`). Nothing is released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
 ## Commands
 ```sh
-# build: none yet (no code)
-# all tests: none yet
-# one test: none yet
-# lint: none configured
-# format check: none configured
+cargo build --workspace --locked                                    # build
+cargo test --workspace --locked                                     # all tests
+cargo test -p everink-core --test positions <name>                  # one test
+cargo clippy --workspace --all-targets --locked -- -D warnings      # lint
+cargo fmt --all --check                                             # format check
+cargo run --release --example bench_positions                       # timing run (spike question 1)
+UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
 ```
-When code arrives, the PR that adds it also adds the build, test, lint and format commands here and a matching
-`Check selection` row in `PROFILE.md`.
+The toolchain is pinned in `rust-toolchain.toml`. A PR that adds a crate, a target or a check also adds its
+commands here and a matching `Check selection` row in `PROFILE.md` and case in `.github/scripts/ci-changes.sh`.
 
 ## Layout
 - `README.md`: what Everink is and the planned packages (`everink-core`, `everink-sync`, `everink-native`, `everink-web`).
@@ -32,12 +35,23 @@ When code arrives, the PR that adds it also adds the build, test, lint and forma
   and the claims they could not verify.
 - `docs/landscape.md`: existing projects and libraries, with sources; says which claims were not re-verified.
 - `docs/naming.md`: why the name, and the availability check.
+- `docs/spike/`: the spike. `README.md` is the plan: the questions, what settles each, the slices. One results
+  file per slice.
+- `crates/everink-core`: positions and the camera (spike slice 1). `tests/golden/positions.txt` is the
+  cross-platform golden file.
+- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
+- `.github/workflows/ci.yml`, `.github/scripts/ci-changes.sh`: product CI and its path-to-job mapping.
 - `LICENSE-MIT`, `LICENSE-APACHE`: the two licenses; everything here is under either, at the user's option.
 
 ## Gotchas
 - The package names in `README.md` are intentions only. Nothing is published on crates.io or npm; publishing is an
   owner decision.
 - `LICENSE-APACHE` is the unmodified text from apache.org; never reflow or edit it.
+- `tests/golden/positions.txt` was written on aarch64 and is checked on x86-64 by CI. Rewrite it only when the
+  position arithmetic is meant to change, and say so in the PR: a difference between machines is a bug, not a reason
+  to regenerate.
+- Crates are `publish = false`. Do not remove that; publishing is an owner decision.
+- Timing figures in `docs/spike/` name the machine they were measured on. Do not compare them with a CI runner.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions

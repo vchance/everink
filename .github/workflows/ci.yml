@@ -1,0 +1,78 @@
+# Product CI (core D2). A first `changes` job maps the changed paths to components (the mapping is
+# .github/scripts/ci-changes.sh, in the order of PROFILE.md › Check selection); each product job runs only when its
+# component changed. `ci-result` is the one required check: it fails if any job failed or was canceled.
+# Public repository: every job names a GitHub-hosted label directly, with no placement gate (core D9). Nothing is
+# stored on GitHub: no caches, no artifacts (core D11).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions: { contents: read }
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
+    timeout-minutes: 3
+    outputs:
+      rust: ${{ steps.select.outputs.rust }}
+      all: ${{ steps.select.outputs.all }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - id: select
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: .github/scripts/ci-changes.sh "$EVENT" "$BEFORE" "$AFTER"
+
+  lint:
+    name: lint
+    needs: [changes]
+    if: ${{ needs.changes.outputs.all == 'true' || needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy, warnings are errors
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: test
+    needs: [changes]
+    if: ${{ needs.changes.outputs.all == 'true' || needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+      - name: Tests (x86-64; includes the cross-platform golden file written on aarch64)
+        run: cargo test --workspace --locked
+      - name: Timing example builds and runs
+        run: cargo run --release --locked --example bench_positions
+
+  ci-result:
+    name: ci-result
+    needs: [changes, lint, test]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
+    timeout-minutes: 2
+    env:
+      NEEDS: ${{ toJSON(needs) }}
+    steps:
+      - name: Fail if any job failed or was canceled
+        run: |
+          python3 -c 'import json,os,sys; n=json.loads(os.environ["NEEDS"]); bad=[k for k,v in n.items() if v["result"] in ("failure","cancelled")]; print("results:", {k:v["result"] for k,v in n.items()}); sys.exit(1 if bad else 0)'

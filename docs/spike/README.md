@@ -1,0 +1,53 @@
+# The spike
+
+Status: started 2026-11-12. Slice 1 is done; slices 2 to 5 are planned.
+
+The spike is step 0 of the order of work in [`../design.md`](../design.md). Its purpose is to replace the largest
+guesses in the detailed design with measurements before anything is built on them. It is one stroke type, two
+clients and a server, native and web. Code written for it is kept only where a slice says so.
+
+## Rules
+
+- **A question is answered by a measurement or a test, never by an opinion.** Each answer names the machine, the
+  revision and the command that produced it.
+- **Each slice is one reviewed change** with its own results file in this folder.
+- **Results change the design.** Where a measurement contradicts a section of [`../design/`](../design/README.md),
+  the slice's results file says so and names the section; the design is corrected in a separate change.
+- **What the agent cannot measure is the owner's to run.** Those rows are marked "owner".
+
+## Questions and what settles them
+
+The questions are the spike table of [`../design/README.md`](../design/README.md). "Done when" is the acceptance
+criterion for each.
+
+| # | Question | Slice | Done when | Who |
+|---|---|---|---|---|
+| 1 | What does exact position arithmetic cost? | 1 | Subtraction, re-base of 10,000 objects and one frame are timed at depths 0, 1, 10, 100 and 1,000 levels and compared with the estimates in section 01 | agent |
+| 2 | Are positions the same on every machine? | 1, 3 | One golden file of positions, level changes and float conversions passes byte for byte on aarch64 and x86-64 (slice 1) and on wasm32 (slice 3) | agent |
+| 3 | Are stroke outlines bit-identical everywhere? | 3 | The same strokes give byte-identical outlines on x86-64, aarch64 and wasm32 | agent |
+| 4 | What does cutting a large shape cost? | 3 | A curve from 10, 100 and 1,000 levels above the view is cut to the view and timed against the 2 ms per frame budget | agent |
+| 5 | Can any of Loro, yrs or Automerge sync part of a document? | 2 | Each library is read and tried: either a documented way to export and import a subset is shown working, or the attempt and where it fails is recorded | agent |
+| 6 | Which library edits text best in one small document per text object? | 2 | For each candidate: bytes and memory for 1,000 small text documents, time to apply an edit, and whether the server can inspect an update before applying it | agent |
+| 7 | Does Everink's own object map hold up? | 2 | 100,000 strokes: memory per object and time to open; randomized tests in which the same changes applied in different orders end in the same state | agent |
+| 8 | Do cursors stall during a bulk load on one connection? | 2 | Cursor delay is measured while a client loads a large surface over a link limited to 1, 5 and 20 Mbit/s, with the 20 ms pacing rule, against the 200 ms target | agent |
+| 9 | How fast is storage? | 5 | Commit latency and load time for one SQLite file per room at 10,000, 100,000 and 1,000,000 objects | agent |
+| 10 | Does the renderer carry the load? | 3 | `vello_gpu` on WebGPU and on WebGL2: tile raster rate, 10,000 objects at 60 frames per second or the measured shortfall, and the size of the wasm build | agent, with the owner for browsers the agent cannot drive |
+| 11 | What is pen latency really? | 3 | A 240 frames-per-second camera on named devices, with and without the low-latency canvas | owner |
+| 12 | Which controls toolkit? | 4 | The same toolbar and text field built with Everink's own small toolkit and with egui: text composition, a screen reader on desktop and web, wasm size, lines of code and effort | agent, with the owner for screen-reader checks |
+| 13 | Does the owner's further candidate make sense here? | 4 | It is put behind the renderer interface next to the Vello path and measured the same way; its details and results are kept outside this repository | agent and owner |
+
+## Slices
+
+| Slice | Contents | Answers | Kept afterwards |
+|---|---|---|---|
+| 1. Positions | The Cargo workspace, CI, and `everink-core` with the position type, its canonical bytes, the camera, tests and a timing run | 1, 2 (two of three targets) | Yes: `crates/everink-core` |
+| 2. Object map and sync | The server-ordered object map, a server, two headless clients, convergence tests, the text-library trials, the paced connection | 5, 6, 7, 8 | Decided from the results |
+| 3. Rendering and ink | Vello natively and in the browser, the tile cache, stroke outlines, the cut, the wasm32 target | 2 (wasm32), 3, 4, 10, 11 | Decided from the results |
+| 4. Controls and the further candidate | The same toolbar both ways; the owner's candidate behind the renderer interface | 12, 13 | Decided from the results |
+| 5. Storage | One SQLite file per room: commit and load timings | 9 | Decided from the results |
+
+## Results
+
+| Slice | Results | Summary |
+|---|---|---|
+| 1 | [results-1-positions.md](results-1-positions.md) | Exact arithmetic is cheap per frame at any depth. Subtraction and re-basing at depth cost three to four times the design's estimate; a re-base at 1,000 levels is over the 2 ms budget and has to be spread or avoided. Positions match a golden file byte for byte on aarch64; CI checks the same file on x86-64. |
