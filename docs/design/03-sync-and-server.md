@@ -28,7 +28,7 @@ It leaves to other sections:
 | Cursor and live-ink content, routing rules | 04 | The envelope and the view data it needs are here; the content is 04's |
 | Blob upload and download, video clock | 05 | Only the clock ping is here |
 | Rendering, overview pictures | 06 | The "more here" counts, picture table and builder trigger are here; the pictures are 06's |
-| Tokens, roles, limits, share links | 08 | An auth check that yields a user id and a role |
+| Tokens, roles, limits, invite links | 08 | An auth check that yields a user id and a role |
 
 ## The problem
 
@@ -40,7 +40,8 @@ measured in the spike):
 - A typical stroke is about 200 points. After delta coding that is about 1 KB (section 02 owns the real figure).
 - A view holds 100 to 10,000 objects. At 1 KB each that is 100 KB to 10 MB, so only the first screenful may be sent
   before the user sees anything. The rest must stream, biggest objects first.
-- A busy room has 50 active people. Presence at 30 updates per second each is 1,500 updates per second entering the
+- The planning case, the first app (a whiteboard), has about 50 active people on one surface (owner decision,
+  2026-11-12). Presence at 30 updates per second each is 1,500 updates per second entering the
   room, and without view filtering up to 73,500 per second leaving it (50 people, each sent the 49 others). So the
   filter, not the sender, is what makes presence affordable.
 - A large surface has 2 million objects, the first-version cap. Held fully in server memory that is an estimated 2.6
@@ -423,7 +424,7 @@ against a coarse bucket); it ends at the size threshold.
 
 ```rust
 pub struct Conn {
-    id: ConnId, session: SessionId, user: UserId, role: Role, client: ClientId,
+    id: ConnId, session: SessionId, user: UserId, role: Role, via: Option<LinkId>, client: ClientId,
     view: Option<RoutedView>, view_id: u32,
     sent: RoaringBitmap,        // ordinals the client has been sent and must be kept up to date on
     pending_enter: RoaringBitmap,   // chosen to send, not yet written to the socket
@@ -547,7 +548,11 @@ as a documented fallback, triggered if cursor latency during a bulk load misses 
 **Handshake (section 08 owns it).** The WebSocket sub-protocol is `everink.v1`; later versions are offered as
 `everink.v2` and so on, and the server picks the highest it supports, which is the version negotiation. The server
 sends nothing until the client's first frame, an `Auth` of at most 4 KiB, has been verified; the reply is `AuthOk`
-(08's `auth_ok`). Only after `AuthOk` does the room accept the messages below. Then the client sends `Hello` and
+(08's `auth_ok`). The first frame is only `auth { token }`: there are no anonymous sessions (owner decision,
+2026-11-12), and everyone is identified by the embedding app. The session records `via: Option<LinkId>`, the invite
+link the token names (section 08), so that turning a link off closes the sockets that came through it and so that an
+owner can suspend or delete the work of everyone who did. Only after `AuthOk` does the room accept the messages
+below. Then the client sends `Hello` and
 the room answers `Welcome`.
 
 **Framing.** Every WebSocket message is one binary frame holding one `postcard`-encoded `ClientMsg` or `ServerMsg`.
@@ -567,8 +572,8 @@ section 04, and the number is in section 08's table.
 
 1. Message enums only grow at the end. A variant's fields never change after release; a changed message is a new
    variant (`SetViewV2`) and the old one is kept for the support window.
-2. The server supports the current version and the previous one for at least 6 months (a policy, not a measurement;
-   see the owner's questions). A client older than that gets `Notice { UpgradeRequired }`.
+2. The server accepts clients up to 6 months old (owner decision, 2026-11-12): the current version and every version
+   released in the last 6 months. A client older than that gets `Notice { UpgradeRequired }`.
 3. An unknown variant is a protocol error: the connection is closed with code `ProtocolError`. Because versions
    are negotiated, this should only happen with a bug.
 4. Object and change blobs have their own version in their header (section 02). A server too old for a blob
@@ -587,11 +592,11 @@ far apart and still never costs more than a whole position plus a few bytes. The
 
 ```rust
 pub enum ClientMsg {
-    Auth { credential: Bytes },            // section 08: token or guest ticket, at most 4 KiB
+    Auth { token: Bytes },                 // section 08: the signed connect token, at most 4 KiB
     Hello {
         surface: SurfaceId,
         client: ClientId,
-        open_at: Option<VersionId>,        // read-only view of a saved version (members only, 08)
+        open_at: Option<VersionId>,        // read-only view of a saved version (08 says who may)
         caps: u32,                         // bit set: lz4, ...
         acked_upto: ClientChangeId,        // highest id this client has seen acknowledged
     },
@@ -613,7 +618,7 @@ pub struct ChangeFrame {
 }
 pub enum FetchWhat { Objects(Vec<ObjectId>), Subtree(ObjectId) }
 pub enum LocateWhat { Nearest { to: Position }, Bounds }
-pub enum VersionCmd {                      // Save, Delete and Restore: members only; Restore: owner only (08)
+pub enum VersionCmd {                      // Save and Delete: editor members and the owner; Restore: owner and editor members (08)
     List, Save { name: String }, Delete(VersionId), Rename(VersionId, String), Restore(VersionId),
 }
 
@@ -687,7 +692,8 @@ the sender which with `Partial`. The log stores the change exactly as submitted,
 by the state that the log order produces, replay reaches the same decisions.
 
 **Acknowledgement and durability.** The actor applies a change in memory and assigns its `seq` at once, but
-**releases both the `Ack` and the `Apply` messages to others only after the store reports the batch durable**.
+**releases both the `Ack` and the `Apply` messages to others only after the store reports the batch durable** under
+the room's durability mode (local disk by default; local disk and a second copy in strict mode).
 Reason: if `Apply` went out first and the server then crashed, other clients would hold a change the log lacks and
 their copy would diverge with no one to reconcile it. The cost is one commit latency (about 1 to 5 ms on an SSD,
 unmeasured) added to remote delivery, not to the author, who sees the change at once. The store thread commits
@@ -698,7 +704,8 @@ change. Presence and `Pong` are never held for the commit.
 keeps, per `ClientId`, the highest `ClientChangeId` it has logged and the `(ClientChangeId, Seq)` pairs of the
 changes that client has not yet confirmed receiving an `Ack` for. Every `Submit` and every `Hello` carries
 `acked_upto`, the highest id the client has seen acknowledged, and the room drops the pairs at or below it, so
-the list holds at most the unacknowledged budget in section 08's table and is normally a handful. A frame with `id <= highest` is
+the list holds at most the unacknowledged budget in section 08's table and is normally a handful. A frame with `id
+<= highest` is
 not applied again and is answered with its original pair in an `Ack`. The map is saved in every snapshot and
 rebuilt from the log tail, so it survives a crash. It is trimmed for clients idle 30 days. An idle client costs
 about 40 bytes (4 MB for 100,000 devices); a client that vanished with a full window of unconfirmed changes costs
@@ -768,7 +775,7 @@ or OPFS (web) or a file (native). It keeps the **cache** next to it (below).
 
 ```
 on connect (first time or after a loss):
-    send Auth{ credential } ← AuthOk;  send Hello{ client, surface } ← Welcome
+    send Auth{ token } ← AuthOk;  send Hello{ client, surface } ← Welcome
     send SetView{ view, held = cache entries intersecting the new view that are cold }
     send Submit{ outbox in order, replay = true for those made while disconnected }
     server: dedupe by ClientId/ClientChangeId; apply the rest; Ack; for replay frames, route the merged state of
@@ -789,7 +796,10 @@ owner and may change; the protocol carries either. If a restore happened meanwhi
 apply on top of the
 restored state; the client is told with `Notice::RestoreHappened`.
 
-A change whose author's role was removed while offline is refused with `Reject { code: Forbidden }`; the client
+A stroke that was in progress when the connection died is not kept by the server: the preview fades on other screens
+(section 04), and the author's device saves the stroke locally and sends it later as an ordinary finished change
+from its outbox (owner decision, 2026-11-12). The server never commits a stroke on someone's behalf. A change whose
+author's role was removed while offline is refused with `Reject { code: Forbidden }`; the client
 keeps
 it in a "not accepted" list and shows it (section 07 decides how) instead of discarding it silently.
 
@@ -806,7 +816,7 @@ rev it had), and **pinned** (unacknowledged edits, selected objects, objects bei
   and as a last resort sends a smaller `View.w/h` (visible effect: holes at the screen edge while panning).
 - An evicted object is simply absent; nothing needs to be told to the server.
 - On disk (native) or in IndexedDB, the cache is the same entries, written lazily. Signing out clears it
-  (`design.md`). A guest's cache is cleared when the session ends.
+  (`design.md`).
 
 ### Persistence
 
@@ -881,29 +891,44 @@ last snapshot, or room unload. A final snapshot at unload makes the next load fa
 `everink-server repair <room-file>` runs steps 1 to 3 on a copy and reports. Estimated load time for 1 million
 objects: decode about 5 s, index 1 to 2 s (unmeasured; the spike measures it).
 
-**Move beyond one machine's disk.** The `RoomStore` trait (append batch, read snapshot manifest, read chunks, write
-snapshot, list/expire) hides SQLite, so a Postgres store can be added for a hosted service. Durability against loss
-of the whole machine requires replicating the log before the ack, which costs a network round trip per commit; the
-first version does not do that (see [Failure modes](#failure-modes) and the owner's questions). It does copy each
-new snapshot and the log tail to object storage in the background (a directory in single-node setups, S3-compatible
-otherwise) so that a lost disk costs at most the replication lag.
+**Durability modes (owner decision, 2026-11-12).** The `RoomStore` trait (append batch, read snapshot manifest, read
+chunks, write snapshot, list/expire) hides SQLite, so a Postgres store can be added for a hosted service. A room
+runs in one of two modes, chosen by the operator (per deployment, or per tenant where 08's quotas allow):
+
+- **Default: confirm after the local disk, copy in the background.** A change is confirmed (`Ack`, and `Apply` to
+  others) once its batch has been committed and synced on the local disk. A background task copies each new snapshot
+  and the log tail to a second place (a directory in single-node setups, S3-compatible storage otherwise). If the
+  whole machine is lost, the room reloads elsewhere from the copy and the changes confirmed since the last copy are
+  lost: the loss window is the copy lag, aimed at under a minute (estimate). The authors' outboxes still hold
+  anything not yet confirmed.
+- **Strict: confirm only after a second copy.** The `Ack` and `Apply` are released only after the batch is durable
+  locally **and** a second copy has confirmed it. The second copy is a replica: another node, in another failure
+  domain, that keeps a copy of the room's log and snapshots; the store thread ships each batch (with the lease
+  epoch) to the replica's `LogSink::append(epoch, batch)`, which syncs it to its own disk and replies. Strict mode
+  needs: a second machine with local disk; a network round trip per commit, which adds an estimated 10 to 50 ms to
+  remote delivery and to the `Ack` (group commit keeps throughput, since a batch carries everything that arrived
+  meanwhile); the same lease and fencing as above, so that on failure the replica takes the lease with the next
+  epoch and loads from its copy with no confirmed change lost; and a rule for a replica that is unreachable. The
+  rule is to refuse writes (`Reject { Unavailable }`, the room stays readable) after 5 seconds rather than quietly
+  fall back to the default mode, because quietly falling back would break the promise strict mode makes.
+  Operators who want availability over the promise run the default mode.
 
 ### Versions
 
 **Restore points.** Every snapshot is a restore point, in the `snap` table with `kind`:
 
 - `auto`: created by the snapshot rule above, plus one immediately before a restore and one before any change that
-  deletes more than 1,000 objects. User-visible list is thinned to at most one every 10 minutes.
-- `named`: created when a member with the editor role (never a guest) saves a version. The room takes a
+  deletes more than 1,000 objects. Thinned with age, see Retention.
+- `named`: created when an editor member or the owner saves a version (owner decision, 2026-11-12). The room takes a
   snapshot of the current state at `seq` right
   now (it is cheap: dirty chunks only) and marks it `named` with the name and author.
 
-**Retention.** Automatic points are deleted 30 days after creation (setting), and thinned when listed or when
-cleaned: all kept for 24 hours, then one per hour up to 7 days, then one per day. The thinning is an addition to
-`design.md` that keeps the 30-day promise while cutting storage; it can be turned off. Named points are never
-deleted by the system. Because a version is a manifest over shared chunks, a named version costs only the chunks
-that differ from other retained snapshots: a rough figure is the size of the content changed since the nearest
-other snapshot (estimate).
+**Retention (owner decision, 2026-11-12).** Automatic points thin with age exactly as follows: every one is kept for
+24 hours, then one an hour for a week, then one a day up to 30 days, after which they are deleted. Named points are
+never thinned and never deleted by the system. The cleaning job applies the rule daily and marks chunks no retained
+manifest names for the sweep. Because a version is a manifest over shared chunks, a named version costs only the
+chunks that differ from other retained snapshots: a rough figure is the size of the content changed since the
+nearest other snapshot (estimate).
 
 **Opening a version (read-only).** The client connects with `Hello { open_at: Some(version) }`. The server creates a
 temporary read-only room from that manifest (no log to replay), builds its index, and serves it with the same
@@ -914,9 +939,8 @@ two connections (section 07). The temporary room is dropped when its connection 
 **Restoring while people are editing.** A restore is a change like any other, so everyone's view stays valid and no
 one is disconnected.
 
-1. The owner sends `VersionCmd::Restore(v)` (restore is owner-only until the owner decides; creating and deleting
-   versions is for members, never guests; the restore is audited). The room takes an `auto` snapshot called "before
-   restore".
+1. An owner or an editor member sends `VersionCmd::Restore(v)` (owner decision, 2026-11-12; the restore is audited).
+   The room first takes an automatic snapshot called "before restore".
 2. A background job computes a **restore change** from the live document (state at `s0`) to the version's state,
    using
    section 02's `Doc::diff_to(&Doc) -> Change`. The change sets every differing property with a fresh stamp
@@ -926,8 +950,9 @@ one is disconnected.
    for
    objects whose `Rev` is above `s0`, applies that, and repeats until it is empty; the last round runs with the
    actor briefly refusing new `Submit`s (queued, not dropped), normally under 50 ms (estimate).
-4. All connections receive the restore as ordinary `Apply` effects (for objects in their view) and
-   `Notice::RestoreHappened { by, version, at: Seq }`. No undo stack is cleared: section 02's conditional undo
+4. All connections receive the restore as ordinary `Apply` effects (for objects in their view) and, right after,
+   everyone on the surface is told with `Notice::RestoreHappened { by, version, at: Seq }`. No undo stack is
+   cleared: section 02's conditional undo
    (`if_stamp`) already fails for any entry whose registers the restore re-stamped, so a stale entry reports
    "Nothing to undo" instead of undoing the wrong thing. Schema migrations in section 02 read old versions from
    their snapshot chunks, because the log is trimmed.
@@ -935,7 +960,7 @@ one is disconnected.
    normal merge rules. They are not lost, and they may re-create things the restore deleted, as `design.md`
    already says. Undoing the restore means restoring the "before restore" point.
 
-The owner decides who may restore beyond the owner and whether other editors get a warning first (see questions).
+Other people are not warned beforehand; they are told right after (owner decision, 2026-11-12).
 
 ### Media support (section 05)
 
@@ -1058,7 +1083,8 @@ Both count as view changes for the rate limits in section 08.
 - **Revoked sessions on blob requests.** `everink-server`, which serves the media endpoint, keeps the list
   `RevokedSessions`: session ids with the time they were revoked, in memory behind a read-write lock, shared
   between the room tasks and the HTTP blob handlers. An entry is kept for the longest grant lifetime (2 hours,
-  video), or until the room is loaded again, when the new lease epoch makes every earlier grant invalid. The room adds a session synchronously, before it answers the owner who turned a share link off, in the
+  video), or until the room is loaded again, when the new lease epoch makes every earlier grant invalid. The room
+  adds a session synchronously, before it answers the owner who turned an invite link off, in the
   same
   step that closes that link's sockets. Every blob request is checked against the list after the grant's MAC. One
   limit remains, and it is section 08's and 05's to state: where the store hands out a short-lived presigned
@@ -1086,16 +1112,20 @@ Unloaded --first connection--> Loading --recovery done--> Active --last connecti
 **Placement.** The room for `surface_id` is on exactly one machine at a time. Machines are chosen by rendezvous
 (highest random weight) hashing of the surface id over the live node list, so adding or removing a node moves only
 `1/n` of the rooms. A room is only loaded after taking a **lease** (a row in a small coordination store: Postgres,
-etcd
-or a file lock on a single node) with an increasing epoch, renewed every 5 s; the epoch is written into `meta` and
-into each store transaction so that a machine that lost its lease cannot append (a stale writer's commit is
-refused). The epoch also names the room's incarnation for grants: section 08 puts it inside every blob read grant
-and upload grant, and the blob and upload endpoints refuse a grant whose epoch is not the room's current one. A
-room that is loaded again after a crash, a restart or an idle unload has a new epoch, so the revoked-session list
-and the upload floors, which are held in memory, never need to survive it. This is the same single-writer rule as Figma's lock table. Clients connect to any gateway node
-(`axum` behind a load balancer), which forwards the WebSocket to the owner node by surface id; or the load balancer
-does it by a hash of the surface id in the URL, which is simpler and is the recommended first step. Single-node
-deployments skip all of this.
+etcd or a file lock on a single node) with an increasing epoch, renewed every 5 s; the epoch is written into `meta`
+and into each store transaction so that a machine that lost its lease cannot append (a stale writer's commit is
+refused). This is the same single-writer rule as Figma's lock table. The epoch also names the room's incarnation for
+grants: section 08 puts it inside every blob read grant and upload grant, and the blob and upload endpoints refuse a
+grant whose epoch is not the room's current one. A room that is loaded again after a crash, a restart or an idle
+unload has a new epoch, so the revoked-session list and the upload floors, which are held in memory, never need to
+survive it. When the room is not loaded (idle, crashed, moving), the blob and upload endpoints have no room to ask,
+so they read the room's current lease epoch from the coordination store, which is also how an endpoint on a node
+other than the owner learns it (cached for a few seconds and re-read on a mismatch; with one node the epoch is
+local). A grant whose epoch is not the current one is refused with a status that tells the client to reconnect, and
+a reconnect loads the room and returns fresh grants. Clients connect to any gateway node (`axum` behind a load
+balancer), which forwards the WebSocket to the owner node by surface id; or the load balancer does it by a hash of
+the surface id in the URL, which is simpler and is the recommended first step. Single-node deployments skip all of
+this.
 
 The room data is on the owner's local disk. Moving a room is: drain it (final snapshot, WAL checkpoint), copy the
 single file or restore from the replicated copy, take the lease on the new node, load. A hot room cannot be split
@@ -1104,11 +1134,12 @@ the ceiling is one machine's core and memory (see capacity), the same limit Dura
 
 ### Capacity estimates
 
-Assumptions (all unmeasured; the spike replaces them with numbers):
+The headline case is the first app, a whiteboard, with about 50 active people per surface (owner decision,
+2026-11-12). Assumptions (all unmeasured; the spike replaces them with numbers):
 
 | Assumption | Value |
 |---|---|
-| Active drawers in a busy room | 50 (socket cap: section 08) |
+| Planning case: a whiteboard, active people on one surface | about 50 (socket cap: section 08) |
 | Stroke bytes at commit | 1.2 KB |
 | Stroke rate per active drawer | 0.3 per second |
 | Presence message | 60 bytes, 30 per second per user |
@@ -1140,7 +1171,8 @@ Presence worst-case fan-out is the largest figure, and it is section 04's to red
 cursors beyond a count shown as a list). Past the 2-million cap, the route is to keep object bodies in the chunk
 cache instead of RAM: chunks are the paging unit already, and the index (170 B per object, 1.7 GB at 10 million)
 stays resident. That is the design Liveblocks describes for its second engine. It is not part of the first version;
-the first version rejects creating objects past `max_objects` (default 2,000,000; section 08). The cap follows from
+the first version rejects creating objects past `max_objects` (2,000,000; owner decision, 2026-11-12; section 08).
+The cap follows from
 the memory estimate: 2.6 to 4 GB for the surface, plus under 0.1 GB for 200 connections and a transient copy of the
 shards a snapshot job is writing, fits a host with 8 GB; ten times the cap (13 to 20 GB) does not.
 
@@ -1150,7 +1182,10 @@ shards a snapshot job is writing, fits a host with 8 GB; ten times the cap (13 t
 |---|---|---|
 | Room process crashes | Clients reconnect, resend unacknowledged changes; room recovers from snapshot plus log | Ack only after durable; resubmission is idempotent |
 | Crash between apply and commit | The change was never acknowledged or broadcast; the author's outbox resends it | Nothing outside the room saw it |
-| Machine loses its disk | Room reloads on another node from the replicated snapshot and log tail; changes after the last replication are lost | Stated limit; the author's outbox still has changes that were not acked; acked changes inside the lag window are lost (owner's question 3) |
+| Machine loses its disk | Room reloads on another node from the replicated snapshot and log tail; changes after the last replication are lost | Default mode: the author's outbox still has changes that were not acked; acked changes inside the copy lag are lost (stated limit). Strict mode: none are lost |
+| Strict mode: the replica is unreachable | After 5 s the room refuses writes with `Reject { Unavailable }` and stays readable; it does not fall back to the default mode | Strict mode never confirms a change that has no second copy |
+| The room is not loaded when a blob or upload request arrives | The endpoint reads the current lease epoch from the coordination store, refuses a grant with another epoch, and the client reconnects and gets fresh grants | The epoch names the incarnation of the room |
+| The connection dies in the middle of a stroke | The preview fades on other screens; the author's device sends the finished stroke from its outbox on reconnect; the server keeps nothing | The server never commits a stroke on someone's behalf |
 | Two machines both load a room | The one without the current lease epoch cannot commit; its connections are closed | Epoch check in every store transaction |
 | Log row corrupted | Detected by CRC at load; recovery stops there and alarms; the previous snapshot path is tried | Second-newest snapshot is retained |
 | Newest snapshot corrupted | Fall back to the previous snapshot and replay | Log kept from the second newest |
@@ -1163,7 +1198,7 @@ shards a snapshot job is writing, fits a host with 8 GB; ten times the cap (13 t
 | Restore during edits | Restore is a change; in-flight changes merge on top | See Versions |
 | A conditional write fails (`if_stamp`) | The whole change is rejected with `Conflict`; the sender gets current bodies | Accept or reject, never rewrite |
 | Picture builder is down or slow | Clients get objects up to the budget, with `eff_min_px` raised; the tile stays dirty | Pictures are an optimisation |
-| A share link is turned off | Sockets closed, session ids added to the revoked list before the owner is answered; blob requests fail at once | Revoked-session check on every blob request |
+| An invite link is turned off | Sockets closed, session ids added to the revoked list before the owner is answered; blob requests fail at once | Revoked-session check on every blob request |
 | Media worker dies mid-upload | Status becomes `Stalled`, then `Abandoned`; the document is untouched | Status is not in the document |
 | Object count or group size above caps | Change refused with `Reject { code: Limit }` | Caps |
 | Server restart during deploy | Drain, final snapshot, `Close { retry_ms }` with jitter | Avoids a thundering reconnect |
@@ -1190,6 +1225,9 @@ shards a snapshot job is writing, fits a host with 8 GB; ten times the cap (13 t
 | Flow control | Throttled socket test: presence latency stays near 40 ms (the adaptive limit) while a 50 MB view fill is running; slow client is bounded in memory and then disconnected |
 | Protocol compatibility | Golden files of every message for version N, decoded by build N+1 in CI; an unknown variant closes with `ProtocolError` |
 | Lease | Two nodes race for a room; the loser's commits are refused |
+| Strict mode | Kill the replica, then the primary, at random points over 10,000 runs: every confirmed change is present after failover; with the replica down, writes are refused after 5 s |
+| Endpoint epochs | Reload a room (new epoch): an old grant is refused at an endpoint on another node, and a grant from the new connection works |
+| Retention thinning | Simulated 40 days of snapshots: all kept for 24 h, one per hour to 7 days, one per day to 30 days, none after; named versions untouched |
 | Accept or reject, never rewrite | Change with a failing `if_stamp`: rejected whole, log unchanged; `partial_ok` replay gives the same skipped set |
 | Pong outside the change queue | Block the actor for 1 s; `Pong` still arrives within one chunk time |
 | Pacing | Throttled links at 1 and 5 Mbit/s and unlimited, 10 MB queued: unsent bytes stay under the adaptive limit (4 to 64 KiB) plus one chunk, the estimate converges within 500 ms, and a presence update overtakes the queue within about 40 ms (66 ms at 1 Mbit/s, where the floor applies) |
@@ -1255,8 +1293,9 @@ all exact:
 **Section 02 (document model).** The object map is purpose-built and sequenced by the server: each mutable field is
 a
 `Reg<T>` stamped with the per-surface `Seq`, so each object's state merges in any order; the server accepts or
-rejects a whole change; a CRDT library is used only inside text objects behind `TextDoc`. This is the
-recommendation to the owner, tested by the spike. Used:
+rejects a whole change; a CRDT library is used only inside text objects behind `TextDoc`. This is decided (owner
+decision, 2026-11-12). Which library edits text (Loro, yrs or another) is still open and the spike compares them;
+the spike also still checks the finding that no library syncs part of a document. Used:
 
 - `Doc::apply(&Change, &ApplyCtx { seq, author, ext }) -> Result<Applied, ApplyError>`, where
   `Applied { effects: Vec<ObjectEffect>, skipped }` and `ObjectEffect { id, ordinal, old_box, new_box, deleted,
@@ -1302,7 +1341,7 @@ The "octave" is 06's, not a row.
 timers with jittered backoff, the "not accepted changes" display, and the `Transport` for one WebSocket.
 
 **Section 08 (identity).** Provides the handshake (`Auth`, `AuthOk`, sub-protocol `everink.v1`), `Authz::check` for
-every message and HTTP request, role changes and share-link shutdown pushed as `Notice` and `Close`, the grant
+every message and HTTP request, role changes and invite-link shutdown pushed as `Notice` and `Close`, the grant
 format,
 `TenantScope`, the audit sink, and the limits table with all the numbers: sockets per room and per user, the
 unacknowledged window, change and view rates, frame sizes, media sizes, depth cap, `max_objects` (first-version
@@ -1311,36 +1350,16 @@ default 2,000,000), `max_far_objects`, and the three view limits `max_view_objec
 
 ## Questions for the owner
 
-1. **The CRDT library.** One document per object (for example yrs subdocuments) is a route to partial copies that is
-   unproven at scale (section 02's caveat). The proposed design, with the spike as its test: do not let one library
-   own the whole
-   document. View-scoped sync needs each
-   object to be its own mergeable state. Both Loro and yrs have one document with a shared operation history, which
-   a partial replica cannot follow (this is from general knowledge; the spike should confirm it for each). The
-   cheapest consistent design is Everink's own last-writer-wins map for object properties, which `design.md`
-   already describes, with a CRDT library used only inside text objects (one small document per text object). That
-   keeps the choice small and makes Loro-versus-yrs a decision about text only. Decide after the spike measures
-   both on the text case.
-2. **The first app.** No effect on this section, but a whiteboard needs the busy-room capacity (50 active users); a
-   notebook or planning surface mostly needs small rooms with long history. The first answer sets which numbers the
-   spike must hit.
-3. **How much loss is acceptable if a machine's disk is lost.** Local fsync before acknowledging protects against
-   process and power failure, not against losing the disk. Replicating before the acknowledgement costs a network
-   round trip per commit (10 to 50 ms, estimate) and a second machine. Recommended: local fsync plus background
-   replication in the first version (loss window about a minute), and let the operator choose a stricter mode later.
-   This is a product and cost decision.
-4. **Who may restore a version, and are other editors warned before it happens?** Until you decide, restore is
-   owner-only, and creating, deleting and restoring versions is for members, never guests (section 08).
-   Recommended: keep it owner-only; everyone present is told after it happens, and the "before restore" point is
-   always created. A warning step would make restore slow and open to abuse.
-5. **How long old protocol versions are supported** (proposed 6 months). It decides how kind we are to old
-   offline clients versus how much compatibility code we keep.
-6. **Maximum surface size for version 1** (proposed 2 million objects, bodies in memory). A larger limit needs the
-   chunk-paged server, which is more work.
-7. **Thinning automatic versions** (all for 24 h, hourly to 7 days, daily to 30 days). It still honors "kept 30
-   days" but shows fewer points. Accept?
-8. **Whether the hosted offering (if any) should run on Cloudflare Durable Objects.** The room model is the same,
-   and the core compiles to WebAssembly, but the storage layer and the actor would need to be rebuilt for that
+Answered on 2026-11-11 and 2026-11-12 and now stated in the Design: the merge model, the first app and its planning
+figure, replayed offline changes, who may restore, retention and thinning of versions, the two durability modes, the
+protocol window of 6 months, and the cap of 2 million objects. Still open:
+
+1. **Which library edits text** (Loro, yrs or another). The merge model does not depend on the answer: Everink's own
+   object map is ordered by the server and a library is used only inside text objects. The spike compares the
+   candidates on text, and also re-checks the finding that no library syncs part of a document (one document per
+   object, for example yrs subdocuments, is a route to partial copies that is unproven at scale, section 02).
+2. **Whether a hosted offering (if any) should run on Cloudflare Durable Objects.** The room model is the same, and
+   the core compiles to WebAssembly, but the storage layer and the actor would need to be rebuilt for that
    platform. Not recommended for the first version; the `RoomStore` trait keeps the option open.
 
 ## Sources

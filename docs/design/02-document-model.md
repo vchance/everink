@@ -16,7 +16,7 @@ This section defines what a surface contains and how concurrent changes to it me
 - schema versions and migration;
 - the programming interface other sections call (`Doc`);
 - how each candidate CRDT library would hold this model when a client has only a partial copy, with a
-  recommendation for the spike.
+  plan for the spike.
 
 It leaves these to other sections:
 
@@ -58,9 +58,10 @@ copy. Four facts make this harder than "put it in a CRDT library".
 4. **Users expect undo to be theirs.** "Undo reverses my changes and leaves everyone else's alone" has to stay exact
    when the other person has moved, restyled or deleted the same object.
 
-This section therefore proposes a small purpose-built object map, sequenced by the server, with a CRDT library used
-only for the text inside text objects. It is a recommendation to the owner, who still chooses; the spike under
-"How the model sits on the candidate libraries" is its test. The reasoning is under "Options considered".
+This section therefore designs a small purpose-built object map, sequenced by the server, with a CRDT library used
+only for the text inside text objects (owner decision, 2026-11-12). Which library edits text is still open, and the
+spike under "How the model sits on the candidate libraries" compares them; the spike also still checks the finding
+that no library syncs part of a document. The reasoning is under "Options considered".
 
 ## What others do
 
@@ -165,7 +166,7 @@ history. (Sources 24, 6.)
 | A | One library document for the whole surface (Loro, yrs or Automerge) | No: every client loads the lot | Awkward (opaque merged updates) | Yes | Library | Fails requirement 8 of the design (view-scoped). |
 | B | One library document per object (yrs subdocuments, or one Loro/Automerge doc each) | Yes, per object | Awkward | Yes | Per doc, hard to combine into one stack | Per-document sync state and handshake for thousands of objects in view; a root map of millions of ids still needs sharding; unproven. |
 | C | One library document per spatial cell | Yes, per cell | Awkward | Yes | Per doc | Rejected by the high-level design: long strokes cross cells, objects move. |
-| D | **Server-sequenced register map built for Everink; library only for text bodies** | Yes, per object | Yes, by design | Library, one small doc per text object | Our own, conditional writes | **Proposed.** |
+| D | **Server-sequenced register map built for Everink; library only for text bodies** | Yes, per object | Yes, by design | Library, one small doc per text object | Our own, conditional writes | **Decided** (owner decision, 2026-11-12). |
 | E | As D, but also our own text CRDT (for example Fugue plus Peritext marks) | Yes | Yes | Ours | Ours | Fallback if no text library passes the spike; much more work and risk. |
 | F | Figma-style, text as one whole value | Yes | Yes | No character-level merge | Ours | Fails the design (text edited "character by character"). |
 
@@ -177,7 +178,7 @@ How the clock options compare for ordering writes (the "last" in last-writer-win
 | Hybrid logical clock | clients' clocks within a known skew; the server must clamp stamps | latest by real time | A client with a wrong clock wins or loses unfairly unless the server clamps; adds a trust surface. |
 | **Server sequence number** (one counter per surface) | one sequencer per surface (already true: one room per surface) | whichever the server accepted last | A single counter limits throughput (section 03 sizes it); offline edits win by arrival, not by when they were made. |
 
-**Proposal: D with the server sequence as the clock.** Reasons:
+**Decision: D with the server sequence as the clock.** Reasons:
 
 - It is the only option here that gives partial copies without inventing a document-splitting scheme: the object is
   already the unit, and an object is a handful of small registers.
@@ -191,14 +192,15 @@ How the clock options compare for ordering writes (the "last" in last-writer-win
 **Given up:**
 
 - Peer-to-peer or server-less merging (two clients with no server cannot merge). The design already has a server.
-- Offline edits win over newer online edits to the same property (arrival order); see the owner questions.
+- Offline edits win over newer online edits to the same property (arrival order); the owner accepted this on
+  2026-11-12.
 - A library's built-in history and time travel for the object map. Named versions are snapshots (section 03), not
   replay.
 - Some code to write: roughly a register map, an op validator, an order-key generator and an undo stack, all small
   and testable. The text adapter keeps the library swappable.
-- If the owner prefers one library for everything, the honest mapping is option B or "server keeps one library doc,
-  clients speak our protocol", where the library only stores history and does not help partial copies. The spike
-  (below) measures B so that the claim can be checked.
+- Using one library for the whole object map is not done. The spike (below) still measures option B (a document per
+  object) so that the finding that no library syncs part of a document rests on a measurement, not on the absence of
+  a documented feature.
 
 ## Design
 
@@ -233,8 +235,8 @@ pub struct Ordinal(pub u32);
 /// Position in the surface's accepted history. One counter per surface, assigned by the room. Never reused.
 pub struct Seq(pub u64);
 
-pub struct UserId(pub u64);         // per surface, interned from the token's user id; a guest gets a fresh one per session
-pub struct LinkId(pub u64);         // the share link a guest came through (section 08)
+pub struct UserId(pub u64);         // per surface, interned from the token's user id (everyone is identified by the embedding app)
+pub struct LinkId(pub u64);         // the invite link a person joined through (section 08)
 pub struct ClientChangeId(pub u64); // per client DEVICE counter, survives reconnects; with the client id it names a change
 
 /// One register of type T. 'stamp' is the Seq of the change that wrote it.
@@ -266,9 +268,9 @@ pub struct Reg<T> { pub value: T, pub stamp: Seq }
   videos (section 05). Server-authored changes are stamped like any other and logged like any other. This does not
   conflict with "the server never rewrites a client's change": the server may add a change of its own, but it never
   edits, re-stamps or merges away part of a change a client sent.
-- **Replayed offline changes.** A change a client made offline and sends on reconnect is **unconditional by
-  default**: it is stamped when the server accepts it, so it wins over older online edits to the same register. Only
-  undo carries `if_stamp`. This is owner question 3 and may change.
+- **Replayed offline changes.** A change a client made offline and sends on reconnect is **unconditional**:
+  it is stamped when the server accepts it, so it wins over older online edits to the same register. Only undo
+  carries `if_stamp`. (Owner decision, 2026-11-12.)
 
 ### 3. The object
 
@@ -292,10 +294,10 @@ pub struct Header {
     pub name: Reg<Option<SmallText>>,// optional label (length limit in section 08)
 }
 
-/// Who made the object. Section 08 uses it so an owner can delete everything made by one guest or through one link.
+/// Who made the object. Section 08 uses it so an owner can delete everything made by one person or through one invite link.
 pub struct Creator {
     pub user: UserId,
-    pub via: Option<LinkId>,         // Some for a guest who joined through a share link
+    pub via: Option<LinkId>,         // Some: the invite link the person joined through
 }
 
 pub enum Kind { Stroke, Shape, Text, Image, Video, Group, Unknown(u8) }  // on the wire a u8; unknown kinds are kept opaque
@@ -513,9 +515,9 @@ move first, it sees that its pending move would form a cycle among objects it ho
   delete and a concurrent edit of any other field commute: the edit is applied to the hidden object, and a later
   restore shows it with the edit. This is the "delete and a concurrent edit agree" rule.
 - **Delete by creator.** `Op::DeleteBy` is for owners only (section 08). The server expands it, in one change, into
-  `alive = false` for every live object whose `creator.user` or `creator.via` matches, so one guest's or one link's
-  work can be removed at once. It is an ordinary delete: the objects can be restored, and are purged after the
-  retention period. The room keeps an index from creator to objects for this.
+  `alive = false` for every live object whose `creator.user` or `creator.via` matches, so one person's or one invite
+  link's work can be removed at once. It is an ordinary delete: the objects can be restored, and are purged after
+  the retention period. The room keeps an index from creator to objects for this.
 - A tombstone is the whole object, hidden. It keeps its data so undo and "restore" work. Its geometry may be moved
   to cold storage after 24 hours (section 03).
 - **Hard purge.** The room purges an object when it has been invisible (deleted itself, or under a deleted ancestor)
@@ -526,15 +528,15 @@ move first, it sees that its pending move would form a cycle among objects it ho
   05) counts current state, retained snapshots and named versions as live; `blobs_in_state` (part 14) is the pure
   function that lists the blobs of one document state; section 03's `blobs_in_store` loads each stored state and
   calls it.
-- **Versions.** Creating, deleting and restoring named versions is for members only, never guests. Until the owner
-  decides, restoring is owner-only (sections 03 and 08). A restore is itself a server-authored change that writes
-  the old state on top, using `Doc::diff_to` (section 14).
+- **Versions.** Creating and deleting named versions is for editor members and the owner; restoring is for the owner
+  and editor members (owner decision, 2026-11-12; sections 03 and 08). A restore is itself a server-authored change
+  that writes the old state on top, using `Doc::diff_to` (section 14).
 - **Who can still reference a tombstone?** (a) A connected client's undo stack (in memory, at most 100 entries per
   session; a refused undo is reported and dropped). (b) An offline client: a client away longer than the retention
   period reloads, and its queued changes are re-checked; those naming purged objects are dropped with a notice. (c)
   A text library's own tombstones (inside a text doc).
 - **Privacy note.** Deleted content stays on the server for 30 days and in any named version. Users who think
-  "delete" means "gone now" would be wrong; this is a product point (owner question 5).
+  "delete" means "gone now" would be wrong; this is a product point (see the open questions).
 - Registers keep no old values, so the document does not grow with edits; the only unbounded growth is tombstones
   and text history, both bounded as above.
 
@@ -575,7 +577,7 @@ which ones applied. This is the exact meaning of "undo reverses only my changes"
   skipped because their stamps were replaced, or, if no one wrote those registers, they apply to a hidden object).
   Restoring is the deleter's undo, or any user's explicit restore.
 - If I undo my own creation, the object is deleted even if others edited it since (their edits stay on the hidden
-  object and return if someone restores it). This is deliberate: it is my object. (Owner question 4.)
+  object and return if someone restores it). This is deliberate: it is my object. (See the open questions.)
 - If an entry applies nothing, it is consumed, the user sees "Nothing to undo: changed by someone else", and it is
   not pushed to the redo stack. Applied parts become a redo entry, built from the *actual* values replaced, with the
   new stamps (the acknowledgement gives the `Seq` of each of the client's own changes), so redo obeys the same rule
@@ -591,8 +593,8 @@ which ones applied. This is the exact meaning of "undo reverses only my changes"
   changed the register.
 - Because the conditions are checked by the server, undo works on objects that left the client's cache. The client
   need not hold them.
-- Undo is per session. Two devices of one user have separate stacks; a guest's stack is lost when they leave. The
-  stack is not saved across reloads (first version).
+- Undo is per session. Two devices of one user have separate stacks; The stack is not saved across reloads (first
+  version).
 
 **Text** inside an open text object uses the text library's own undo for that user (section 10) while the editor is
 focused, as every editor does. When editing ends, the whole editing session is pushed as one `Text` part, and
@@ -601,7 +603,15 @@ undoing it reverses that session's own insertions and deletions through the libr
 ### 9. Strokes and erasing
 
 A stroke is finished when the pen lifts and is then one `Create`; the stroke in progress exists only in presence
-(section 04). Its points never change. This section holds the field; section 06 defines the format:
+(section 04). Its points never change. This section holds the field; section 06 defines the format.
+
+**A stroke in progress when the connection dies.** The preview on other screens fades (section 04). The author's
+device keeps the stroke: it finishes it as if the pen had lifted and puts the finished stroke, as one `Create`, in
+the client's durable outbox (the device's saved queue of changes not yet acknowledged, which also keeps
+`ClientChangeId`s). It is sent when the device reconnects, and a replay after an unacknowledged send is answered
+with the original pair like any other change. The server never commits a stroke on someone's behalf (owner decision,
+2026-11-12). If the device is closed before reconnecting, the outbox is on disk and the stroke is sent at the next
+start, subject to the purge horizon rule in part 2. The format is:
 
 ```rust
 /// Defined by section 06 and held here word for word. Points are converted to units of the stroke's own level,
@@ -640,10 +650,11 @@ it and does not restate its numbers. Integers decode identically on every platfo
   the cuts that gesture added (by tag), and other people's cuts remain. Cut positions are in the immutable sample
   indices, so they never go stale. Section 06 draws strokes with their cuts and hit-tests them; section 07's eraser
   tool produces the `Cut`s.
+- **Default tool.** The whole-object eraser (`alive = false`) is the default tool; the partial stroke eraser, which
+  produces `Cut`s, is a second tool (owner decision, 2026-11-12).
 - At `MAX_CUTS_PER_STROKE` cuts (64) the eraser falls back to replacing the stroke: one change deletes it and
   creates the remaining pieces as new strokes. This path can duplicate in the rare case of two such replacements at
   once; it is accepted as a corner case.
-- Which eraser is the default tool, cut or whole-stroke, is for the owner (question 8).
 
 ### 10. Text and rich text
 
@@ -688,7 +699,17 @@ pub trait TextDoc {
   (bold, italic, underline, strike, color, size, font) grow when text is typed at their end; links do not.
   Concurrent exclusive values (two colors on one word) are settled by last-write-wins on operation ids. One
   paragraph is text up to a newline; paragraph alignment is the object-level `defaults.align` in the first version
-  (lists and headings are later, and are a product choice).
+  (lists and headings are later).
+- **What the first version includes (whiteboard).** The first app is a whiteboard (owner decision, 2026-11-12), so
+  text is for labels, sticky notes and short passages. The first version supports **bold, italic, size and color**
+  as marks, and per-object alignment (`defaults.align`). The `Marks` fields `underline`, `strike`, `font` and `link`
+  exist in the model so that old documents and clients keep them (unknown parts are kept, part 12), but the first
+  version's tools do not offer them. **Lists, headings, links and per-run font choice wait.** Lists are left out
+  because a whiteboard note rarely needs them and a list adds paragraph-level structure (indent, numbering) that the
+  mark model does not have; adding them later is a new field and so a minor schema change.
+- **Scripts.** Text on the surface is Latin script only at first (owner decision, 2026-11-12). The model stores any
+  Unicode text unchanged, so nothing is lost and no document changes when support is added; characters outside Latin
+  show as missing-glyph boxes until section 06 ships fonts for them. No validation here rejects non-Latin text.
 - **Unwanted markup.** Text is plain runs plus these marks. Links are limited to `http`, `https` and `mailto`
   addresses. No markup is interpreted.
 - **Hostile updates.** `apply_update` runs on the server on bytes from clients. The server applies it to a scratch
@@ -748,13 +769,12 @@ What the model needs from a library, and who can give it, as best I could check:
 | Text sequence without interleaving | Fugue | YATA (not checked for interleaving) | RGA-family (not checked) |
 | License, status | MIT, active | MIT, 0.x, active | MIT, active |
 
-Reading: if text only is asked of the library, Loro and yrs both qualify on paper, and Loro has the stronger
-documented rich-text and undo story. If the whole object map is asked of the library, B (a document per object) is
-the only route to partial copies, and it is unproven at the scale of thousands of objects in view. The choice of
-library stays the owner's.
+Reading: for text only, Loro and yrs both qualify on paper, and Loro has the stronger documented rich-text and undo
+story. For the whole object map, B (a document per object) would be the only route to partial copies, and it is
+unproven at the scale of thousands of objects in view. The text library is not yet chosen; the spike decides.
 
-**Spike plan for the library choice (owner decides after).** Build the object map of this section once (about 1,500
-lines, since it is only registers) and run these against it:
+**Spike plan for the text library and for the partial-copy finding.** Build the object map of this section once
+(about 1,500 lines, since it is only registers) and run these against it:
 
 1. **Text-only trial.** Loro and yrs behind the `TextDoc` trait: memory per empty and per 200-character document;
    time to apply 1,000 updates; update size per keystroke; concurrent typing in three clients; marks overlapping and
@@ -847,7 +867,7 @@ One line each. These names are used by other sections; they will not change with
 |---|---|
 | `ObjectId`, `Ordinal`, `Seq`, `UserId`, `LinkId`, `ClientChangeId` | Ids and counters (section 2); `ClientChangeId` is per client device and survives reconnects. |
 | `Reg<T>` | A value and the `Seq` that wrote it. |
-| `Object`, `Header`, `Kind`, `Creator` | An object, its fixed part, its kind, and who made it (user and, for a guest, the link). |
+| `Object`, `Header`, `Kind`, `Creator` | An object, its fixed part, its kind, and who made it (user and, if any, the invite link). |
 | `Slot { parent, order }` | The tree register: parent and `OrderKey` together. |
 | `OrderKey`, `between`, `At` | Sibling order key, key generator, and the `Between`/`Front`/`Back` insert position. |
 | `Xform`, `TopXform`, `ChildXform`, `RelOffset`, `Linear` | The one placement register, with 01's types. |
@@ -886,7 +906,7 @@ One line each. These names are used by other sections; they will not change with
 | A migration bug | Migrations run on a copy first; the old snapshot and log remain; the room only switches after a full check of every object. |
 | Template deleted after use | Copies are independent; `origin` then points at nothing, shown as "template removed". |
 | The single sequencer is a bottleneck | Section 03 sizes it; one room per surface (about 100 changes a second for 20 busy users is far below any limit). |
-| A guest who joined through a link defaces the surface | The owner runs `DeleteBy` for that link; the objects are hidden in one change and can be restored. |
+| Someone who joined through an invite link defaces the surface | The owner turns the link off, suspends those people, and runs `DeleteBy` for the link; the objects are hidden in one change and can be restored. |
 
 ## How it is tested
 
@@ -913,7 +933,7 @@ One line each. These names are used by other sections; they will not change with
 | `diff_to` | For random pairs of documents, applying `diff_to` to the first gives the second (equal canonical bytes). |
 | Regroup drift stays within 01's bound | Ungroup and regroup a rotated, non-power-of-two-scaled group 1,000 times; the child's offset error stays within 1,000 x 2^-51 of its offset; with a power-of-two scale it is zero. |
 | `ObjectEffect` boxes | Compare `old_box`/`new_box` with boxes computed from scratch through ancestors, after random moves of groups. |
-| Delete by creator | Objects of two guests and a member; `DeleteBy` one link hides exactly that link's objects, and a restore brings them back. |
+| Delete by creator | Objects of two people who joined through different invite links and one who did not; `DeleteBy` one link hides exactly that link's objects, and a restore brings them back. |
 | Playback is not queued offline | A disconnected client's play is refused, and nothing is sent on reconnect. |
 | Schema forward compatibility | Old client model reads documents with unknown fields and kinds, writes, and the unknown parts survive. |
 | Migrations | Golden documents of each earlier version migrate to the current one and pass the validator. |
@@ -957,33 +977,21 @@ code. No library is needed for the object map by design.
   library's); the eraser tool producing `Cut`s.
 - **08:** The table of limits (`MAX_OPS_PER_CHANGE`, `MAX_CHANGE_BYTES`, `MAX_ORDER_KEY_BYTES`, `MAX_TREE_DEPTH`,
   `MAX_TEXT_CHARS`, `MAX_TEXT_UPDATE_BYTES`, `MAX_CUTS_PER_STROKE`, `MAX_STROKE_POINTS` = 20,000, name length); the
-  role check including owner-only `DeleteBy` and member-only version operations; guest `UserId`s and `LinkId`s.
+  role check including owner-only `DeleteBy` and the version operations; the meaning of `LinkId`.
 
 ## Questions for the owner
 
-1. **CRDT library.** Reserved for the owner. The recommendation: do not use a library for the object map; use the
-   chosen one only for text bodies, and decide it after the spike in design part 13. If the owner wants one library
-   for everything, that means accepting option B or A with their stated costs. Does the owner accept the
-   purpose-built object map?
-2. **First app.** Reserved. This design serves a whiteboard well; a notebook app would raise rich-text needs (lists,
-   headings), and a planning surface would add typed cards and links. Which one decides how far text formatting goes
-   in the first version.
-3. **Long offline edits.** When someone edits a property offline for hours and someone else changed the same
-   property online meanwhile, the offline edit wins because it arrives later. The alternative (older edits lose)
-   needs per-edit clocks and the trust and complexity that come with them. The design's default is that a replayed
-   offline change is unconditional and wins; only undo carries `if_stamp`. Is "latest arrival wins" acceptable?
-   (This is question 5 in the index.)
-4. **Undo of my own creation.** It deletes the object even if others have since edited or grouped it. The
+Open. The merge model, offline replay, the whole-object eraser as default, the first app, who may restore versions
+and Latin script first were decided on 2026-11-11 and 2026-11-12 and are in the Design.
+
+1. **Text library.** Which library edits the text bodies (Loro, yrs or another) is decided after the spike in design
+   part 13; the owner chooses on its result. The object map itself does not use a library.
+2. **Undo of my own creation.** It deletes the object even if others have since edited or grouped it. The
    alternative is to refuse the undo when others have touched it. Which do users expect?
-5. **Deleted content retention.** Deleted objects stay 30 days on the server and forever in named versions. Is that
+3. **Deleted content retention.** Deleted objects stay 30 days on the server and forever in named versions. Is that
    acceptable, or should there be a "delete permanently now" action?
-6. **Offline text.** Viewers can edit text offline only for texts they opened once. Accept, or ship the text library
+4. **Offline text.** Viewers can edit text offline only for texts they opened once. Accept, or ship the text library
    document to every viewer (more bytes, simpler rules)?
-7. **Guests and undo.** A guest's undo stack is lost when they leave and they cannot undo across reloads. Accept?
-8. **Default eraser.** Cut-based partial erase is the design's partial eraser. Should the default eraser tool be
-   that, or whole-stroke erase with the partial eraser as an option?
-9. **Who may restore a version.** Until decided, only the owner may restore; members may create and delete versions;
-   guests none. Should editors (members) be able to restore?
 
 ## Sources
 

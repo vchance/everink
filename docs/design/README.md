@@ -1,6 +1,7 @@
 # Detailed design
 
-Status: proposal, 2026-11-11. Eight sections break down the high-level design in [`../design.md`](../design.md).
+Status: design, 2026-11-12, with the owner's fifteen decisions of 2026-11-11 and 2026-11-12 built in (listed under
+[Owner decisions](#owner-decisions)). Eight sections break down the high-level design in [`../design.md`](../design.md).
 Each was researched and written separately, against prior art and the current state of the libraries it would use,
 and then reconciled with the others. Nothing here is built or measured. Every number is a starting value, and each
 section ends with the claims it could not verify.
@@ -31,7 +32,7 @@ These are the decisions that cross section boundaries. The section named first h
 | Depth cap | Levels within ±1024; an encoded position is at most about 3.1 KB. | 01, 08 |
 | Placement | Level, anchor, rotation and scale are one value that is replaced whole. | 01, 02 |
 | Groups | A child is placed relative to its parent, so moving a group is one write. A child is at most 8 levels from its group. | 02, 01, 03 |
-| Merge | The object map is Everink's own and is ordered by the server: each field is last-writer-wins by the surface's sequence number. A CRDT library is used only for the text inside text objects. Proposed, for the owner to accept. | 02, 03 |
+| Merge | The object map is Everink's own and is ordered by the server: each field is last-writer-wins by the surface's sequence number. A CRDT library is used only for the text inside text objects. Owner decision; which library is still open. | 02, 03 |
 | What is sent | An object is sent when it crosses the padded view and covers at least one pixel, with a budget that raises the threshold on dense views. Size decides, not level. The client sends its exact view; the server adds the padding. | 03, 06 |
 | Connection | One WebSocket carries changes and presence. Presence has its own queue, served first; bulk data is paced to what the link drains in about 20 ms, so a cursor waits about 40 ms at most behind it on links faster than about 1.6 Mbit/s. Data already queued in the network is not counted. A second socket is the fallback if the spike shows this is not enough. | 03, 04, 07, 08 |
 | Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine. | 06, 01, 02 |
@@ -66,10 +67,8 @@ The research overturned or sharpened these points. [`../design.md`](../design.md
   devices (06).
 - **The server keeps a whole surface in memory** in the first version, capped at 2 million objects. Opening a
   surface costs the same whatever its size for the client, not for the server (03).
-- **Guests cannot manage versions.** "Anyone with the editor role" would have let a guest on an editor link
-  restore or delete versions (08).
-- **Versions are not the only remedy for defacement.** An owner can also delete everything by one guest or link,
-  and freeze guests (08).
+- **Versions are not the only remedy for defacement.** An owner can also delete everything made by one person
+  or by everyone who came through one invite link, and suspend those people (08).
 - **Knowing a file's hash is not permission to read it.** Access is granted per surface (08, 05).
 - **The platform needs HTTP, time and randomness,** not only a WebSocket (07, 05).
 
@@ -107,40 +106,45 @@ documents with measurements, before anything is built on them.
 | Does the renderer carry the load? | 06 | `vello_gpu` on WebGPU and on WebGL2: tile throughput, 10,000 objects, the size of the wasm build |
 | What is pen latency really? | 06 | A 240 frames-per-second camera on named devices, with and without the low-latency canvas |
 | Do cursors stall during a bulk load on one connection? | 04, 03 | Cursor delay while a client loads a large surface over a slow link |
-| Is the purpose-built controls toolkit realistic? | 07 | One toolbar and one text field with composition and a screen reader, native and web |
+| Which controls toolkit? | 07 | The same toolbar and text field built twice, with Everink's own small toolkit and with egui: composition, a screen reader, wasm size and effort, native and web |
+| Is there a better renderer? | 06 | A further renderer candidate named by the owner, evaluated behind the renderer interface next to the Vello path; its details are kept outside this repository |
 | How fast is storage? | 03 | Commit latency and load time for one SQLite file per room |
 
-## Decisions for the owner
+## Owner decisions
 
-Each section lists its own questions. These are the ones that shape the work, most consequential first.
+The owner answered these one at a time on 2026-11-11 and 2026-11-12. The questions and options as they were
+offered, and the answers, are quoted in https://github.com/vchance/everink/pull/7. The sections state each
+decision where it applies.
 
-1. **The merge model.** Accept Everink's own server-ordered object map, with a CRDT library only for text? This
-   is the reserved CRDT decision in a new form: which library becomes a question about text alone (02, 03).
-2. **The first app** (reserved). Sections 02, 03, 05, 06 and 07 each say what it changes. Section 01 notes that
-   only an app that uses deep zoom justifies its cost.
-3. **Browsers without WebGPU.** Supported through the WebGL2 path, with the CPU path as best effort (06, 07)?
-4. **The controls toolkit.** Accept the risk of building one, with the spike as the check, or start on egui and
-   accept two text stacks and no accessibility on the web (07)?
-5. **Offline edits.** A long offline edit that reconnects overrides newer online edits to the same property,
-   because the server orders by arrival. Acceptable (02)?
-6. **Who may restore a version,** and whether other editors are warned first. Owner-only until decided (03, 08).
-7. **Jump and follow.** Is everyone jumpable by default, may a person opt out, is the followed person told, and
-   may an owner turn it off for guests (04, 08)?
-8. **Guests.** Do they get cursors by default, what may they upload (images only is recommended), and how long
-   does a share link last by default (30 days is recommended) (04, 05, 08)?
-9. **The depth cap.** Are ±1024 levels and 3.1 KB positions acceptable, and is the cap set per surface or by
-   whoever runs the server (01)?
-10. **Erasing.** Which eraser is the default tool: whole objects (recommended) or parts of strokes (06, 02)?
-11. **Media.** Animated images refused or turned into silent looping video; SVG import later; video outside
-    H.264 and VP9 refused or converted by an operator-run tool; who may download originals, which can carry
-    location data; custom fonts and their embedding flags (05).
-12. **A stroke in progress when its author disconnects** is lost. Acceptable, or should the server keep it (04)?
-13. **Scale and retention.** The 2-million-object cap; thinning automatic versions (all for a day, hourly for a
-    week, daily to 30 days); how much may be lost if a server's disk dies; how long old protocol versions are
-    supported (03).
-14. **Languages and fonts.** Which scripts and which interface languages at first release; large fonts bundled or
-    fetched (06, 07, 05).
-15. **Accessibility commitment** for the built-in controls (07).
+| # | Question | Decision | Sections |
+|---|---|---|---|
+| 1 | Merge model | Everink's own object map, ordered by the server; a CRDT library only for text | 02, 03 |
+| 2 | First app | A whiteboard | all |
+| 3 | Browsers without WebGPU | WebGPU and WebGL2 supported; the processor-only path is best effort | 06, 07 |
+| 4 | Controls toolkit | Decided after the spike, which builds the same toolbar both ways; a further renderer candidate named by the owner is evaluated too | 07, 06 |
+| 5 | Offline edits | The offline edit wins when it arrives | 02 |
+| 6 | Restoring a version | The owner and editors; everyone is told right after | 03, 08 |
+| 7 | Jump and follow | On by default; a person can opt out; the followed person is told | 04, 08 |
+| 8 | Guests | No anonymous guests. A share link is an invitation: the person signs in through the embedding app before it grants anything | 08, 04, 05, 07 |
+| 9 | Depth cap | 1,024 levels each way by default; the operator sets the ceiling; an owner can lower it | 01, 08 |
+| 10 | Eraser | Whole objects by default; the partial stroke eraser is a second tool | 06, 02 |
+| 11 | Media | Animated images refused; video outside H.264 and VP9 refused unless the operator adds a converter; originals for the owner and editors; custom fonts allowed unless flagged against embedding | 05, 08 |
+| 12 | A stroke in progress when its author disconnects | The author's device keeps it and sends it on reconnect | 04, 02, 07 |
+| 13 | Scale and retention | 2 million objects per surface; restore points thin with age; background durability by default with a strict mode for operators; clients up to 6 months old are accepted | 03 |
+| 14 | Languages | Latin script only at first; an English interface built ready for translation | 06, 05, 07 |
+| 15 | Accessibility | WCAG 2.2 AA for the built-in controls; stated limits for the canvas | 07 |
+
+Decision 8 replaces part of an earlier one: the high-level design's "guest share links" (2026-11-11) are gone.
+
+### Still open
+
+- **Which library edits text** (Loro, yrs or another). The spike compares them.
+- **The controls toolkit.** Chosen after the spike.
+- **The further renderer candidate.** Evaluated in the spike; using code of the owner's that is not public would
+  need the owner to license it.
+- Each section's "Questions for the owner" lists what remains for that part, for example canvas rotation and how
+  pasted objects are sized (01), undoing your own creation after others edited it (02), whether people may choose
+  their cursor color (04), SVG import (05), blend modes (06), how far embedders may customize the controls (07).
 
 ## What is not verified
 

@@ -325,8 +325,8 @@ The ratio is a convention with consequences; this is what each constraint says.
    (next section). A drawn object is at least about one pixel, which is 2^-11 units at the largest zoom. Its upper
    size is set by section 06's stroke rule: a stroke ends and a new one starts when a point would lie 2^14 object
    units or more from the pen-down point on either axis, so a stroke is under 2^15 units across (16,384 pixels at
-   the lowest zoom). Sizes therefore fall in [2^-12, 2^16): a width of 28 binary orders. An object's own coordinates are
-   f32-or-lattice, which is scale-free; the band only has to fit the integer lattice (below) and keep sizes well
+   the lowest zoom). Sizes therefore fall in [2^-12, 2^16): a width of 28 binary orders. An object's own coordinates
+   are f32-or-lattice, which is scale-free; the band only has to fit the integer lattice (below) and keep sizes well
    away from the ends of that lattice.
 3. *Bits per doubling do not depend on the ratio.* Position cost is 1 bit per axis per doubling of zoom, whatever
    the ratio. So 1024 does not save space; 16 or 2 would not cost more.
@@ -832,11 +832,13 @@ units of its own level, the same rule as section 03's finest row. Section 06's `
 ### Bounded surfaces and the depth cap
 
 ```rust
-pub struct DepthCap {              // always present; an abuse backstop, not a product feature
+pub struct DepthCap {              // always present; an abuse backstop and a surface setting
     pub max_level: i32,            // default 1024      (zoom 2^10240, about 1e3082)
     pub min_level: i32,            // default -1024
     pub max_cell_bits: u32,        // default 12288     (1,536 bytes per axis)
 }
+/// Set by whoever runs the server. A surface's `DepthCap` must lie inside it on every field.
+pub struct OperatorCeiling(pub DepthCap);
 pub struct SurfaceLimits {         // optional product limits chosen by the surface creator
     pub bounds: Option<Bounds>,    // content must stay inside
     pub zoom: Option<ZoomRange>,   // the camera must stay in this range
@@ -854,7 +856,20 @@ doublings per second, but also bounded: a position is at most 3.1 KB and the wor
 `max_cell_bits = 12,288` allows cell values up to 2^12288: 1,024 levels (10,240 bits) plus 2,048 bits of horizontal
 distance. The server refuses a placement or view beyond the cap, and `check_cap_bytes` decides this on the raw bytes
 before any number is built; the client camera stops at the cap (a gentle "this is as deep as this surface goes"
-indicator). Raising it per surface is possible.
+indicator).
+
+**Who sets the cap** (owner decision, 2026-11-12). The default is 1,024 levels each way. Whoever runs the server
+sets an `OperatorCeiling`. A surface's owner can lower the surface's `DepthCap` below the ceiling and can never
+raise it past it; the server refuses a limit change that does. Changing a surface's cap does not move existing
+content: a placement already beyond a lowered cap is kept and shown, and only new placements and camera moves are
+refused.
+
+**What to make fast first** (owner decision, 2026-11-12: the first app is a whiteboard). Most surfaces will stay
+within a few levels of the origin, so the common case is the inline `Small` cell and 128-bit arithmetic: positions
+of 19 to 21 bytes, re-base and per-frame conversions with no allocation. That path is built, benchmarked and tuned
+first. Deep zoom must work from the first version, and is tested at the cap, but its big-integer path is not tuned
+until the benchmarks show a need; the cut budget (2 ms per frame) is what keeps a deep surface usable in the
+meantime.
 
 **Bounded surfaces** use the same engine with limits (inspired by tldraw's bounds behaviors):
 - *Bounds:* the camera center is clamped so the view keeps overlapping the bounds, with tldraw's behaviors available
@@ -1087,7 +1102,8 @@ in-house `Fixed`) possible.
    2^-16 unit.
 4. Undo of a re-level restores the previous whole `Xform`.
 5. Per-surface `DepthCap`, `Bounds`, `ZoomRange`, `home` and saved places live in the document or its metadata.
-6. Nothing in this section depends on which library holds the text; with the proposed purpose-built object map the
+6. Nothing in this section depends on which library holds the text; with the decided object map (owner decision,
+   2026-11-12: Everink's own, ordered by the server, a library only for text inside text objects) the
    registers need only a stamp and a value.
 
 **Section 03 (sync).**
@@ -1129,24 +1145,13 @@ limits, home and saved places.
 
 ## Questions for the owner
 
-1. **Depth cap defaults** (product and cost): 1,024 levels each way (a zoom of about 1e3082), positions up to 3.1
-   KB. Is that deep enough as a default? Should it be settable per surface by the surface owner or only by the
-   operator?
-2. **Paste scale:** keep the apparent size (my default) or the world size? Template placement: apparent size at
+1. **Paste scale:** keep the apparent size (my default) or the world size? Template placement: apparent size at
    about a quarter of the view width?
-3. **Bounded surfaces:** hard limits (the camera stops, the server refuses) or soft (the camera is nudged back)?
+2. **Bounded surfaces:** hard limits (the camera stops, the server refuses) or soft (the camera is nudged back)?
    What happens to content that is outside the bounds when an owner shrinks them?
-4. **Canvas rotation:** wanted in the first version? It does not change the design but changes the view rectangle
+3. **Canvas rotation:** wanted in the first version? It does not change the design but changes the view rectangle
    and gestures.
-5. **Reserved to you:**
-   - *CRDT library (Loro or yrs).* Nothing in this section depends on it. Under the proposed design the library is
-     used only for text inside text objects (02), and positions are plain registers with a stamp.
-   - *First app.* A whiteboard exercises bounded surfaces and moderate zoom; a notebook or planning surface may
-     never need deep zoom and would make this section's complexity mostly unused. Recommendation: pick the app that
-     will use deep zoom, since otherwise this design is paying for a feature the first users never touch; the design
-     allows delaying the big-integer path behind the `Small` fast path (levels within about ±6 of origin stay in 128
-     bits) if the first app is shallow.
-6. **Depth readout wording:** "x 1e301" or the number of levels? (small product choice.)
+4. **Depth readout wording:** "x 1e301" or the number of levels? (small product choice.)
 
 ## Sources
 
