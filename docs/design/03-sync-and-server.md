@@ -1058,7 +1058,7 @@ Both count as view changes for the rate limits in section 08.
 - **Revoked sessions on blob requests.** `everink-server`, which serves the media endpoint, keeps the list
   `RevokedSessions`: session ids with the time they were revoked, in memory behind a read-write lock, shared
   between the room tasks and the HTTP blob handlers. An entry is kept for the longest grant lifetime (2 hours,
-  video). The room adds a session synchronously, before it answers the owner who turned a share link off, in the
+  video), or until the room is loaded again, when the new lease epoch makes every earlier grant invalid. The room adds a session synchronously, before it answers the owner who turned a share link off, in the
   same
   step that closes that link's sockets. Every blob request is checked against the list after the grant's MAC. One
   limit remains, and it is section 08's and 05's to state: where the store hands out a short-lived presigned
@@ -1089,7 +1089,10 @@ Unloaded --first connection--> Loading --recovery done--> Active --last connecti
 etcd
 or a file lock on a single node) with an increasing epoch, renewed every 5 s; the epoch is written into `meta` and
 into each store transaction so that a machine that lost its lease cannot append (a stale writer's commit is
-refused). This is the same single-writer rule as Figma's lock table. Clients connect to any gateway node
+refused). The epoch also names the room's incarnation for grants: section 08 puts it inside every blob read grant
+and upload grant, and the blob and upload endpoints refuse a grant whose epoch is not the room's current one. A
+room that is loaded again after a crash, a restart or an idle unload has a new epoch, so the revoked-session list
+and the upload floors, which are held in memory, never need to survive it. This is the same single-writer rule as Figma's lock table. Clients connect to any gateway node
 (`axum` behind a load balancer), which forwards the WebSocket to the owner node by surface id; or the load balancer
 does it by a hash of the surface id in the URL, which is simpler and is the recommended first step. Single-node
 deployments skip all of this.

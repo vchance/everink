@@ -654,25 +654,38 @@ issues it only if the session passes `Authz::check` for the surface and the surf
 tenancy rule above). The request names blobs; the answer never says whether a hash exists elsewhere.
 
 ```
-https://<blob origin>/b/<tenant>/<blob hash>/<file name>?s=<surface>&sid=<session id>&exp=<unix s>&k=<key id>&sig=<mac>
+https://<blob origin>/b/<tenant>/<blob hash>/<file name>?s=<surface>&sid=<session id>&ep=<lease epoch>&exp=<unix s>&k=<key id>&sig=<mac>
 sig = HMAC-SHA256(blob_key[k], "everink-blob-v1\0" || tenant || "\0" || surface || "\0" || blob hash || "\0"
-                              || session id || "\0" || exp)
+                              || session id || "\0" || epoch || "\0" || exp)
 ```
 
-- **What is signed:** tenant, surface, blob hash, session id and expiry. The file name (a derived size or
-  tile) is not signed, so one grant covers every derived file of the blob and a client does not ask again for each
-  zoom level. The session id ties the grant to the session that asked for it; a revoked session fails below.
+- **What is signed:** tenant, surface, blob hash, session id, the room's lease epoch and expiry. The file name (a
+  derived size or tile) is not signed, so one grant covers every derived file of the blob and a client does not ask
+  again for each zoom level. The session id ties the grant to the session that asked for it; a revoked session fails
+  below. The **lease epoch** is section 03's: the increasing number a room takes with its lease when it is loaded
+  (see "Placement" in section 03), written into the room file's `meta` and held durably in the coordination store.
+  It changes whenever the room is loaded again after a crash, a restart or an idle unload, so it names one
+  incarnation of the room.
 - **Lifetimes:** **10 minutes** for images, tiles and fonts. **2 hours** for video, because a browser keeps sending
   range requests to one address and cannot be handed a new one in the middle of playback. Clients ask again before
   expiry. The store checks the MAC in constant time, the expiry (5 s leeway) and that the key id is known. Keys
   rotate every 90 days, with an overlap of 24 hours (the longest upload grant).
+- **The epoch check.** The blob endpoint and the upload endpoint refuse any grant whose epoch is not the room's
+  current one. They read the current epoch from the durable lease (the coordination store; on a single node the same
+  number in the room file's `meta`, read by the same process), with a cache of at most 1 s, never from the memory of
+  a room that may have restarted. A client whose grant is refused for an old epoch reconnects, which a restart
+  forces anyway, and asks for new grants. So every grant dies when its room incarnation ends, whatever was in
+  memory.
 - **Revoked sessions:** the list lives in `everink-server`, which serves the media endpoint. The room adds the id of
-  every session that ends by revocation (link turned off, guest removed, revocation floor). The store keeps these
-  ids for 24 hours (the longest upload grant) and checks every blob read request and every upload request (`POST`,
-  `PATCH`, `HEAD`) against them, so turning a link off cuts blob access at once, not after the grant would have
-  expired. A session that ends normally needs no entry; its grants simply expire. The list is small: it holds only
-  forced endings, 16 bytes each. If the store cannot reach the list, it refuses video requests it cannot check (fail
-  closed) and keeps serving cached image grants only until their 10 minutes end.
+  every session that ends by revocation (link turned off, guest removed, revocation floor), before it answers the
+  owner who turned the link off. The endpoint checks every blob read request and every upload request (`POST`,
+  `PATCH`, `HEAD`) against it, so turning a link off cuts blob access at once, not after the grant would have
+  expired. The list only has to live as long as one incarnation of the room: after a restart the epoch has changed
+  and every earlier grant is refused by the epoch check, so an empty list cannot let a removed guest's grant
+  through. A session that ends normally needs no entry; its grants die at the epoch change or expire. The list is
+  small: it holds only forced endings of the current incarnation, 16 bytes each. If the endpoint cannot reach the
+  list or the lease, it refuses video requests it cannot check (fail closed) and keeps serving cached image grants
+  only until their 10 minutes end.
 - **The user is not in the read MAC,** so a read grant is a capability: whoever holds the address can read until it
   expires or its session is revoked. Binding it to a cookie or header is impossible because a media element cannot
   send headers.
@@ -685,26 +698,31 @@ sig = HMAC-SHA256(blob_key[k], "everink-blob-v1\0" || tenant || "\0" || surface 
   struct UploadGrant {
       tenant: TenantId, surface: SurfaceId, principal: PrincipalKey, session: SessionId,
       blob: BlobHash, size: u64, kind: UploadKind,
-      issue_seq: u64,        // from the room's counter, never reused; compared with the session's upload floor
+      epoch: u64,            // the room's lease epoch; the endpoint refuses any other
+      issue_seq: u64,        // from the room's counter within this epoch; compared with the session's upload floor
       expires: Timestamp,    // expires <= issued + 24 h
       mac: [u8; 32],   // HMAC-SHA-256, context "everink-upload-v1", over every field above
   }
   ```
 
-  The upload endpoint refuses a request whose bytes exceed `size`, whose blob differs, whose session is on the
-  revoked list, or whose `issue_seq` is not above the session's **upload floor**, on every `POST`, `PATCH` and
-  `HEAD`. So an upload that was in progress when a link was turned off stops at its next request.
+  The upload endpoint refuses a request whose bytes exceed `size`, whose blob differs, whose `epoch` is not the
+  room's current lease epoch, whose session is on the revoked list, or whose `issue_seq` is not above the session's
+  **upload floor**, on every `POST`, `PATCH` and `HEAD`. So an upload that was in progress when a link was turned
+  off stops at its next request.
 - **The upload floor.** Because a grant is a signed value that stays good until it expires, the room keeps for each
   session an *upload floor*: a number, in the list `everink-server` holds beside the revoked sessions (the
-  cancelled-uploads list). A grant is good only if its `issue_seq` is above its session's floor. The room raises the
-  floor to its current counter when the session ends for any reason (a normal close, a lost connection, a token that
-  expires without refresh), when a refresh or a change of link role removes upload rights (editor to viewer, or an
-  editor link changed to a viewer link), and when guests are frozen. So an unexpired grant cannot upload after any
-  of these.
+  cancelled-uploads list). The floors and the `issue_seq` counter live in memory for one incarnation of the room
+  only: a new incarnation has a new lease epoch, so grants from the old one are refused before `issue_seq` is looked
+  at, and the counter may restart. A grant is good only if its `issue_seq` is above its session's floor. The room
+  raises the floor to its current counter when the session ends for any reason (a normal close, a lost connection, a
+  token that expires without refresh), when a refresh or a change of link role removes upload rights (editor to
+  viewer, or an editor link changed to a viewer link), and when guests are frozen. So an unexpired grant cannot
+  upload after any of these.
 - **Raising rights again.** The floor is never lowered or deleted while old grants could still be alive. When a
   freeze is lifted, or a role is raised again, the session simply gets new grants whose `issue_seq` is above the
-  floor, so they work, while grants issued before the cancellation stay dead. The entry is dropped 24 hours after
-  the session ends, when the last grant has expired. A new connection is a new session with its own floor.
+  floor, so they work, while grants issued before the cancellation stay dead. The entry is dropped when the session
+  ends and its grants can no longer be used, and at the latest with the room incarnation. A new connection is a new
+  session with its own floor.
 - **Freezing guests does not revoke them.** A frozen guest becomes a viewer at once, keeps read access to blobs
   (its sessions are not on the revoked list), and has its upload floor raised, as above.
 - **What a read grant is checked against.** The room issues a read grant only for a blob referenced by the
@@ -838,11 +856,11 @@ greps log output of the integration tests for the test secrets.
 **Deletion of a surface.** The owner (or the tenant through the admin interface) deletes a surface. The room closes,
 then a job removes: document log, snapshots, named versions, link records, tickets, the spatial index, overview
 pictures, and the surface's blob grants; a blob with no remaining grant in the tenant is deleted from the store.
-Blob grants issued earlier die within 2 hours at most, and at once if the sessions were revoked. Backups of the
-store age out under the operator's backup policy (the operator must say how long; 35 days is a common figure,
-unverified as a norm). The audit trail keeps a tombstone (surface id, who deleted, when) for 400 days. The job is
-idempotent and recorded, and a test restores nothing from it. Whether deletion should wait a grace period for undo
-is a product question (question 6).
+Blob grants issued earlier die within 2 hours at most, at once if the sessions were revoked, and at the next load of
+the room. Backups of the store age out under the operator's backup policy (the operator must say how long; 35 days
+is a common figure, unverified as a norm). The audit trail keeps a tombstone (surface id, who deleted, when) for 400
+days. The job is idempotent and recorded, and a test restores nothing from it. Whether deletion should wait a grace
+period for undo is a product question (question 6).
 
 **Export.** The owner can export the surface (format and mechanism in section 03). It runs under the owner's
 role and is audited. A person's right to their own personal data under privacy laws is the embedder's to meet; the
@@ -953,13 +971,13 @@ creator; supply-chain attacker. The operator is trusted (accepted residual risk)
 | T12 | S: guest imitates a member | Guest | Skeleton comparison; Guest badge drawn from `kind` | N36 to N38 | Names that look alike in ways the tables miss | V2 |
 | T13 | T: editor (guest) defaces | Guest-E, editor member | Budgets; freeze; `Op::DeleteBy`; link off; versions | N39 to N42 | Visible damage until an owner acts (accepted, high-level design) | V2 |
 | T14 | R: deny having restored a version, changed a link | Owner or editor | Audit trail with hash chain, actor, session | N43, N44 | The operator can rewrite the table and recompute the chain unless it is anchored outside | V16 |
-| T15 | D: flooding changes, presence, uploads | Any client | GCRA at three scopes; caps; bans; auto-freeze; upload grants bound to the session and cancelled by an upload floor when the session ends or loses upload rights | N40b, N45 to N50 | A large distributed flood from many addresses; needs the operator's network protection | V2, V13 |
+| T15 | D: flooding changes, presence, uploads | Any client | GCRA at three scopes; caps; bans; auto-freeze; upload grants bound to the session and cancelled by an upload floor when the session ends or loses upload rights, and by the lease epoch when the room restarts | N40b, N45 to N50 | A large distributed flood from many addresses; needs the operator's network protection | V2, V13 |
 | T16 | D: slow-loris, half-open sockets | Network | Deadlines on headers, auth frame, messages; ping; queue caps | N51 to N54 | Network-layer attacks below TLS | V13 |
 | T17 | D: memory by deep positions or huge objects | Editor or guest | Encoded-size and level checks on raw bytes; caps at framing | N55 to N60 | A tenant raising caps; operator error | V2 |
 | T18 | D: decompression bomb | Uploader | Header check against the limits table; media worker as a separate process with memory and CPU limits | N61 to N64 | A decoder bug in the worker | V5 |
 | T19 | E/T: polyglot, SVG or HTML upload; content sniffing | Uploader | Type allow-list; clients display derived files only; originals download-only for members; `nosniff`; attachment; separate origin; `sandbox` CSP | N65 to N70 | Video container tricks and platform decoder bugs (accepted) | V5, V3 |
 | T20 | E: malicious font | Editor | Memory-safe parser; table allow-list; size cap; Everink-only rendering | N71, N72 | A parser bug; fuzzing reduces it | V5 |
-| T21 | I: read a blob without access | Any user; tenant member | One grant per blob, issued by the room after `Authz` and a surface reference; HMAC over tenant, surface, blob hash, session id, expiry; revoked-session list on every request; per-tenant dedup | N73 to N78 | A grant works up to 10 minutes (images) or 2 hours (video) after normal access ends, unless the session was revoked | V8, V4 |
+| T21 | I: read a blob without access | Any user; tenant member | One grant per blob, issued by the room after `Authz` and a surface reference; HMAC over tenant, surface, blob hash, session id, lease epoch, expiry; grants refused when the epoch is not the room's current one (so a restart cannot revive a revoked session's grant); revoked-session list on every request; per-tenant dedup | N73 to N78 | A grant works up to 10 minutes (images) or 2 hours (video) after normal access ends, unless the session was revoked | V8, V4 |
 | T21a | I: access outlives a revoked session through a presigned storage address | Removed guest or member | Where the store hands out a presigned address to object storage, it is valid for 60 seconds at most and is issued only after the revoked-session check | N80b | Up to 60 seconds of access after revocation (accepted; also stated in section 05) | V8, V4 |
 | T22 | I: hash-existence oracle across surfaces or tenants | Member | Server always receives the bytes; grants per surface; dedup per tenant | N79, N80 | Accepted: within one tenant, an upload of a file another surface already holds completes without the processing steps, so the uploader can tell it already existed. They already hold the bytes, so they learn only that it exists in the tenant | V8, V14 |
 | T23 | I: cross-tenant data access | Another tenant | `TenantScope` in every call; keys per tenant; room key includes tenant | N81 to N85 | A bug in a new storage path; the type system and tests narrow it | V8, V15 |
@@ -979,7 +997,7 @@ creator; supply-chain attacker. The operator is trusted (accepted residual risk)
 | Clock skew between embedder and server | 30 s leeway; beyond it tokens look expired or from the future, and the log says which. The server exposes its time on the admin interface. |
 | A tenant key is lost | The tenant adds a new key through the operator; old tokens fail at once. |
 | JWKS fetch fails | Cached keys are used for up to 24 hours; then connections for that tenant fail closed. |
-| A room crashes or restarts | All sessions end. Members re-present the token; guests re-present the ticket (stored durably). The link state survives. |
+| A room crashes or restarts | All sessions end. Members re-present the token; guests re-present the ticket (stored durably). The link state survives. The room is loaded with a new lease epoch, so every blob read grant and upload grant of the old incarnation is refused, including those of sessions revoked before the restart; the in-memory revoked-session list and upload floors start empty and need nothing from the past. Clients ask for new grants. |
 | The media worker dies or exceeds its limit | The upload is refused with a generic error, the worker process is killed and restarted, and the event is audited. |
 | The blob signing key is lost or leaked | A new key id is added and the old one removed at once; all outstanding grants die; clients ask again (an interruption of seconds). |
 | A link is turned off while guests are drawing | Their sockets close with 4403; their queued changes are discarded by the server when the client reconnects without a ticket; the client shows "link turned off". |
@@ -1006,7 +1024,7 @@ also checks the audit entry and, where relevant, the absence of a side effect.
 | Audit | N43 each audited action produces exactly one row with the right actor. N44 breaking the chain is detected by the verifier. |
 | Limits and rates | N44a with a deliberately low drain-rate estimate, a bulk load still completes and the estimate recovers within a few seconds (it does not starve the load), while cursor updates stay within the 40 ms wait. N44b a 51st follower of one person is refused. N45 change flood is refused with `rate_limited`. N46 presence flood is dropped. N47 many sockets from one user share one budget. N48 ban with backoff. N49 trusted-proxy header ignored from an untrusted peer. N50 IPv6 /64 grouping. N51 to N54 slow headers, slow frame, no pong, slow reader. N55 position with level over the cap (+-1024). N56 position with encoded size over the cap of about 3.1 KB (checked before any arithmetic: a test with a counting allocator). N57 change over size. N58 stroke over 20,000 points. N59 text over length. N60 object count. |
 | Media | N61 PNG with a large declared size. N62 animated GIF refused. N63 a WOFF2 upload is refused (not accepted in the first version). N64 media worker killed at its limits. N65 polyglot (image plus script or archive): only derived files are displayed. N66 SVG refused. N67 HTML and PDF refused. N68 wrong extension and wrong `Content-Type` ignored. N69 response headers are exactly the table (a golden test), run in proxy mode and in presigned mode. N70 video with trailing data; the server never decodes video. N71 font with bad tables. N72 font over size. N72a a guest cannot obtain an original. Fuzzing: image headers, font tables, container parsers. |
-| Blobs | N73 expired grant. N74 changed `exp`. N75 changed surface, blob hash or session id. N76 grant for a tenant's blob used under another tenant. N77 request for a blob the surface does not reference. N77a a viewer is denied a blob referenced only by a deleted object, and allowed one in a version their role may open. N78 a viewer on surface A cannot get a grant for a blob that belongs only to surface B. N79 a change naming an ungranted hash is refused. N80 uploading a file that another tenant holds gives the same response as a new file. N80c an upload request (`POST`, `PATCH` or `HEAD`) after the link is turned off is refused. N80d an upload with more bytes than the grant's size, or a different blob, is refused. N80a turning a link off makes the next blob request of its guests fail (revoked-session list), for image and video grants alike. N80b a presigned storage address has a lifetime of at most 60 seconds and is not issued for a revoked session. |
+| Blobs | N73 expired grant. N74 changed `exp`. N75 changed surface, blob hash or session id. N76 grant for a tenant's blob used under another tenant. N77 request for a blob the surface does not reference. N77a a viewer is denied a blob referenced only by a deleted object, and allowed one in a version their role may open. N78 a viewer on surface A cannot get a grant for a blob that belongs only to surface B. N79 a change naming an ungranted hash is refused. N80 uploading a file that another tenant holds gives the same response as a new file. N80c an upload request (`POST`, `PATCH` or `HEAD`) after the link is turned off is refused. N80d an upload with more bytes than the grant's size, or a different blob, is refused. N80e after a restart (a new lease epoch), the video grant of a session revoked before the restart and an old upload grant are both refused, and a grant issued by the new incarnation works; the same holds after a room crash and after an idle unload; the endpoint reads the epoch from the durable lease, not from room memory. N80a turning a link off makes the next blob request of its guests fail (revoked-session list), for image and video grants alike. N80b a presigned storage address has a lifetime of at most 60 seconds and is not issued for a revoked session. |
 | Privacy | N86 `locatable: false` refuses jump and shows no jump action. N87 no message to another client contains a view that was not requested (scan of all outputs in the presence tests). N88 jump rate limit. N89 follow notice is sent. N90 sign-out deletes IndexedDB and OPFS data in the browser test. |
 | Client | N91 a name containing markup renders as text in canvas and mirror. N92 pasting HTML yields plain text only. N93 the web shell runs under the CSP with no violation report. N94 a build check that the shell uses no string-to-code API. |
 | Supply chain | S1 `cargo deny check` (advisories, licenses, bans, sources). S2 `cargo audit` nightly. S3 `cargo vet` with no unaudited security-relevant crate. S4 a workflow lint that fails on an action not pinned to a SHA and on `pull_request_target` with a checkout of the pull request. S5 the double wasm build with equal hashes. |

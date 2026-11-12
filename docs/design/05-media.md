@@ -513,7 +513,8 @@ downloads its own picture.
    `https://<blob origin>/b/<tenant>/<blob hash>/<file name>?s=<surface>&sid=<session id>&exp=<unix s>&k=<key id>&sig=<mac>`,
    where `<file name>` names the variant (tiles are `t/<k>/<x>_<y>`; the original is never fetched this way, see
    below). The media endpoint, which is part of `everink-server`, recomputes the MAC, checks `exp` and the key id,
-   and checks the session id against the revoked-session list that `everink-server` keeps. It supports `Range`.
+   checks that the grant's room lease epoch is the room's current one (section 08), and checks the session id
+   against the revoked-session list that `everink-server` keeps. It supports `Range`.
 4. S3 backend: the endpoint answers `302` to a presigned URL valid for 60 seconds (through `Signer`), or streams the
    bytes itself ("proxy mode") for stores that cannot sign. Local backend: it streams. In presigned mode the
    redirect must carry the same response headers as section 08's table: response-header overrides on the presigned
@@ -530,7 +531,9 @@ current target position (a glitch of about a second, once per 2 hours).
 **Revocation.** `everink-server` keeps a short list of revoked session ids for the longest grant lifetime (2 hours)
 and checks every blob request against it. Turning a share link off, or removing a person, adds their session ids, so
 blob access stops at once, apart from the up to 60 seconds of an already issued presigned address (above). If the
-list cannot be read, video requests are refused (fail closed), as section 08 says.
+list cannot be read, video requests are refused (fail closed), as section 08 says. The list is held in memory.
+It does not need to survive a restart: every grant carries the room's lease epoch (sections 03 and 08), a room
+that is loaded again has a new one, and a grant from an earlier epoch is refused, so the client asks again.
 
 **Response headers.** Section 08's table is the only list of headers a blob response carries (content type, type
 sniffing, disposition, sandboxing policy, cache policy, cross-origin policy, referrer policy); this section repeats
