@@ -233,7 +233,7 @@ the spike to decide.
 /// What a client sends. Sizes are payload bytes at depth 0, P = P(0) = 19.
 pub enum ToServer {
     /// First presence message after the connection is up. About 20 bytes. `resume` lets a reconnect keep session and
-    /// color. A guest's typed name is not here: it travels in section 08's join exchange (section 03's `Hello`).
+    /// color. A guest's typed name is not here: it travels in section 08's join exchange.
     PresenceHello { proto: u8, resume: Option<[u8; 16]>, locale_dir: u8 },
     /// Hot path, up to 30 per second. 9 + P = 28 bytes. Not sent while an ink or drag message is (they carry the
     /// pointer themselves), so a session never sends more than about 30 presence messages a second.
@@ -697,7 +697,7 @@ The pen's samples are collected by the client in the order they arrive, thinned 
   change while it is drawn. The tool ends the stroke and starts a new one (a new `ObjectId`, so `End` then a new
   `Begin`) when a point would lie 2^14 object units or more from the pen-down point on either axis. So every preview
   point relative to `Begin.first` fits an `i32` at 2^-16 of a unit, and the extent stays under 2^15 units. A delta
-  between two points can reach 2^31 steps, so the receiver decodes `dx` and `dy` as `i64` and checks that each
+  between two points is just under 2^31 steps, so the receiver decodes `dx` and `dy` as `i64` and checks that each
   resulting point fits `i32`; a point that does not is a malformed message and is dropped. The preview relies on
   this rule, including for strokes drawn while the view auto-pans.
 - **Batching.** Kept points are sent in `Points` messages every tick (33 ms), 2 to 8 points in each. The client also
@@ -1023,8 +1023,7 @@ come from crates.io on 2026-11-11; their health beyond the update date was not e
   second, burst 120; guests 30 and 60); the jump rate; display-name limits and their unit; the guest session id used
   as `user_key`; `kind` on every session; the per-session `locatable` flag with its `loc` claim; the follow notice;
   and a place in the limits table for `max_followers_per_person` (50), `max_live_strokes`, `max_visible_cursors`,
-  `presence_down_budget` and `presence_room_egress`, with a room cap on sessions. Its table row "Presence (cursor,
-  view, live ink points)" should drop "view".
+  `presence_down_budget` and `presence_room_egress`, with a room cap on sessions.
 
 ## What this changes in docs/design.md
 

@@ -299,10 +299,11 @@ same function, so `alg`, `kid`, header and size rules (RFC 8725 3.1, 3.10 to 3.1
 **Refresh in a long session.** A session ends when its token expires unless refreshed. At half the token's life the
 client asks the embedder for a new token and sends `refresh { token }` on the open socket. The server runs the same
 checks and also requires the same `iss`, `sub` and `surface` as the session; it then replaces role, name and expiry.
-A lower role applies to the next message. A higher role applies too, which is how the embedder promotes someone. The
-server sends `refresh_needed` 2 minutes before expiry. If none arrives, it closes with code 4401, the client
-fetches a new token and reconnects, and queued changes merge on reconnect. If the embedder is down for longer than a
-token's life, sessions end: the design fails closed.
+A lower role applies to the next message, and one that loses upload rights raises the session's upload floor
+(below). A higher role applies too, which is how the embedder promotes someone. The server sends `refresh_needed` 2
+minutes before expiry. If none arrives, it closes with code 4401, the client fetches a new token and reconnects, and
+queued changes merge on reconnect. If the embedder is down for longer than a token's life, sessions end: the design
+fails closed.
 
 ### The connection handshake
 
@@ -446,7 +447,7 @@ guest on a viewer link. Cells: **Y** allowed; **n** denied; **L** allowed but un
 | Upload a video | Y | Y | n | n | n | upload endpoint |
 | Upload a font | Y | Y | n | n | n | upload endpoint |
 | Ask for a blob grant | Y | Y | Y | Y | Y | room: only for a blob in the surface's current state, or in a snapshot or version the role may open |
-| Ask for an upload grant (`UploadGrantRequest`) | Y | Y | n | L | n | room; checked again on every upload request |
+| Ask for an upload grant (`UploadGrantRequest`) | Y | Y | n | L | n | room; checked again on every upload request against the session's upload floor; ending the session or losing upload rights cancels earlier grants |
 | List or open a version (read only) | Y | Y | n | n | n | room |
 | Create a named version | Y | Y | n | n | n | room |
 | Restore a version | Y | n | n | n | n | room |
@@ -677,23 +678,35 @@ sig = HMAC-SHA256(blob_key[k], "everink-blob-v1\0" || tenant || "\0" || surface 
   send headers.
 - **Upload grant.** The one credential for uploads. The room issues it on an `UploadGrantRequest` after
   `Authz::check` for the upload operation and the limits table (size, kind, uploads in flight). It is bound to the
-  principal, the surface, the blob and its declared size, and is valid until the session ends and for at most 24
-  hours. Section 05 and section 03 point here.
+  principal, the surface, the blob and its declared size, and is valid while the session lives and its role keeps
+  upload rights, and for at most 24 hours. Section 05 and section 03 point here.
 
   ```rust
   struct UploadGrant {
       tenant: TenantId, surface: SurfaceId, principal: PrincipalKey, session: SessionId,
-      blob: BlobHash, size: u64, kind: UploadKind, expires: Timestamp,   // expires <= issued + 24 h
+      blob: BlobHash, size: u64, kind: UploadKind,
+      issue_seq: u64,        // from the room's counter, never reused; compared with the session's upload floor
+      expires: Timestamp,    // expires <= issued + 24 h
       mac: [u8; 32],   // HMAC-SHA-256, context "everink-upload-v1", over every field above
   }
   ```
 
-  The upload endpoint refuses a request whose bytes exceed `size`, whose blob differs, or whose session is on the
-  revoked list, on every `POST`, `PATCH` and `HEAD`. So an upload that was in progress when a link was turned off
-  stops at its next request.
+  The upload endpoint refuses a request whose bytes exceed `size`, whose blob differs, whose session is on the
+  revoked list, or whose `issue_seq` is not above the session's **upload floor**, on every `POST`, `PATCH` and
+  `HEAD`. So an upload that was in progress when a link was turned off stops at its next request.
+- **The upload floor.** Because a grant is a signed value that stays good until it expires, the room keeps for each
+  session an *upload floor*: a number, in the list `everink-server` holds beside the revoked sessions (the
+  cancelled-uploads list). A grant is good only if its `issue_seq` is above its session's floor. The room raises the
+  floor to its current counter when the session ends for any reason (a normal close, a lost connection, a token that
+  expires without refresh), when a refresh or a change of link role removes upload rights (editor to viewer, or an
+  editor link changed to a viewer link), and when guests are frozen. So an unexpired grant cannot upload after any
+  of these.
+- **Raising rights again.** The floor is never lowered or deleted while old grants could still be alive. When a
+  freeze is lifted, or a role is raised again, the session simply gets new grants whose `issue_seq` is above the
+  floor, so they work, while grants issued before the cancellation stay dead. The entry is dropped 24 hours after
+  the session ends, when the last grant has expired. A new connection is a new session with its own floor.
 - **Freezing guests does not revoke them.** A frozen guest becomes a viewer at once, keeps read access to blobs
-  (its sessions are not on the revoked list), and has its upload grants cancelled: the room puts the session on a
-  separate cancelled-uploads list that the upload endpoint checks and the read path does not.
+  (its sessions are not on the revoked list), and has its upload floor raised, as above.
 - **What a read grant is checked against.** The room issues a read grant only for a blob referenced by the
   surface's current state, or by a snapshot or named version that the requester's role may open. The reference index
   that never forgets is for garbage collection only, never for access. A viewer therefore cannot read a blob that is
@@ -940,7 +953,7 @@ creator; supply-chain attacker. The operator is trusted (accepted residual risk)
 | T12 | S: guest imitates a member | Guest | Skeleton comparison; Guest badge drawn from `kind` | N36 to N38 | Names that look alike in ways the tables miss | V2 |
 | T13 | T: editor (guest) defaces | Guest-E, editor member | Budgets; freeze; `Op::DeleteBy`; link off; versions | N39 to N42 | Visible damage until an owner acts (accepted, high-level design) | V2 |
 | T14 | R: deny having restored a version, changed a link | Owner or editor | Audit trail with hash chain, actor, session | N43, N44 | The operator can rewrite the table and recompute the chain unless it is anchored outside | V16 |
-| T15 | D: flooding changes, presence, uploads | Any client | GCRA at three scopes; caps; bans; auto-freeze | N45 to N50 | A large distributed flood from many addresses; needs the operator's network protection | V2, V13 |
+| T15 | D: flooding changes, presence, uploads | Any client | GCRA at three scopes; caps; bans; auto-freeze; upload grants bound to the session and cancelled by an upload floor when the session ends or loses upload rights | N40b, N45 to N50 | A large distributed flood from many addresses; needs the operator's network protection | V2, V13 |
 | T16 | D: slow-loris, half-open sockets | Network | Deadlines on headers, auth frame, messages; ping; queue caps | N51 to N54 | Network-layer attacks below TLS | V13 |
 | T17 | D: memory by deep positions or huge objects | Editor or guest | Encoded-size and level checks on raw bytes; caps at framing | N55 to N60 | A tenant raising caps; operator error | V2 |
 | T18 | D: decompression bomb | Uploader | Header check against the limits table; media worker as a separate process with memory and CPU limits | N61 to N64 | A decoder bug in the worker | V5 |
@@ -989,7 +1002,7 @@ also checks the audit entry and, where relevant, the absence of a side effect.
 | Role matrix | A generated test over the table: for every `Operation` and every principal kind (owner, editor, viewer, Guest-E, Guest-V) the expectation in the matrix is asserted, plus the change is not applied, and other clients see nothing. N23 to N27: guest tries each owner-only operation. N28 to N34: viewer and Guest-V try each change type, live ink, upload, version operations. The matrix in this document and the test table are generated from one source file and checked for equality in CI. |
 | Server-checked changes | N35 a viewer sends a well-formed object change, and a well-formed text update; both refused. A change with one denied op among permitted ones applies none. |
 | Guest names | N36 bidi override, zero-width, control, combining flood. N37 confusable of a present member (Cyrillic "a"). N38 over-length. A fuzz target on the validator. |
-| Defacement tools | N39 guest write budget ends writes at 5,000 objects. N40 freeze demotes guest sessions on the next message. N40a a frozen guest can still read blobs, and its upload grants are refused afterwards. N41 `Op::DeleteBy` removes exactly that creator's objects and a restore brings them back; a non-owner sending it is refused. N42 auto-freeze on mass limiting. |
+| Defacement tools | N39 guest write budget ends writes at 5,000 objects. N40 freeze demotes guest sessions on the next message. N40a a frozen guest can still read blobs, and its upload grants are refused afterwards. N40b an upload with an unexpired grant is refused after a downgrade from editor to viewer, after an editor link is changed to a viewer link, and after a normal session end; an upload with a grant issued after an unfreeze (or a role raised again) succeeds, while the grant issued before it still fails. N41 `Op::DeleteBy` removes exactly that creator's objects and a restore brings them back; a non-owner sending it is refused. N42 auto-freeze on mass limiting. |
 | Audit | N43 each audited action produces exactly one row with the right actor. N44 breaking the chain is detected by the verifier. |
 | Limits and rates | N44a with a deliberately low drain-rate estimate, a bulk load still completes and the estimate recovers within a few seconds (it does not starve the load), while cursor updates stay within the 40 ms wait. N44b a 51st follower of one person is refused. N45 change flood is refused with `rate_limited`. N46 presence flood is dropped. N47 many sockets from one user share one budget. N48 ban with backoff. N49 trusted-proxy header ignored from an untrusted peer. N50 IPv6 /64 grouping. N51 to N54 slow headers, slow frame, no pong, slow reader. N55 position with level over the cap (+-1024). N56 position with encoded size over the cap of about 3.1 KB (checked before any arithmetic: a test with a counting allocator). N57 change over size. N58 stroke over 20,000 points. N59 text over length. N60 object count. |
 | Media | N61 PNG with a large declared size. N62 animated GIF refused. N63 a WOFF2 upload is refused (not accepted in the first version). N64 media worker killed at its limits. N65 polyglot (image plus script or archive): only derived files are displayed. N66 SVG refused. N67 HTML and PDF refused. N68 wrong extension and wrong `Content-Type` ignored. N69 response headers are exactly the table (a golden test), run in proxy mode and in presigned mode. N70 video with trailing data; the server never decodes video. N71 font with bad tables. N72 font over size. N72a a guest cannot obtain an original. Fuzzing: image headers, font tables, container parsers. |

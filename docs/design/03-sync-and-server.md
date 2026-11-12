@@ -593,9 +593,10 @@ pub enum ClientMsg {
         client: ClientId,
         open_at: Option<VersionId>,        // read-only view of a saved version (members only, 08)
         caps: u32,                         // bit set: lz4, ...
+        acked_upto: ClientChangeId,        // highest id this client has seen acknowledged
     },
     SetView { view_id: u32, view: ViewMsg, held: Vec<(ObjectId, Rev)> },   // held: at most 20,000 entries
-    Submit { changes: Vec<ChangeFrame> },  // in order
+    Submit { changes: Vec<ChangeFrame>, acked_upto: ClientChangeId },   // changes in order
     Fetch { req: u32, what: FetchWhat },
     Locate { req: u32, what: LocateWhat }, // nearest content, bounds of all content (section 01)
     Presence(Bytes),                       // section 04's payload, at most 1,000 bytes
@@ -694,13 +695,14 @@ whatever has arrived while the previous commit was running (group commit), so lo
 change. Presence and `Pong` are never held for the commit.
 
 **Idempotent resubmission.** A client resends every unacknowledged `ChangeFrame` after a reconnect. The room
-keeps, per `ClientId`, the highest `ClientChangeId` it has logged and the `(ClientChangeId, Seq)` pairs of its most
-recent changes (at least as many as the unacknowledged budget in section 08's table allows, so every change a client
-can resend is covered); a frame with `id <= highest` is not
-applied again and is answered with its original pair in an `Ack`. The map is saved in every snapshot and rebuilt
-from the
-log tail, so it survives a crash. It is trimmed for clients idle 30 days (about 40 bytes per entry; 100,000
-devices is 4 MB).
+keeps, per `ClientId`, the highest `ClientChangeId` it has logged and the `(ClientChangeId, Seq)` pairs of the
+changes that client has not yet confirmed receiving an `Ack` for. Every `Submit` and every `Hello` carries
+`acked_upto`, the highest id the client has seen acknowledged, and the room drops the pairs at or below it, so
+the list holds at most the unacknowledged budget in section 08's table and is normally a handful. A frame with `id <= highest` is
+not applied again and is answered with its original pair in an `Ack`. The map is saved in every snapshot and
+rebuilt from the log tail, so it survives a crash. It is trimmed for clients idle 30 days. An idle client costs
+about 40 bytes (4 MB for 100,000 devices); a client that vanished with a full window of unconfirmed changes costs
+up to about 4 KB until it is trimmed, which is 400 MB only if all 100,000 did so at once (an estimate).
 
 **Flow control and back-pressure.**
 
@@ -944,8 +946,9 @@ and keeps the records that tie blobs to a surface. Files travel over HTTP, never
   `UploadGrantRequest { req, blob, size, kind }` is checked against the sender's role and section 08's media limits,
   and answered with `UploadGrant`: the upload grant defined in section 08, bound to user, surface, blob and size,
   valid until the session ends and for at most 24 hours. It is the only credential for section 05's resumable HTTP
-  upload. `everink-server` checks every upload request (`POST`, `PATCH`, `HEAD`) against the revoked-session list,
-  so an upload after a link is turned off is refused.
+  upload. `everink-server` checks every upload request (`POST`, `PATCH`, `HEAD`) against the revoked-session list
+  and the session's upload floor (section 08), so an upload is refused after a link is turned off, after the session
+  ends, and after its role loses upload rights. The room raises the floor on each of those events.
   `BlobGrantRequest { req, blobs }` (at most 100 ids, from section 08's table) is answered with `BlobGrants`: one
   grant per blob, which covers all of the blob's
   variants and tiles, and is issued only if this surface references the blob (the reference index below
@@ -1131,7 +1134,7 @@ Derived:
 | Active rooms per host, memory-bound | 32 GB / (100 MB typical big board) | about 300; about 10,000 for 1,000-object boards |
 
 Presence worst-case fan-out is the largest figure, and it is section 04's to reduce (lower rate when many receive,
-cursors beyond a count shown as a list). Past 1 million objects, the route is to keep object bodies in the chunk
+cursors beyond a count shown as a list). Past the 2-million cap, the route is to keep object bodies in the chunk
 cache instead of RAM: chunks are the paging unit already, and the index (170 B per object, 1.7 GB at 10 million)
 stays resident. That is the design Liveblocks describes for its second engine. It is not part of the first version;
 the first version rejects creating objects past `max_objects` (default 2,000,000; section 08). The cap follows from

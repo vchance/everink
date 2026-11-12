@@ -324,8 +324,8 @@ The ratio is a convention with consequences; this is what each constraint says.
 2. *The in-level zoom range must cover what one view needs.* The camera holds zoom in [0.5, 2048) pixels per unit
    (next section). A drawn object is at least about one pixel, which is 2^-11 units at the largest zoom. Its upper
    size is set by section 06's stroke rule: a stroke ends and a new one starts when a point would lie 2^14 object
-   units or more from the pen-down point on either axis, so a stroke is under 2^15 units across (8,192 pixels at the
-   lowest zoom). Sizes therefore fall in [2^-12, 2^16): a width of 28 binary orders. An object's own coordinates are
+   units or more from the pen-down point on either axis, so a stroke is under 2^15 units across (16,384 pixels at
+   the lowest zoom). Sizes therefore fall in [2^-12, 2^16): a width of 28 binary orders. An object's own coordinates are
    f32-or-lattice, which is scale-free; the band only has to fit the integer lattice (below) and keep sizes well
    away from the ends of that lattice.
 3. *Bits per doubling do not depend on the ratio.* Position cost is 1 bit per axis per doubling of zoom, whatever

@@ -442,9 +442,10 @@ Uppy) work for embedders. It runs over HTTP, not the WebSocket.
 1. The client asks over the WebSocket for an **upload grant** with section 03's `UploadGrantRequest { req, blob,
    size, kind }`. The server checks role, limits and `size`. The grant is defined in section 08: it is bound to
    user, surface, blob and size, and is valid until the session ends and for at most 24 hours. Every upload request
-   (`POST`, `PATCH` and `HEAD`) is checked against the revoked-session list, so an upload after a link is turned off
-   is refused. A guest who is frozen becomes a viewer at once and has their upload grants cancelled; they keep read
-   access to blobs.
+   (`POST`, `PATCH` and `HEAD`) is checked against the revoked-session list and against the session's upload
+   floor (section 08), so an upload is refused after a link is turned off, after the session ends for any reason,
+   and after its role loses upload rights. A guest who is frozen becomes a viewer at once: grants issued before
+   the freeze stay dead, and they keep read access to blobs.
 2. `POST /v1/uploads` with `Tus-Resumable: 1.0.0`, `Upload-Length: <bytes>`, `Authorization: Bearer <grant>` and
    `Upload-Metadata` carrying `blob` (the `b3-` id) and `surface`. Reply `201` with `Location`, or `200` with
    `Everink-State: present` when the same surface already references the blob (nothing to upload).
@@ -521,7 +522,7 @@ downloads its own picture.
    08 accepts that and lists it in its threat table. Proxy mode has no such gap.
 
 **Lifetimes.** Images, tiles, posters and fonts: 10 minutes; the client asks again at 50 percent of the lifetime.
-Video: **2 hours**. This corrects design.md's "short-lived signed addresses" for video: a browser keeps requesting
+Video: **2 hours**. Video needs the longer life because a browser keeps requesting
 byte ranges from the same address while the video plays, and an address that expires after minutes would stop
 playback midway. A client that still gets `403` mid-video asks for a new grant and reloads the element at the
 current target position (a glitch of about a second, once per 2 hours).
