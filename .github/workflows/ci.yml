@@ -78,7 +78,7 @@ jobs:
           cargo run --release --locked --example bench_object_map
           cargo run --release --locked --example sim_paced_link
       - name: Paced link over real sockets (Linux; no thresholds, the figures are read from the log)
-        run: cargo run --release --locked --example paced_link 4
+        run: cargo run --release --locked --example paced_link 3 5
 
   # The text-library trial (spike slice 2b): a package outside the workspace, with the three candidate libraries.
   # It runs only when the trial or the toolchain changes, and on the full runs.

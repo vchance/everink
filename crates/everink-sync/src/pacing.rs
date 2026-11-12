@@ -15,8 +15,9 @@
 //!   unsent.
 //! - **Control** (acks, rejects, notices): next, also whatever is unsent. These are small and rare.
 //! - **Apply** (accepted changes) and **Bulk** (objects coming into view) are byte streams, cut into chunks.
-//!   A chunk is taken only if the unsent bytes plus the chunk stay under the limit. After eight chunks of one,
-//!   the other gets a turn if it has anything.
+//!   A chunk is taken only if the unsent bytes plus the chunk stay under the limit. Accepted changes go before
+//!   bulk, which is the lowest class; after eight chunks of them in a row one chunk of bulk goes, so a load is
+//!   never starved.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -28,7 +29,7 @@ pub const MAX_CHUNK: usize = 16 * 1024;
 pub const FIRST_LIMIT: usize = 16 * 1024;
 /// A window of the drain-rate estimate is at least this long.
 pub const ESTIMATE_WINDOW: Duration = Duration::from_millis(50);
-/// After this many chunks of one stream, the other gets a turn.
+/// After this many chunks of accepted changes in a row, one chunk of bulk goes.
 const TURN: u32 = 8;
 /// A chunk smaller than this is not worth a frame, unless it is all that is left.
 const SMALLEST_CHUNK: usize = 512;
@@ -59,9 +60,8 @@ pub struct Pacer {
     control: VecDeque<Vec<u8>>,
     apply: VecDeque<u8>,
     bulk: VecDeque<u8>,
-    /// Which stream was served last, and how many chunks in a row.
-    last_stream: Class,
-    in_a_row: u32,
+    /// How many chunks of accepted changes have gone since the last chunk of bulk.
+    applies_in_a_row: u32,
     /// Bytes per second, once there has been a full window with a backlog.
     rate: Option<f64>,
     window: Option<(Instant, usize)>,
@@ -77,8 +77,7 @@ impl Pacer {
             control: VecDeque::new(),
             apply: VecDeque::new(),
             bulk: VecDeque::new(),
-            last_stream: Class::Bulk,
-            in_a_row: 0,
+            applies_in_a_row: 0,
             rate: None,
             window: None,
         }
@@ -160,33 +159,28 @@ impl Pacer {
             .saturating_sub(unsent)
             .saturating_sub(1)
             .min(MAX_CHUNK);
-        let other = |c: Class| {
-            if c == Class::Apply {
-                Class::Bulk
-            } else {
-                Class::Apply
+        // Accepted changes go before bulk. After eight chunks of them in a row, one chunk of bulk goes, so a load
+        // is never starved. If the stream whose turn it is has no chunk that fits, the other may have one.
+        let bulk_turn = self.applies_in_a_row >= TURN && !self.bulk.is_empty();
+        let order = if bulk_turn {
+            [Class::Bulk, Class::Apply]
+        } else {
+            [Class::Apply, Class::Bulk]
+        };
+        let mut chosen = None;
+        for stream in order {
+            let waiting = self.stream(stream).len();
+            let take = waiting.min(room);
+            if take > 0 && (take >= SMALLEST_CHUNK || take == waiting) {
+                chosen = Some((stream, take));
+                break;
             }
-        };
-        let has = |p: &Pacer, c: Class| !p.stream(c).is_empty();
-        let stream = if has(self, self.last_stream)
-            && (self.in_a_row < TURN || !has(self, other(self.last_stream)))
-        {
-            self.last_stream
-        } else if has(self, other(self.last_stream)) {
-            other(self.last_stream)
-        } else {
-            return None;
-        };
-        let waiting = self.stream(stream).len();
-        let take = waiting.min(room);
-        if take == 0 || (take < SMALLEST_CHUNK && take < waiting) {
-            return None;
         }
-        if stream == self.last_stream {
-            self.in_a_row += 1;
+        let (stream, take) = chosen?;
+        if stream == Class::Apply {
+            self.applies_in_a_row += 1;
         } else {
-            self.last_stream = stream;
-            self.in_a_row = 1;
+            self.applies_in_a_row = 0;
         }
         let queue = match stream {
             Class::Apply => &mut self.apply,

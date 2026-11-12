@@ -114,16 +114,20 @@ struct Line {
 }
 
 impl Line {
+    /// A line on a slow connection: the limit stays at its floor, so chunks are small.
     fn new() -> Line {
         Line {
-            pacer: Pacer::new(MS20),
+            pacer: Pacer::new(Rule::Fixed(MIN_LIMIT)),
             wire: Vec::new(),
         }
     }
 
-    /// Sends everything the pacer has, as a connection that never fills up would.
-    fn flush(&mut self) {
-        while let Some((class, bytes)) = self.pacer.next(0) {
+    /// Sends up to `frames` frames, as a connection that takes a little at a time.
+    fn send(&mut self, frames: usize) {
+        for _ in 0..frames {
+            let Some((class, bytes)) = self.pacer.next(0) else {
+                return;
+            };
             self.wire.push(match class {
                 Class::Presence => 0,
                 Class::Control => 1,
@@ -137,15 +141,29 @@ impl Line {
     }
 }
 
-/// A client's end: puts the two streams back together and merges what they hold.
+/// A client's end: puts the two streams back together and merges what they hold, in the order it arrives.
 struct Reader {
     replica: Replica,
     apply: Vec<u8>,
     bulk: Vec<u8>,
     presence: Vec<Vec<u8>>,
+    /// Frames of bulk that arrived after a frame of changes had: the two streams really were mixed.
+    bulk_after_apply: usize,
+    seen_apply_since_join: bool,
 }
 
 impl Reader {
+    fn new(n: u8) -> Reader {
+        Reader {
+            replica: Replica::new(client_id(n), UserId(u64::from(n))),
+            apply: Vec::new(),
+            bulk: Vec::new(),
+            presence: Vec::new(),
+            bulk_after_apply: 0,
+            seen_apply_since_join: false,
+        }
+    }
+
     fn read(&mut self, wire: &mut Vec<u8>) {
         let mut at = 0;
         while wire.len() - at >= FRAME_HEADER {
@@ -153,31 +171,48 @@ impl Reader {
             let payload = &wire[at + FRAME_HEADER..at + FRAME_HEADER + len];
             match wire[at] {
                 0 => self.presence.push(payload.to_vec()),
-                2 => self.apply.extend_from_slice(payload),
-                3 => self.bulk.extend_from_slice(payload),
+                2 => {
+                    self.apply.extend_from_slice(payload);
+                    self.seen_apply_since_join = true;
+                    self.records(false);
+                }
+                3 => {
+                    self.bulk.extend_from_slice(payload);
+                    self.bulk_after_apply += usize::from(self.seen_apply_since_join);
+                    self.records(true);
+                }
                 other => panic!("an unknown class {other}"),
             }
             at += FRAME_HEADER + len;
         }
         wire.drain(..at);
-        // Each stream is a row of records: a 4-byte length, then the record.
-        for (stream, is_bulk) in [(&mut self.bulk, true), (&mut self.apply, false)] {
-            let mut at = 0;
-            while stream.len() - at >= 4 {
-                let len = u32::from_le_bytes(stream[at..at + 4].try_into().unwrap()) as usize;
-                if stream.len() - at < 4 + len {
-                    break;
-                }
-                let record = &stream[at + 4..at + 4 + len];
-                if is_bulk {
-                    self.replica.enter(&Object::decode(record, &CAP).unwrap());
-                } else {
-                    self.replica.apply(&decode_applied(record, &CAP).unwrap());
-                }
-                at += 4 + len;
+    }
+
+    /// Takes the whole records off the front of one stream. A record is a 4-byte length, then its bytes. In the
+    /// bulk stream an empty record says that every object of the view has been sent.
+    fn records(&mut self, bulk: bool) {
+        let stream = if bulk {
+            &mut self.bulk
+        } else {
+            &mut self.apply
+        };
+        let mut at = 0;
+        while stream.len() - at >= 4 {
+            let len = u32::from_le_bytes(stream[at..at + 4].try_into().unwrap()) as usize;
+            if stream.len() - at < 4 + len {
+                break;
             }
-            stream.drain(..at);
+            let record = &stream[at + 4..at + 4 + len];
+            if !bulk {
+                self.replica.apply(&decode_applied(record, &CAP).unwrap());
+            } else if record.is_empty() {
+                self.replica.end_fill();
+            } else {
+                self.replica.enter(&Object::decode(record, &CAP).unwrap());
+            }
+            at += 4 + len;
         }
+        stream.drain(..at);
     }
 }
 
@@ -187,30 +222,19 @@ fn record(bytes: &[u8]) -> Vec<u8> {
     r
 }
 
-#[test]
-fn a_server_and_two_clients_that_talk_in_bytes_end_with_the_same_objects() {
-    // The first client draws and edits. The second joins late: it is sent the room as it is (the bulk stream)
-    // while changes keep arriving (the apply stream) and the first client's cursor is passed on (presence).
-    // Everything the server and the clients exchange is bytes; a change is decoded by the server before it is
-    // looked at, and what the server sends is decoded by the clients.
+/// The first client draws and edits. The second joins late: it is sent the room as it was when it joined (the
+/// bulk stream) while changes keep arriving (the apply stream) and the first client's cursor is passed on
+/// (presence). Everything the server and the clients exchange is bytes. The connection to the second client is
+/// slow, so the room takes many rounds to arrive and changes overtake the objects they write to.
+///
+/// Returns the second client, the server's room, and what the first client holds compared with the room.
+fn late_joiner(keep_writes_during_the_fill: bool) -> (Reader, Room) {
     let mut w = World::new(61, 1);
     // The same seed as the world's room, so that both pick the same order keys.
     let mut room = Room::new(CAP, 61 ^ 0xabcd);
-    let mut first = Reader {
-        replica: Replica::new(client_id(0), UserId(0)),
-        apply: Vec::new(),
-        bulk: Vec::new(),
-        presence: Vec::new(),
-    };
-    let mut second = Reader {
-        replica: Replica::new(client_id(1), UserId(1)),
-        apply: Vec::new(),
-        bulk: Vec::new(),
-        presence: Vec::new(),
-    };
+    let (mut first, mut second) = (Reader::new(0), Reader::new(1));
     let (mut to_first, mut to_second) = (Line::new(), Line::new());
     let mut joined = false;
-    let mut accepted = 0;
     for round in 0..3_000 {
         // The world's own room is only there to make changes that fit the state; the server is `room`.
         let change = w.random_change(0);
@@ -218,10 +242,10 @@ fn a_server_and_two_clients_that_talk_in_bytes_end_with_the_same_objects() {
         first.replica.local(change.clone());
         let from_client = encode_change(&change);
 
+        // The server decodes the bytes before it looks at them.
         let decoded = decode_change(&from_client, &CAP).unwrap();
         match room.submit(client_id(0), UserId(0), &decoded) {
             Outcome::Accepted(applied) => {
-                accepted += 1;
                 let bytes = record(&encode_applied(&applied));
                 to_first.pacer.apply(&bytes);
                 if joined {
@@ -232,56 +256,79 @@ fn a_server_and_two_clients_that_talk_in_bytes_end_with_the_same_objects() {
             Outcome::Duplicate { .. } => panic!("a duplicate"),
         }
         if round == 1_000 {
-            // The second client joins: every object as it is now, in the bulk stream. Changes accepted from
-            // here on go to it as well, and overlap with nothing, because the room is sent in one step.
+            // The second client joins: every object as it is now goes into the bulk stream, then the mark that
+            // says the view is complete. Changes accepted from here on go to it as well.
             joined = true;
+            if keep_writes_during_the_fill {
+                second.replica.begin_fill();
+            }
             for object in room.objects() {
                 to_second.pacer.bulk(&record(&object.encode()));
             }
+            to_second.pacer.bulk(&record(&[]));
         }
         if joined {
             to_second
                 .pacer
                 .presence(0, (round as u32).to_le_bytes().to_vec());
         }
-        // The lines deliver now and then, a piece at a time.
-        if round % 7 == 0 {
-            to_first.flush();
-            first.read(&mut to_first.wire);
-        }
-        if round % 11 == 0 {
-            to_second.flush();
-            second.read(&mut to_second.wire);
-        }
+        to_first.send(usize::MAX);
+        first.read(&mut to_first.wire);
+        // The slow connection: two frames a round, of which the cursor takes one.
+        to_second.send(2);
+        second.read(&mut to_second.wire);
     }
-    for (line, reader) in [(&mut to_first, &mut first), (&mut to_second, &mut second)] {
-        line.flush();
-        reader.read(&mut line.wire);
+    to_second.send(usize::MAX);
+    second.read(&mut to_second.wire);
+    for (line, reader) in [(&to_first, &first), (&to_second, &second)] {
         assert!(line.wire.is_empty() && reader.apply.is_empty() && reader.bulk.is_empty());
     }
-    assert!(accepted > 1_000 && room.len() > 500);
+    assert!(w.tally.accepted > 1_000 && room.len() > 500);
     assert_eq!(
         room.encode_objects(),
         w.room.encode_objects(),
         "the two servers differ"
     );
     assert_eq!(first.replica.encode_objects(), room.encode_objects());
-    assert_eq!(second.replica.encode_objects(), room.encode_objects());
     assert!(first.replica.pending().is_empty());
-    // Presence is the newest only: the second client saw far fewer cursor messages than were made, the last
-    // one it saw is the last one made, and they arrived in order.
+    (second, room)
+}
+
+#[test]
+fn a_late_joiner_ends_with_the_same_objects_when_changes_overtake_the_room() {
+    let (second, room) = late_joiner(true);
+    // The two streams really were mixed: most of the room arrived after changes had begun to.
     assert!(
-        second.presence.len() < 400,
-        "{} cursor messages",
-        second.presence.len()
+        second.bulk_after_apply > 5,
+        "{} frames",
+        second.bulk_after_apply
     );
+    assert_eq!(second.replica.encode_objects(), room.encode_objects());
+    assert_eq!(
+        second.replica.kept_writes(),
+        0,
+        "the fill ended and kept nothing"
+    );
+    // Presence is the newest only: the second client saw fewer cursor messages than were made, in order, and
+    // the last one it saw is the last one made.
     let seen: Vec<u32> = second
         .presence
         .iter()
         .map(|p| u32::from_le_bytes(p[..4].try_into().unwrap()))
         .collect();
-    assert!(seen.windows(2).all(|w| w[0] < w[1]));
+    assert!(seen.len() <= 2_000 && seen.windows(2).all(|w| w[0] < w[1]));
     assert_eq!(seen.last(), Some(&2_999));
+}
+
+#[test]
+fn without_keeping_writes_during_the_fill_a_late_joiner_loses_them() {
+    // The same run with a client that drops a write to an object it does not hold yet, as a copy does outside
+    // a fill. A change that overtook its object is lost: the object then arrives as it was when the client
+    // joined. This is why `Replica::begin_fill` exists, and what the design has to say about a view fill.
+    let (second, room) = late_joiner(false);
+    assert!(second.bulk_after_apply > 5);
+    assert_eq!(second.replica.len(), room.len(), "every object arrived");
+    assert_ne!(second.replica.encode_objects(), room.encode_objects());
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -342,30 +389,36 @@ fn chunks_keep_the_unsent_bytes_under_the_limit_and_are_never_over_16_kib() {
 }
 
 #[test]
-fn the_two_streams_take_turns_of_eight_chunks() {
-    let mut p = Pacer::new(Rule::Fixed(MAX_LIMIT));
-    p.bulk(&vec![3; MAX_CHUNK * 40]);
-    p.apply(&vec![2; MAX_CHUNK * 3]);
-    let order: Vec<Class> = (0..30).map(|_| p.next(0).unwrap().0).collect();
-    let b = Class::Bulk;
-    let a = Class::Apply;
-    // Eight of one, one of the other, until the smaller stream is empty; then only what is left.
-    let mut want = vec![b; 8];
-    want.extend([a; 3]); // nothing made bulk wait: apply runs until it is empty or has had eight
-    want.extend(vec![b; 19]);
-    assert_eq!(order, want);
-
-    // With both long, neither starves.
+fn accepted_changes_go_before_bulk_and_bulk_is_never_starved() {
+    let (a, b) = (Class::Apply, Class::Bulk);
+    // Both long: eight chunks of changes, one of bulk, and again.
     let mut p = Pacer::new(Rule::Fixed(MAX_LIMIT));
     p.bulk(&vec![3; MAX_CHUNK * 40]);
     p.apply(&vec![2; MAX_CHUNK * 40]);
-    let order: Vec<Class> = (0..32).map(|_| p.next(0).unwrap().0).collect();
+    let order: Vec<Class> = (0..27).map(|_| p.next(0).unwrap().0).collect();
     let mut want = Vec::new();
-    for _ in 0..2 {
-        want.extend([b; 8]);
+    for _ in 0..3 {
         want.extend([a; 8]);
+        want.push(b);
     }
     assert_eq!(order, want);
+
+    // A load is under way and a few changes arrive: they go at once, then the load goes on.
+    let mut p = Pacer::new(Rule::Fixed(MAX_LIMIT));
+    p.bulk(&vec![3; MAX_CHUNK * 40]);
+    let before: Vec<Class> = (0..5).map(|_| p.next(0).unwrap().0).collect();
+    assert_eq!(before, [b; 5]);
+    p.apply(&vec![2; MAX_CHUNK * 3]);
+    let after: Vec<Class> = (0..6).map(|_| p.next(0).unwrap().0).collect();
+    assert_eq!(after, [a, a, a, b, b, b]);
+
+    // If the stream whose turn it is has no chunk that fits, the other's whole remainder may go.
+    let mut p = Pacer::new(Rule::Fixed(MIN_LIMIT));
+    p.apply(&vec![2; 10_000]);
+    p.bulk(&[3; 100]);
+    // 3,900 of 4,096 are unsent: 195 bytes of room, too little for a chunk of changes, enough for all the bulk.
+    assert_eq!(p.next(3_900), Some((b, vec![3; 100])));
+    assert_eq!(p.next(3_900), None);
 }
 
 #[test]
@@ -456,11 +509,7 @@ fn in_the_model_the_20_ms_rule_keeps_cursors_prompt_during_a_load() {
             (p95 - design).abs() <= 6.0,
             "{mbit} Mbit/s: {p95:.0} ms, the design says {design}"
         );
-        assert_eq!(
-            r.undelivered + r.replaced,
-            r.undelivered,
-            "no cursor message was replaced"
-        );
+        assert_eq!(r.replaced, 0, "no cursor message was replaced");
         // Counting every unsent byte in one place is never worse.
         let one = steady_p95(&model(MS20, FIRST_LIMIT, Queues::One, mbit));
         assert!(

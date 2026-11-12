@@ -1,6 +1,6 @@
 //! Cursor delay during a bulk load over real sockets (spike question 8).
 //!
-//! `cargo run --release --example paced_link [seconds per run]` (default 6).
+//! `cargo run --release --example paced_link [seconds per run] [runs]` (defaults 6 and 1).
 //!
 //! Three parts, all in this process, joined by TCP on the loopback interface:
 //!
@@ -365,21 +365,51 @@ fn run(rule: Rule, mbit: f64, seconds: f64, bulk: &[u8]) -> Run {
     }
 }
 
+/// Median, 95th percentile and maximum of the delays after the first second, and the worst in the first second.
+fn summary(r: &Run) -> [f64; 4] {
+    let mut steady: Vec<f64> = r
+        .cursors
+        .iter()
+        .filter(|(_, at)| *at >= 1000.0)
+        .map(|(d, _)| *d)
+        .collect();
+    steady.sort_by(|a, b| a.partial_cmp(b).expect("numbers"));
+    let pick = |q: usize| {
+        steady
+            .get((steady.len() * q / 100).min(steady.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(f64::NAN)
+    };
+    let first = r
+        .cursors
+        .iter()
+        .filter(|(_, at)| *at < 1000.0)
+        .map(|(d, _)| *d)
+        .fold(0.0, f64::max);
+    [pick(50), pick(95), pick(100), first]
+}
+
+/// The middle, the least and the most of one figure over the repeated runs.
+fn over_runs(values: impl Iterator<Item = f64>) -> (f64, f64, f64) {
+    let mut v: Vec<f64> = values.collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    (v[v.len() / 2], v[0], v[v.len() - 1])
+}
+
 fn main() {
-    let seconds: f64 = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(6.0);
+    let arg = |i: usize| std::env::args().nth(i).and_then(|s| s.parse::<f64>().ok());
+    let seconds = arg(1).unwrap_or(6.0);
+    let repeats = arg(2).unwrap_or(1.0).max(1.0) as usize;
     let (room, bulk) = bulk_stream();
     println!(
-        "paced link over loopback TCP, {} {}; {} strokes, {:.1} MB to send; {seconds} s per run",
+        "paced link over loopback TCP, {} {}; {} strokes, {:.1} MB to send; {repeats} runs of {seconds} s each",
         std::env::consts::ARCH,
         std::env::consts::OS,
         room.len(),
         bulk.len() as f64 / 1e6
     );
     println!(
-        "cursor delay in ms after the first second: median / 95th percentile / maximum; worst in the first second"
+        "cursor delay in ms after the first second; each figure is the middle run, with the least and the most over the runs"
     );
     let rules: [(&str, Rule); 3] = [
         ("20 ms rule", Rule::Drain(Duration::from_millis(20))),
@@ -388,42 +418,32 @@ fn main() {
     ];
     for mbit in [1.0, 5.0, 20.0] {
         for (name, rule) in &rules {
-            let r = run(*rule, mbit, seconds, &bulk);
-            let mut steady: Vec<f64> = r
-                .cursors
-                .iter()
-                .filter(|(_, at)| *at >= 1000.0)
-                .map(|(d, _)| *d)
+            let runs: Vec<Run> = (0..repeats)
+                .map(|_| run(*rule, mbit, seconds, &bulk))
                 .collect();
-            steady.sort_by(|a, b| a.partial_cmp(b).expect("numbers"));
-            let first = r
-                .cursors
-                .iter()
-                .filter(|(_, at)| *at < 1000.0)
-                .map(|(d, _)| *d)
-                .fold(0.0, f64::max);
-            let pick = |q: usize| {
-                steady
-                    .get((steady.len() * q / 100).min(steady.len().saturating_sub(1)))
-                    .copied()
-                    .unwrap_or(f64::NAN)
+            for r in &runs {
+                assert_eq!(r.bad_objects, 0, "an object did not survive the trip");
+            }
+            let stats: Vec<[f64; 4]> = runs.iter().map(summary).collect();
+            let show = |i: usize| {
+                let (mid, least, most) = over_runs(stats.iter().map(|s| s[i]));
+                format!("{mid:>6.0} ({least:.0} to {most:.0})")
             };
+            let (system, _, system_most) =
+                over_runs(runs.iter().map(|r| r.in_system as f64 / 1024.0));
+            let (estimate, _, _) = over_runs(runs.iter().map(|r| r.estimate / 1e6));
             println!(
-                "{mbit:>5} Mbit/s  {name:<13} {:>7.0} /{:>7.0} /{:>7.0}   first second {:>6.0}   cursors {:>4}   objects {:>6} (bad {})   limit {:>6.1} KiB   estimate {:>6.2} Mbit/s   in the system {:>6.1} KiB (buffers asked: send {} B, relay {} B)",
-                pick(50),
-                pick(95),
-                pick(100),
-                first,
-                r.cursors.len(),
-                r.objects,
-                r.bad_objects,
-                r.limit as f64 / 1024.0,
-                r.estimate / 1e6,
-                r.in_system as f64 / 1024.0,
-                r.send_buffer,
-                r.relay_buffer
+                "{mbit:>5} Mbit/s  {name:<13} median {}   p95 {}   max {}   first second {}   cursors {:>4}   objects {:>6}   limit {:>5.1} KiB   estimate {estimate:>5.2} Mbit/s   held by the system {system:>6.1} KiB (most {system_most:.1})   buffers given: send {} B, relay {} B",
+                show(0),
+                show(1),
+                show(2),
+                show(3),
+                runs[0].cursors.len(),
+                runs[0].objects,
+                runs[0].limit as f64 / 1024.0,
+                runs[0].send_buffer,
+                runs[0].relay_buffer
             );
-            assert_eq!(r.bad_objects, 0, "an object did not survive the trip");
         }
     }
 }

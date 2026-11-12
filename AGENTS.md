@@ -25,7 +25,7 @@ cargo test -p everink-sync --test object_map <name>                 # one test o
 cargo run --release --example bench_object_map [objects] [depth]    # size and timing run (spike question 7)
 cargo test -p everink-sync --test wire_and_pacing <name>            # one test of the wire bytes and the pacing rule
 cargo run --release --example sim_paced_link                        # cursor delay in the link model (question 8)
-cargo run --release --example paced_link [seconds]                  # the same over loopback sockets (question 8)
+cargo run --release --example paced_link [seconds] [runs]           # the same over loopback sockets (question 8)
 cargo test --locked --manifest-path spike/text-trial/Cargo.toml     # the text-library trial (its own package)
 cargo run --release --locked --manifest-path spike/text-trial/Cargo.toml   # its size and timing run (questions 5, 6)
 cargo clippy --manifest-path spike/text-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint

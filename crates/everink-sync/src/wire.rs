@@ -80,7 +80,8 @@ pub fn decode_change(bytes: &[u8], cap: &DepthCap) -> Result<Change, DecodeError
     let id = ClientChangeId(r.varint()?);
     let observed = Seq(r.varint()?);
     let n = count(&mut r)?;
-    let mut ops = Vec::with_capacity(n);
+    // Each operation is at least 18 bytes, so no more are set aside for than the bytes left could hold.
+    let mut ops = Vec::with_capacity(n.min(r.left() / 18));
     for _ in 0..n {
         ops.push(match r.u8()? {
             0 => {
@@ -146,7 +147,8 @@ pub fn decode_applied(bytes: &[u8], cap: &DepthCap) -> Result<Applied, DecodeErr
     let client = ClientId(r.array()?);
     let change = ClientChangeId(r.varint()?);
     let n = count(&mut r)?;
-    let mut effects = Vec::with_capacity(n);
+    // Each effect is at least 18 bytes.
+    let mut effects = Vec::with_capacity(n.min(r.left() / 18));
     for _ in 0..n {
         effects.push(match r.u8()? {
             0 => Effect::Create(Object::decode(r.blob(MAX_OBJECT_BYTES)?, cap)?),

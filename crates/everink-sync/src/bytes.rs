@@ -129,6 +129,11 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.array()?))
     }
 
+    /// Bytes not yet read.
+    pub fn left(&self) -> usize {
+        self.bytes.len() - self.at
+    }
+
     pub fn is_empty(&self) -> bool {
         self.at == self.bytes.len()
     }
