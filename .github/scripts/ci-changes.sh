@@ -65,8 +65,9 @@ while IFS= read -r -d '' f; do
     crates/*|Cargo.lock|tools/*) rust=true ;;
     # Row 5. The text-library trial: a package of its own, outside the workspace.
     spike/text-trial/*) text=true ;;
-    # Row 6. The renderer trial: another package of its own.
-    spike/render-trial/*) render=true ;;
+    # Row 6. The renderer trials, native and in the browser: two more packages of their own, which share a scene
+    # and a job.
+    spike/render-trial/*|spike/render-web/*) render=true ;;
     # Row 7. The pinned toolchain builds all three, and the format, lint and cargo settings at the root are
     # read by all three (the tools look in parent directories, and cargo reads `.cargo/` from where it is run).
     rust-toolchain.toml|rustfmt.toml|clippy.toml|.cargo/*) rust=true; text=true; render=true ;;

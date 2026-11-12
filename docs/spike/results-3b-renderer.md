@@ -100,10 +100,11 @@ The figures below are the processor renderer's.
 |---|---|---|---|
 | Discs and bands | 10 ms | none whole | 100 (1.7 s) at 4 ms a frame |
 | Octagons and bands | 6.7 ms | none whole | 67 (1.1 s) |
-| Single path | 1.5 ms | 2 | 16 (0.27 s) |
+| Single path | 1.5 ms | 2 | 20 (0.33 s) |
 
 The time-box is the design's own and it says "to be tuned"; these are what it gives. A tile cannot be stopped
-half-way in this trial, so a tile that takes longer than the box simply overruns it.
+half-way in this trial, so a tile that takes longer than the box simply overruns it. Where no whole tile fits,
+the frames are the view's time divided by 4 ms; for the single path they are 40 tiles at two a frame.
 
 Two things about the comparison with section 06. Its reading of 60 and 400 ms is for a redraw of "about 20
 tiles"; a 3840 x 2160 view is 40 tiles of 512 pixels. The total for 10,000 strokes is still comparable, because
@@ -164,7 +165,7 @@ strokes in half as many tiles, each tile would hold about twice as many and take
    tiles a view is (40 at 3840 x 2160, not about 20).
 2. Section 06, "Outline algorithm": with slice 3a's correction, choose an outline form by what it costs the
    renderer as well as by whether it leaves holes (Finding 2).
-3. Section 06, the backend order: say that the processor renderer matched the GPU one natively for strokes, and
+3. Section 06, the backend order: say that the processor renderer beat the GPU one natively for strokes, and
    that the order is to be confirmed by the browser figures (Finding 3).
 4. Section 06, "Tile cache": a tile's raster should be able to stop and go on, or tiles should be smaller where
    they are dense; a tile of 327 strokes overruns the 4 ms box whichever outline is used but the lightest.

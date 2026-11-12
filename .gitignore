@@ -13,3 +13,7 @@ CLAUDE.local.md
 /target
 /spike/text-trial/target
 /spike/render-trial/target
+/spike/render-web/target
+# What spike/render-web/build.sh writes
+/spike/render-web/www/pkg*
+/spike/render-web/www/size-*

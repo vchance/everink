@@ -1,0 +1,60 @@
+# The renderer trial in a browser (spike slice 3c). A package of its own, outside the workspace, for the same
+# reason as `spike/render-trial`, whose scene it draws (`../render-trial/src/scene.rs`).
+#
+# One feature for each renderer, so that each can be built alone and its WebAssembly size read:
+#   webgpu  `vello_gpu` through `wgpu`'s WebGPU backend
+#   webgl   `vello_gpu`'s own WebGL2 backend
+#   cpu     `vello_cpu`, into a pixel buffer
+[package]
+name = "render-web"
+version = "0.0.0"
+description = "Everink spike: vello_gpu on WebGPU and WebGL2 and vello_cpu in a browser, and a tile cache."
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+webgpu = ["dep:vello_gpu", "vello_gpu/wgpu", "dep:wgpu", "dep:wasm-bindgen-futures", "dep:futures-channel"]
+webgl = ["dep:vello_gpu", "vello_gpu/webgl"]
+cpu = ["dep:vello_cpu"]
+
+[dependencies]
+everink-core = { path = "../../crates/everink-core" }
+vello_common = "=0.4.0"
+vello_gpu = { version = "=0.4.0", default-features = false, optional = true }
+vello_cpu = { version = "=0.4.0", default-features = false, features = ["std", "u8_pipeline"], optional = true }
+wgpu = { version = "=30.0.2", default-features = false, features = ["std", "wgsl", "webgpu"], optional = true }
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = { version = "=0.4.80", optional = true }
+futures-channel = { version = "=0.3.34", optional = true }
+js-sys = "=0.3.107"
+web-sys = { version = "=0.3.107", features = [
+    "Window",
+    "Performance",
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+    "WebGlTexture",
+    "WebGlRenderbuffer",
+    "WebGlFramebuffer",
+] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# The size build: `--profile small`.
+[profile.small]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
