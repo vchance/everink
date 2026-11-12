@@ -74,8 +74,8 @@ with their bytes, a level change each way and a difference as float bits; and pa
 
 | Target | Result | Where |
 |---|---|---|
-| aarch64 macOS | passed | local, this revision |
-| x86-64 Linux | see the CI run of the change that added this file | `test` job of `ci` |
+| aarch64 macOS | passed | local, Apple M4, revision d336573 |
+| x86-64 Linux | passed | the `test` job of `ci` on GitHub's `ubuntu-24.04`, [run 43171633451](https://github.com/vchance/everink/actions/runs/43171633451), revision d336573 |
 | wasm32 | not run | slice 3 adds the target |
 
 ## Tests

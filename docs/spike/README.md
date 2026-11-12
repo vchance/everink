@@ -50,4 +50,4 @@ criterion for each.
 
 | Slice | Results | Summary |
 |---|---|---|
-| 1 | [results-1-positions.md](results-1-positions.md) | Exact arithmetic is cheap per frame at any depth. Subtraction and re-basing at depth cost three to four times the design's estimate; a re-base at 1,000 levels is over the 2 ms budget and has to be spread or avoided. Positions match a golden file byte for byte on aarch64; CI checks the same file on x86-64. |
+| 1 | [results-1-positions.md](results-1-positions.md) | Exact arithmetic is cheap per frame at any depth. Subtraction and re-basing at depth cost three to four times the design's estimate; a re-base at 1,000 levels is over the 2 ms budget and has to be spread or avoided. Positions match one golden file byte for byte on aarch64 and on x86-64; wasm32 follows in slice 3. |
