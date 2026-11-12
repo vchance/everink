@@ -96,7 +96,7 @@ fn main() {
         let mut cached: Vec<[f64; 2]> = vec![[0.0; 2]; N];
         let rebase = spread(1, || {
             for (slot, p) in cached.iter_mut().zip(&objects) {
-                let [x, y] = black_box(p).sub(&cam.center).to_f64(cam.level);
+                let [x, y] = black_box(p).sub(cam.center()).to_f64(cam.level());
                 *slot = [rel(x), rel(y)];
             }
             black_box(&cached);
@@ -110,9 +110,12 @@ fn main() {
         let level_scale: Vec<f64> = vec![1.0; N];
         let mut screen: Vec<[f32; 3]> = vec![[0.0; 3]; N];
         let frame = spread(1, || {
-            let [cx, cy] = black_box(&moved).center.sub(&cam.center).to_f64(cam.level);
+            let [cx, cy] = black_box(&moved)
+                .center()
+                .sub(cam.center())
+                .to_f64(cam.level());
             let (cx, cy) = (rel(cx), rel(cy));
-            let zoom = black_box(moved.zoom);
+            let zoom = black_box(moved.zoom());
             for ((out, c), s) in screen.iter_mut().zip(&cached).zip(black_box(&level_scale)) {
                 *out = [
                     ((c[0] - cx) * zoom) as f32,

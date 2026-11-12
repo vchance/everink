@@ -4,7 +4,7 @@ mod common;
 
 use std::str::FromStr;
 
-use common::{Rng, deep_position, hex};
+use common::{Rng, axis_big, big_of, cell_frac, deep_position, hex};
 use dashu_int::IBig;
 use everink_core::wire::check_cap_bytes;
 use everink_core::{Axis, Camera, CameraError, DecodeError, Delta, DepthCap, Level, Position, Rel};
@@ -26,8 +26,8 @@ fn encoded_sizes_match_the_design() {
     // Level 0, cells below 256: 1 + 10 + 10 bytes.
     let small = Position {
         level: Level(0),
-        x: Axis::from_cell_frac(BigInt::from(200), 7),
-        y: Axis::from_cell_frac(BigInt::from(-3), 9),
+        x: cell_frac(BigInt::from(200), 7),
+        y: cell_frac(BigInt::from(-3), 9),
     };
     assert_eq!(small.encode().len(), 21);
 
@@ -35,8 +35,8 @@ fn encoded_sizes_match_the_design() {
     let cell_1000_bits = (BigInt::from(1) << 999u32) + BigInt::from(12345);
     let deep = Position {
         level: Level(100),
-        x: Axis::from_cell_frac(cell_1000_bits.clone(), 1),
-        y: Axis::from_cell_frac(-cell_1000_bits, 2),
+        x: cell_frac(cell_1000_bits.clone(), 1),
+        y: cell_frac(-cell_1000_bits, 2),
     };
     assert_eq!(deep.encode().len(), 2 + 2 * (2 + 125 + 8));
 
@@ -44,8 +44,8 @@ fn encoded_sizes_match_the_design() {
     let cell_max = (BigInt::from(1) << 12_287u32) + BigInt::from(1);
     let at_cap = Position {
         level: Level(1024),
-        x: Axis::from_cell_frac(cell_max.clone(), 0),
-        y: Axis::from_cell_frac(-cell_max, u64::MAX),
+        x: cell_frac(cell_max.clone(), 0),
+        y: cell_frac(-cell_max, u64::MAX),
     };
     let bytes = at_cap.encode();
     assert_eq!(bytes.len(), 3094);
@@ -160,7 +160,7 @@ fn the_cap_counts_bits_not_whole_bytes() {
     };
     let with_cell = |cell: i64| Position {
         level: Level(0),
-        x: Axis::from_cell_frac(BigInt::from(cell), 0),
+        x: cell_frac(BigInt::from(cell), 0),
         y: Axis::ZERO,
     };
     // 0x0fff is 12 bits: allowed. 0x1000 is 13 bits in the same two bytes: refused.
@@ -182,7 +182,7 @@ fn the_cap_counts_bits_not_whole_bytes() {
 
 /// The same integer in a second big-integer library, so the reference does not share code with what is tested.
 fn ibig(a: &Axis) -> IBig {
-    IBig::from_str(&a.to_big().to_string()).unwrap()
+    IBig::from_str(&big_of(a).to_string()).unwrap()
 }
 
 /// floor(n / 2^k) by truncating division and a correction, with no shift of a negative number.
@@ -254,11 +254,50 @@ fn cell_and_frac_are_the_high_and_low_part() {
     for _ in 0..20_000 {
         let cell = rng.big(rng.0 % 300);
         let frac = rng.next();
-        let a = Axis::from_cell_frac(cell.clone(), frac);
-        assert_eq!(a.cell(), cell);
+        let a = cell_frac(cell.clone(), frac);
+        // The cell is the value divided by 2^64, rounded down (this library's shift rounds down).
+        assert_eq!(big_of(&a) >> 64u32, cell);
         assert_eq!(a.frac(), frac);
         // The representation is canonical: a value that fits 128 bits is held inline.
-        assert_eq!(a.is_small(), i128::try_from(a.to_big()).is_ok());
+        assert_eq!(a.is_small(), i128::try_from(big_of(&a)).is_ok());
+    }
+}
+
+#[test]
+fn signed_bytes_go_in_and_out_unchanged() {
+    // Fixed cases around zero and both ends of the inline form.
+    assert_eq!(Axis::from_signed_bytes_be(&[]), Axis::ZERO);
+    assert_eq!(Axis::ZERO.to_signed_bytes_be(), [0]);
+    assert_eq!(Axis::from_i128(-1).to_signed_bytes_be(), [0xff]);
+    assert_eq!(Axis::from_i128(127).to_signed_bytes_be(), [0x7f]);
+    assert_eq!(Axis::from_i128(128).to_signed_bytes_be(), [0x00, 0x80]);
+    assert_eq!(Axis::from_i128(-128).to_signed_bytes_be(), [0x80]);
+    assert_eq!(Axis::from_i128(-129).to_signed_bytes_be(), [0xff, 0x7f]);
+    assert_eq!(
+        Axis::from_i128(i128::MIN).to_signed_bytes_be(),
+        i128::MIN.to_be_bytes()
+    );
+    assert_eq!(
+        Axis::from_i128(i128::MAX).to_signed_bytes_be(),
+        i128::MAX.to_be_bytes()
+    );
+    // Sign extension does not change the value, and the result is canonical: it equals the inline value.
+    assert_eq!(Axis::from_signed_bytes_be(&[0xff; 40]), Axis::from_i128(-1));
+    let mut padded = vec![0u8; 40];
+    padded[39] = 5;
+    assert_eq!(Axis::from_signed_bytes_be(&padded), Axis::from_i128(5));
+
+    let mut rng = Rng(11);
+    for _ in 0..20_000 {
+        let v = rng.big(rng.0 % 400);
+        let a = axis_big(v.clone());
+        assert_eq!(big_of(&a), v);
+        assert_eq!(a.to_signed_bytes_be(), v.to_signed_bytes_be());
+        assert_eq!(Axis::from_signed_bytes_be(&a.to_signed_bytes_be()), a);
+        match i128::try_from(v) {
+            Ok(small) => assert_eq!(a, Axis::from_i128(small)),
+            Err(_) => assert!(!a.is_small()),
+        }
     }
 }
 
@@ -378,7 +417,7 @@ fn assert_correctly_rounded(d: &BigInt, exp: i64, v: f64) {
 fn to_f64_x(d: &BigInt, level: Level, unit: Level) -> Rel {
     Delta {
         level,
-        dx: Axis::from_big(d.clone()),
+        dx: axis_big(d.clone()),
         dy: Axis::ZERO,
     }
     .to_f64(unit)[0]
@@ -405,7 +444,7 @@ fn float_conversion_is_correctly_rounded() {
                 ties += 1;
             }
         }
-        if !Axis::from_big(d.clone()).is_small() {
+        if !axis_big(d.clone()).is_small() {
             big_path += 1;
         }
         let level = Level(rng.below(21) as i32 - 10);
@@ -520,23 +559,23 @@ fn offset(p: &Position, dx: i128, dy: i128) -> Position {
 #[test]
 fn zoom_stays_in_range_and_level_changes_have_hysteresis() {
     let mut cam = Camera::new(Position::origin(Level(0)), 1.0, VIEW).unwrap();
-    assert_eq!(cam.level, Level(0));
+    assert_eq!(cam.level(), Level(0));
 
     // Zoom in to just under the top of the range: still level 0.
     cam.zoom_about(MID, 1023.0).unwrap();
     cam.zoom_about(MID, 2.0).unwrap();
-    assert_eq!(cam.level, Level(0));
-    assert!(cam.zoom < 2048.0);
+    assert_eq!(cam.level(), Level(0));
+    assert!(cam.zoom() < 2048.0);
     // Cross the top: one level finer, and the zoom lands at 2 or more.
     cam.zoom_about(MID, 1.01).unwrap();
-    assert_eq!(cam.level, Level(1));
-    assert!(cam.zoom >= 2.0 && cam.zoom < 2048.0);
+    assert_eq!(cam.level(), Level(1));
+    assert!(cam.zoom() >= 2.0 && cam.zoom() < 2048.0);
     // Zooming back out a little does not change level again: it takes a factor of four.
     cam.zoom_about(MID, 0.5).unwrap();
-    assert_eq!(cam.level, Level(1));
+    assert_eq!(cam.level(), Level(1));
     cam.zoom_about(MID, 0.24).unwrap();
-    assert_eq!(cam.level, Level(0));
-    assert!(cam.zoom <= 512.0 && cam.zoom >= 0.5);
+    assert_eq!(cam.level(), Level(0));
+    assert!(cam.zoom() <= 512.0 && cam.zoom() >= 0.5);
 }
 
 #[test]
@@ -565,15 +604,19 @@ fn a_level_change_does_not_move_anything_on_screen() {
         let before = project_all(&cam);
         cam.zoom_about(MID, 2.0).unwrap();
         assert_eq!(
-            cam.level,
+            cam.level(),
             Level(41),
             "the zoom crossed into the finer level"
         );
         assert!(
-            cam.center.same_point(&center),
+            cam.center().same_point(&center),
             "going finer keeps the center exactly"
         );
-        assert_eq!(cam.zoom, 1500.0 * 2.0 / 1024.0, "the zoom change is exact");
+        assert_eq!(
+            cam.zoom(),
+            1500.0 * 2.0 / 1024.0,
+            "the zoom change is exact"
+        );
         let after = project_all(&cam);
         for (b, a) in before.iter().zip(&after) {
             assert!(((b[0] - 960.0) * 2.0 + 960.0 - a[0]).abs() < 1e-9);
@@ -586,12 +629,12 @@ fn a_level_change_does_not_move_anything_on_screen() {
         let before = project_all(&cam);
         cam.zoom_about(MID, 0.5).unwrap();
         assert_eq!(
-            cam.level,
+            cam.level(),
             Level(39),
             "the zoom crossed into the coarser level"
         );
-        assert_eq!(cam.zoom, 0.6 * 0.5 * 1024.0);
-        let moved = center.sub(&cam.center);
+        assert_eq!(cam.zoom(), 0.6 * 0.5 * 1024.0);
+        let moved = center.sub(cam.center());
         for d in [&moved.dx, &moved.dy] {
             assert!(
                 *d >= Axis::ZERO && *d < Axis::from_i128(1 << 10),
@@ -617,10 +660,10 @@ fn one_zoom_step_keeps_the_point_under_the_focus() {
             // A point somewhere on screen, away from the middle, and the pixel it is under.
             let px = [rng.below(1920) as f64 + 0.25, rng.below(1080) as f64 + 0.75];
             let steps = |p: f64, mid: f64| {
-                ((p - mid) / cam.zoom * (1u64 << 54) as f64).round_ties_even() as i128
+                ((p - mid) / cam.zoom() * (1u64 << 54) as f64).round_ties_even() as i128
             };
             let point = offset(
-                &cam.center.clone(),
+                &cam.center().clone(),
                 steps(px[0], 960.0),
                 steps(px[1], 540.0),
             );
@@ -657,15 +700,15 @@ fn zooming_out_and_back_while_following_a_point_keeps_it_in_place() {
             cam.zoom_about(focus, 1.0 / 8.0).unwrap();
         }
         assert!(
-            cam.level.0 <= 1,
+            cam.level().0 <= 1,
             "zoomed out to the top: level {}",
-            cam.level.0
+            cam.level().0
         );
         for _ in 0..steps {
             let focus = cam.project(&anchor).unwrap();
             cam.zoom_about(focus, 8.0).unwrap();
         }
-        assert_eq!(cam.level, Level(depth));
+        assert_eq!(cam.level(), Level(depth));
         let end = cam.project(&anchor).unwrap();
         assert!(
             (end[0] - start[0]).abs() < 1e-3 && (end[1] - start[1]).abs() < 1e-3,
@@ -694,7 +737,7 @@ fn an_object_never_moves_and_a_jump_lands_on_it_exactly() {
         for _ in 0..steps {
             cam.zoom_about(MID, 8.0).unwrap();
         }
-        assert_eq!(cam.level, Level(depth));
+        assert_eq!(cam.level(), Level(depth));
         assert_eq!(
             anchor.encode(),
             stored,
@@ -720,7 +763,7 @@ fn panning_moves_the_view_by_the_pixels_asked() {
     cam.pan_by_px(128.0, -64.0).unwrap();
     assert_eq!(cam.project(&p).unwrap(), [272.0, 364.0]);
     assert!(
-        cam.center.x.is_small(),
+        cam.center().x.is_small(),
         "the origin stays cheap at any level"
     );
 }
@@ -739,9 +782,29 @@ fn the_camera_refuses_numbers_that_are_not_gestures() {
         Some(CameraError::NotFinite)
     );
 
+    assert_eq!(
+        Camera::new(origin.clone(), 1.0, [800.0, -1.0]).err(),
+        Some(CameraError::OutOfRange)
+    );
+
     let mut cam = Camera::new(origin.clone(), 10.0, VIEW).unwrap();
-    let before = (cam.level, cam.center.clone(), cam.zoom);
-    let unchanged = |cam: &Camera| (cam.level, cam.center.clone(), cam.zoom) == before;
+    let before = (cam.level(), cam.center().clone(), cam.zoom());
+    let unchanged = |cam: &Camera| (cam.level(), cam.center().clone(), cam.zoom()) == before;
+
+    // A resize is checked the same way, and a refused one changes nothing.
+    assert_eq!(
+        cam.set_viewport([f64::INFINITY, 600.0]),
+        Err(CameraError::NotFinite)
+    );
+    assert_eq!(
+        cam.set_viewport([-800.0, 600.0]),
+        Err(CameraError::OutOfRange)
+    );
+    assert_eq!(cam.viewport(), VIEW);
+    assert_eq!(cam.set_viewport([1024.0, 768.0]), Ok(()));
+    assert_eq!(cam.viewport(), [1024.0, 768.0]);
+    assert_eq!(cam.set_viewport(VIEW), Ok(()));
+    assert!(unchanged(&cam));
 
     assert_eq!(cam.pan_by_px(f64::NAN, 0.0), Err(CameraError::NotFinite));
     assert_eq!(

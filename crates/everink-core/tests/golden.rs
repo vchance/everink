@@ -12,7 +12,7 @@ mod common;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use common::{Rng, deep_position, hex};
+use common::{Rng, axis_big, deep_position, hex};
 use everink_core::{Axis, Delta, Level, Rel};
 use num_bigint::BigInt;
 use num_traits::Signed;
@@ -76,8 +76,8 @@ fn build() -> String {
         let bits = 129 + rng.below(872);
         let d = Delta {
             level: Level(0),
-            dx: Axis::from_big(rng.big(bits)),
-            dy: Axis::from_big(rng.big(bits)),
+            dx: axis_big(rng.big(bits)),
+            dy: axis_big(rng.big(bits)),
         };
         let unit = Level(rng.below(9) as i32 - 4);
         let [fx, fy] = d.to_f64(unit);
@@ -107,7 +107,7 @@ fn build() -> String {
         for step in [-1, 0, 1] {
             let d = Delta {
                 level: Level(0),
-                dx: Axis::from_big(&tie + BigInt::from(step)),
+                dx: axis_big(&tie + BigInt::from(step)),
                 dy: Axis::ZERO,
             };
             writeln!(
@@ -138,7 +138,7 @@ fn build() -> String {
     for (name, d, unit) in cases {
         let delta = Delta {
             level: Level(0),
-            dx: Axis::from_big(d),
+            dx: axis_big(d),
             dy: Axis::ZERO,
         };
         writeln!(out, "e {} {}", name, rel_bits(delta.to_f64(Level(unit))[0])).unwrap();

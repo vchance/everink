@@ -4,6 +4,10 @@
 //! `frac()` as views of its high and low part. A value that fits 128 bits is held inline and costs no
 //! allocation; anything larger is a big integer. The form is canonical: a value that fits inline is always
 //! held inline, so equality of the representation is equality of the value.
+//!
+//! The big-integer crate is private to this crate: nothing in the public API names its types, so it can be
+//! replaced without changing a caller. `from_signed_bytes_be` and `to_signed_bytes_be` are the way in and out for
+//! a value too large for `from_i128`.
 
 use std::cmp::Ordering;
 
@@ -30,7 +34,7 @@ impl Axis {
     }
 
     /// Canonical form of a big integer.
-    pub fn from_big(b: BigInt) -> Axis {
+    pub(crate) fn from_big(b: BigInt) -> Axis {
         match b.to_i128() {
             Some(v) => Axis(Repr::Small(v)),
             None => Axis(Repr::Big(b)),
@@ -38,11 +42,28 @@ impl Axis {
     }
 
     /// Builds `cell * 2^64 + frac`.
-    pub fn from_cell_frac(cell: BigInt, frac: u64) -> Axis {
+    pub(crate) fn from_cell_frac(cell: BigInt, frac: u64) -> Axis {
         Axis::from_big((cell << FRAC_BITS) + BigInt::from(frac))
     }
 
-    pub fn to_big(&self) -> BigInt {
+    /// The value from its two's-complement bytes, most significant first. Any length is accepted (the first
+    /// byte's top bit is the sign); no bytes is zero. This is for callers and tests that hold a large integer of
+    /// their own. It is not the wire format and applies no depth cap: bytes from the network go through
+    /// `Position::decode`.
+    pub fn from_signed_bytes_be(bytes: &[u8]) -> Axis {
+        Axis::from_big(BigInt::from_signed_bytes_be(bytes))
+    }
+
+    /// The value as two's-complement bytes, most significant first, in the fewest bytes that hold it. Zero is
+    /// one zero byte.
+    pub fn to_signed_bytes_be(&self) -> Vec<u8> {
+        match &self.0 {
+            Repr::Small(v) => BigInt::from(*v).to_signed_bytes_be(),
+            Repr::Big(b) => b.to_signed_bytes_be(),
+        }
+    }
+
+    pub(crate) fn to_big(&self) -> BigInt {
         match &self.0 {
             Repr::Small(v) => BigInt::from(*v),
             Repr::Big(b) => b.clone(),
@@ -71,7 +92,7 @@ impl Axis {
     }
 
     /// The cell: the value divided by 2^64, rounded toward minus infinity.
-    pub fn cell(&self) -> BigInt {
+    pub(crate) fn cell(&self) -> BigInt {
         match &self.0 {
             Repr::Small(v) => BigInt::from(*v >> FRAC_BITS),
             Repr::Big(b) => floor_shr(b, FRAC_BITS as u64),

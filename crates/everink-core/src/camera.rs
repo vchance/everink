@@ -6,7 +6,8 @@
 //! change level on every frame.
 //!
 //! Numbers from outside (pixels, zoom factors) are checked here. A value that is not finite, or is too large to be
-//! a gesture, is refused with an error and changes nothing.
+//! a gesture, is refused with an error and changes nothing. The fields are private so that every change goes
+//! through those checks.
 
 use crate::{Axis, Delta, LEVEL_SHIFT, Level, Position, Rel, UNIT_BITS};
 
@@ -24,19 +25,20 @@ const STEPS_PER_UNIT: f64 = (1u64 << UNIT_BITS) as f64;
 pub enum CameraError {
     /// A number was NaN or infinite.
     NotFinite,
-    /// A pan beyond `MAX_PAN_PX`, a zoom factor outside `[1/1024, 1024]`, or a zoom that is not positive.
+    /// A pan beyond `MAX_PAN_PX`, a zoom factor outside `[1/1024, 1024]`, a zoom that is not positive, or a
+    /// negative viewport size.
     OutOfRange,
 }
 
 #[derive(Clone, Debug)]
 pub struct Camera {
     /// The level the center is written on. It is a unit of measure and has no meaning outside the camera.
-    pub level: Level,
-    pub center: Position,
+    level: Level,
+    center: Position,
     /// Logical pixels per unit of `level`, in `[0.5, 2048)`.
-    pub zoom: f64,
+    zoom: f64,
     /// Logical pixels.
-    pub viewport: [f64; 2],
+    viewport: [f64; 2],
 }
 
 fn check_zoom(zoom: f64) -> Result<(), CameraError> {
@@ -49,14 +51,22 @@ fn check_zoom(zoom: f64) -> Result<(), CameraError> {
     Ok(())
 }
 
+fn check_viewport(viewport: [f64; 2]) -> Result<(), CameraError> {
+    if !(viewport[0].is_finite() && viewport[1].is_finite()) {
+        return Err(CameraError::NotFinite);
+    }
+    if viewport[0] < 0.0 || viewport[1] < 0.0 {
+        return Err(CameraError::OutOfRange);
+    }
+    Ok(())
+}
+
 impl Camera {
     /// A camera at `center`. `zoom` is pixels per unit of the center's level; any positive finite value is
     /// accepted and brought into range by changing level.
     pub fn new(center: Position, zoom: f64, viewport: [f64; 2]) -> Result<Camera, CameraError> {
         check_zoom(zoom)?;
-        if !(viewport[0].is_finite() && viewport[1].is_finite()) {
-            return Err(CameraError::NotFinite);
-        }
+        check_viewport(viewport)?;
         let mut c = Camera {
             level: center.level,
             center,
@@ -65,6 +75,32 @@ impl Camera {
         };
         c.normalize();
         Ok(c)
+    }
+
+    /// The level the center is written on.
+    pub fn level(&self) -> Level {
+        self.level
+    }
+
+    pub fn center(&self) -> &Position {
+        &self.center
+    }
+
+    /// Logical pixels per unit of `level()`, in `[0.5, 2048)`.
+    pub fn zoom(&self) -> f64 {
+        self.zoom
+    }
+
+    /// The size of the view in logical pixels.
+    pub fn viewport(&self) -> [f64; 2] {
+        self.viewport
+    }
+
+    /// Changes the size of the view (a window resize). The center stays where it is.
+    pub fn set_viewport(&mut self, viewport: [f64; 2]) -> Result<(), CameraError> {
+        check_viewport(viewport)?;
+        self.viewport = viewport;
+        Ok(())
     }
 
     /// Brings the zoom back into `[0.5, 2048)` by changing level. Going finer is exact. Going coarser drops the

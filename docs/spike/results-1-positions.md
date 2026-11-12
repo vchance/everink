@@ -168,13 +168,16 @@ test failed, and with the floor rule removed the shift test failed.
 ## Where the code departs from the design
 
 1. **An axis is one integer** (128 bits inline), not a 64-bit cell and a 64-bit offset. Same information.
-2. **The public API exposes `num_bigint::BigInt`** (`Axis::from_big`, `from_cell_frac`, `to_big`, `cell`). Section
+2. **The public API exposed `num_bigint::BigInt`** (`Axis::from_big`, `from_cell_frac`, `to_big`, `cell`). Section
    01 asks for a thin wrapper so the library can be swapped, and the timings above are the reason it might be.
-   Before slice 2 builds on this crate, those four should take and return a type of this crate.
+   Closed after this slice, before slice 2: those four are private to the crate, and a large value goes in and out
+   as two's-complement bytes (`Axis::from_signed_bytes_be`, `to_signed_bytes_be`). No public item names the
+   big-integer crate.
 3. **The reference tests run 40,600 pairs,** not the million the design names.
-4. **The camera's fields are public,** so a caller can still write a bad zoom into them directly and bypass the
-   checks its methods make. They should become private, with getters, in the same change that wraps the
-   big-integer type.
+4. **The camera's fields were public,** so a caller could write a bad zoom into them directly and bypass the
+   checks its methods make. Closed in the same change: the fields are private, read through `level()`, `center()`,
+   `zoom()` and `viewport()`, and the view size changes through `set_viewport`, which refuses a size that is not
+   finite or is negative.
 5. **A level difference above 2^20 levels panics** (`MAX_SHIFT_LEVELS`) instead of allocating without bound. Bytes
    from the network cannot reach it: `check_cap_bytes` refuses any level beyond the cap first.
 
