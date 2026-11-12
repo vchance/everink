@@ -43,9 +43,13 @@ copy. Four facts make this harder than "put it in a CRDT library".
 1. **The document can be much larger than any client.** The design's targets include a 10,000-object view and a
    100,000-stroke client cache. The first server version keeps a whole surface in memory, capped at 2 million
    objects (section 03), so take 2 million objects as the planning size. A stroke of about 200 pen samples is
-   roughly 1 KB once packed (an estimate; the format is section 06's). The fixed part of each object is roughly 110
-   bytes near the origin: id 16 bytes, kind, creator, ordinal, order key about 6 bytes, parent link, a `Position` of
-   19 bytes plus 2.5 bytes for each level away from the origin, and stamps of 8 bytes each. Section 03 gives the one
+   roughly 1 KB once packed (measured in the spike: 936 bytes for 200 samples of a random walk, which packs worse
+   than a real pen stroke; `../spike/results-2a-object-map.md`). The fixed part of each object was estimated at
+   roughly 110 bytes near the origin: id 16 bytes, kind, creator, ordinal, order key about 6 bytes, parent link, a
+   `Position` of 19 bytes plus 2.5 bytes for each level away from the origin, and stamps of 8 bytes each. The spike
+   measured 82 bytes, body fields included, in a prototype with no creator link and no provenance yet; a position
+   100 levels down adds about 250 bytes to an object and 1,000 levels down about 2,500, in memory and in the state
+   bytes alike. Section 03 gives the one
    estimate of what a surface of that size costs in server memory, from this header size, a typical stroke body and
    its index entry; it is far more than any client should hold, and a client sees well under 1% of it. A client must
    never need the rest.
@@ -59,9 +63,10 @@ copy. Four facts make this harder than "put it in a CRDT library".
    when the other person has moved, restyled or deleted the same object.
 
 This section therefore designs a small purpose-built object map, sequenced by the server, with a CRDT library used
-only for the text inside text objects (owner decision, 2026-11-12). Which library edits text is still open, and the
-spike under "How the model sits on the candidate libraries" compares them; the spike also still checks the finding
-that no library syncs part of a document. The reasoning is under "Options considered".
+only for the text inside text objects (owner decision, 2026-11-12). That library is **yrs** (owner decision,
+2026-11-12, made on the evidence of the text trial, `../spike/results-2b-text-libraries.md`); the comparison under
+"How the model sits on the candidate libraries" stays as the record. The trial also confirmed that no library syncs
+part of a document. The reasoning is under "Options considered".
 
 ## What others do
 
@@ -429,10 +434,14 @@ pub enum Op {
     DeleteBy  { creator: CreatorFilter },                  // owner only; the server expands it, see section 7
 }
 
-pub enum At { Between(Option<OrderKey>, Option<OrderKey>), Front, Back }   // Front and Back are decided by the server
+pub enum At { Between(Option<OrderKey>, Option<OrderKey>), Front, Back }
+// The server picks the key in all three cases, so a `Create` carries no order key (spike, 2a)
 ```
 
-All operations in one change get the same `Seq`. No two operations in a change may write the same register. A `Set`
+All operations in one change get the same `Seq`. No two operations in a change may write the same register. This
+includes creation: a new object's registers count as written by the change that creates it, so a change that
+creates an object and then writes one of its registers is refused, because both writes would carry the same `Seq`
+(the prototype refuses it, `../spike/results-2a-object-map.md`). A `Set`
 with `if_stamp: Some(s)` is applied only if the register's stamp is still `s`; otherwise the operation fails, and
 (by the atomic rule) so does the change, unless the change is marked `partial_ok`, which only undo uses.
 
@@ -460,7 +469,7 @@ gaps in `Seq` are expected).
 ```rust
 /// Bytes compared as an unsigned lexicographic string; a shorter string that is a prefix sorts first.
 /// A key never ends in 0x00. At most MAX_ORDER_KEY_BYTES (section 08).
-pub struct OrderKey(pub SmallVec<[u8; 12]>);
+pub struct OrderKey(pub SmallVec<[u8; 14]>);   // 14 bytes inline; the key is 16 bytes either way (spike, 2a)
 // The sort key of an object is (OrderKey, ObjectId), so two equal keys are fine.
 
 fn between(a: Option<&OrderKey>, b: Option<&OrderKey>, rng: &mut impl Rng) -> OrderKey;
@@ -470,7 +479,8 @@ fn between(a: Option<&OrderKey>, b: Option<&OrderKey>, rng: &mut impl Rng) -> Or
 digit values lie strictly between them, choose a random digit in the middle third of that range and stop. Otherwise
 copy `a`'s digit and continue on the next position with `b` treated as absent. With `a` absent, `b` is treated as
 `0x00…`, with `b` absent as `0xFF…`. A key has no terminating byte; the rule "no trailing 0x00" keeps `between`
-always possible.
+always possible. This rule is right between two neighbours and wrong at an end, where there is no second
+neighbour and each call takes about half of the space left; see "Counting keys for the ends" below.
 
 This answers the known problems:
 
@@ -481,13 +491,25 @@ This answers the known problems:
   affects only which of two overlapping objects is on top, never any object's content. Anything that must stay
   contiguous (a pasted selection) is a group, with one key.
 - **Growth.** Using the middle of a whole digit, not a bit, adds about one byte per 8 repeated inserts into the
-  *same* gap. When a sibling list's longest key passes `REBALANCE_KEY_BYTES` (default 24), the server, as author,
+  *same* gap, and the spike measured about one byte per seven at an end. When a sibling list's longest key passes `REBALANCE_KEY_BYTES` (default 24), the server, as author,
   issues a `Rebalance`: a change that rewrites keys of the affected neighbourhood with evenly spread short keys
   (ordinary `SetSlot` writes). A concurrent insert that used old neighbour keys may land a few positions off; that
   is accepted. Keys over the limit are refused, so hostile growth is bounded.
 - **Front and back.** `At::Front` and `At::Back` are resolved by the server, which keeps the largest and smallest
   key per parent. A client sees only part of a large sibling list, so only the server can say "above everything";
-  the client shows a guess (largest key it holds, extended) until the acknowledgement brings the real key.
+  the client shows a guess (largest key it holds, extended) until the acknowledgement brings the real key. The
+  server also picks the key for `Between`, so no `Create` carries a key. The key for the ends is a counter, below.
+- **Counting keys for the ends.** The `between` rule alone fails for the common case. A new stroke goes in front of
+  everything, and in the spike a key passed 24 bytes after 163 inserts at one end and no key of 64 bytes or fewer
+  was left after 444 (one seed; `../spike/results-2a-object-map.md`, Finding 1). On a busy surface the server would
+  be rewriting the top-level list every few hundred strokes. So the ends use counting keys. A key that starts with
+  `0xF8` to `0xFE` is a counter with one to seven bytes of whole number, a longer number sorting above every
+  shorter one; `OrderKey::after` adds one. `0x07` down to `0x01` are the same downwards, for `before`. Both kinds
+  are ordinary keys: `between` works on them and next to them (tested from 50,000 random keys). Only the server
+  resolves `Front` and `Back`, one change at a time, so two calls cannot pick the same key and no randomness is
+  needed. In the prototype 100,000 objects in front, or behind, have keys of at most 4 bytes. The rewrite at
+  `REBALANCE_KEY_BYTES` stays, for the remaining worst case only: a client that asks for "between the lowest key
+  and nothing" over and over. The spike did not build the rewrite.
 - **Order across levels** is just this one list: all top-level objects share the parent `None`.
 
 **Groups.** A group has no list of children. A child names its parent; the room and each client build the children
@@ -678,13 +700,14 @@ library document, no history and no tombstones; the cost is that a viewer cannot
 opened that text once. (This is a choice; sending the document to everyone is the simpler alternative if the spike
 shows small documents are cheap.)
 
-**Library boundary.** The model only needs this from the library; the choice of library stays open and the adapter
-is swappable:
+**Library boundary.** The text library is yrs (owner decision, 2026-11-12). The model only needs this from the
+library, and the adapter stays swappable, so the choice can be revisited:
 
 ```rust
 pub trait TextDoc {
     fn new_empty() -> Self;
     fn apply_update(&mut self, bytes: &[u8]) -> Result<(), TextError>;         // untrusted input; must not panic
+                                                                                // (the adapter catches a library panic)
     fn export_update_since(&self, v: &TextVersion) -> Vec<u8>;
     fn insert(&mut self, at: usize, s: &str);   fn delete(&mut self, range: Range<usize>);
     fn mark(&mut self, range: Range<usize>, key: MarkKey, value: MarkValue);
@@ -698,7 +721,12 @@ pub trait TextDoc {
   users' runs (Source 22); Loro uses Fugue (Source 7).
 - **Formatting** follows Peritext's model (Source 23): marks are anchored to gaps, not characters. Expanding marks
   (bold, italic, underline, strike, color, size, font) grow when text is typed at their end; links do not.
-  Concurrent exclusive values (two colors on one word) are settled by last-write-wins on operation ids. One
+  Concurrent exclusive values (two colors on one word) were expected to be settled by last-write-wins on operation
+  ids. **In yrs they are not**: when two clients colour overlapping stretches differently at the same time, both
+  copies agree, but a stretch that only one of them coloured ends with no colour (Loro and Automerge keep a colour
+  on every character that was given one; `../spike/results-2b-text-libraries.md`, Finding 6). So the application
+  decides how exclusive marks (colour, size, font) are applied, and does not rely on the library's merge for two
+  values of one mark on overlapping ranges. Marks of different kinds (bold with italic) converge. One
   paragraph is text up to a newline; paragraph alignment is the object-level `defaults.align` in the first version
   (lists and headings are later).
 - **What the first version includes (whiteboard).** The first app is a whiteboard (owner decision, 2026-11-12), so
@@ -716,8 +744,25 @@ pub trait TextDoc {
   addresses. No markup is interpreted.
 - **Hostile updates.** `apply_update` runs on the server on bytes from clients. The server applies it to a scratch
   copy first, checks the length and mark limits (`MAX_TEXT_CHARS`, `MAX_TEXT_UPDATE_BYTES`, section 08), and only
-  then keeps it. The adapter is fuzzed.
-- **Size.** A larger paste than `MAX_TEXT_CHARS` becomes several objects.
+  then keeps it. The adapter is fuzzed. The text trial (`../spike/results-2b-text-libraries.md`) adds these rules:
+  - **Refuse an update of which any part has to wait.** An update that depends on changes the server has not seen is
+    accepted by every library and parked. With the scratch-copy rule alone a client can get past the length check
+    by sending keystrokes 22 to 30 before keystroke 21: the parked ones are accepted unchecked and wait in memory
+    without bound (yrs, Automerge), or bypass the limit because the copy does not see them (Loro, whose `fork`
+    drops what is parked). The server therefore refuses any update of which a part waits; in yrs this shows in
+    the store's pending update.
+  - **Catch a panic.** yrs panicked on 13 of 6,000 damaged inputs in the trial (10 of 5,000 updates, 3 of 1,000
+    documents). The adapter catches a panic around every call that takes outside bytes and drops the document it
+    was working on.
+  - **Do not rely on the library to detect damaged input.** yrs accepted some damaged updates and gave a text that
+    nobody sent (195 of 5,000). A hostile client can send any text anyway, so this is not a hole of its own, but
+    the library is not a check on what arrives.
+  - **Remote updates carry an origin of their own.** Applied in a plain transaction, a remote edit is taken for
+    one's own and undone with it. Applied with `transact_mut_with(<an origin>)` it is left alone, so per-user undo
+    needs that.
+- **Size.** A larger paste than `MAX_TEXT_CHARS` becomes several objects. `MAX_TEXT_CHARS` is counted in Unicode
+  scalar values (section 08's table), and yrs counts a text's length in UTF-8 bytes unless told otherwise, so the
+  adapter counts in the unit the limit is stated in, by setting yrs's offset kind or by counting itself.
 - **History.** The text library keeps what it needs to merge (Loro's design avoids permanent tombstones per its
   docs; yrs discards deleted content with garbage collection on). `compact` runs when a text object has had no
   editor for 10 minutes.
@@ -757,7 +802,9 @@ pub trait TextDoc {
 
 ### 13. How the model sits on the candidate libraries
 
-What the model needs from a library, and who can give it, as best I could check:
+What the model needs from a library, and who can give it, as best I could check. **The text library is yrs** (owner
+decision, 2026-11-12). This table, written before the trial, is kept as the record; "Settled by the trial" follows
+it.
 
 | Criterion | Loro 1.17.1 | yrs 0.28.1 | Automerge 0.12.0 |
 |---|---|---|---|
@@ -771,9 +818,38 @@ What the model needs from a library, and who can give it, as best I could check:
 | Text sequence without interleaving | Fugue | YATA (not checked for interleaving) | RGA-family (not checked) |
 | License, status | MIT, active | MIT, 0.x, active | MIT, active |
 
-Reading: for text only, Loro and yrs both qualify on paper, and Loro has the stronger documented rich-text and undo
-story. For the whole object map, B (a document per object) would be the only route to partial copies, and it is
-unproven at the scale of thousands of objects in view. The text library is not yet chosen; the spike decides.
+Reading, before the trial: for text only, Loro and yrs both qualify on paper, and Loro has the stronger documented
+rich-text and undo story. For the whole object map, B (a document per object) would be the only route to partial
+copies, and it is unproven at the scale of thousands of objects in view.
+
+**Settled by the trial** (`../spike/results-2b-text-libraries.md`; Apple M4, native, release build; a text object is
+200 characters typed one keystroke at a time; Loro 1.17.1, yrs 0.28.1, Automerge 0.12.0):
+
+| | Loro | yrs | Automerge |
+|---|---|---|---|
+| Sync part of a document | no: taken apart, the changes wait for ever on others (5 of 20 characters arrive) | only as a sub-document, which is a separate document | no: 19 of 21 changes wait (one character arrives) |
+| Update for one keystroke | 85 B | 12 B | 113 B |
+| Whole document, 200 characters (empty; 1,000 characters) | 397 B (81 B; 451 B) | 211 B (2 B; 1,011 B) | 398 B (117 B; 255 B) |
+| Memory per document held, 200 characters (empty) | 28.2 KB (17.7 KB) | 2.1 KB (1.4 KB) | 37.8 to 48.5 KB (16.5 KB) |
+| Apply one keystroke | 3.13 µs | 0.51 µs | 66.9 µs |
+| Apply one keystroke with the server's check, document at 200 characters | 42.9 µs | 2.90 µs | 75.1 µs |
+| Load 5,000 documents of 200 characters | 33.3 ms | 4.2 ms | 1,565 ms |
+| Panics on damaged updates (of 5,000) | 0 | 10 | 689 |
+| Damaged update accepted and the text is something nobody sent (of 5,000) | 0 | 195 | 45 |
+| Per-user undo | yes | yes, if remote updates are applied with an origin of their own | no undo manager |
+| Rich text marks | yes | yes; two values of one mark on overlapping ranges can leave a stretch with no colour | yes |
+| Crates brought in | 141 | 40 | 47 |
+
+yrs was best on memory and latency. Its failures (panics, damaged input that changes the text, the colour merge) are
+ones the adapter contains or the application avoids, and are listed under "Hostile updates" and "Formatting" in
+part 10. Loro never panicked and used about 14 times the memory of yrs. Whole-document sizes cross over: yrs stores
+typed text as one run per keystroke until it is compacted, so its 1,000-character document is the largest of the
+three, and at the 200 characters of a whiteboard label it is the smallest. The ratios are one machine's.
+WebAssembly size was not measured (slice 3).
+
+The server's check also changes: yrs has no `fork`, so the scratch copy is a new document loaded from the whole
+state; it is still the cheapest by far (the figure in the table). A server cannot use Automerge's
+`load_incremental`, which says "ok" to bytes it cannot read; an update must be exactly one change.
 
 **Spike plan for the text library and for the partial-copy finding.** Build the object map of this section once
 (about 1,500 lines, since it is only registers) and run these against it:
@@ -788,7 +864,14 @@ unproven at the scale of thousands of objects in view. The text library is not y
 4. **Loro container-subset export**: check by code whether updates for chosen containers only can be exported and
    imported.
 5. **Pass criteria:** text trial within a 2x budget on memory and latency of the best, and no failure in the fuzz
-   and merge tests. For B to displace D, it must open a view of 5,000 objects in under 1 second and keep memory per
+   and merge tests. **Outcome of the trial:** the bar as written is passed by no candidate. Failures the adapter
+   can contain: a panic (catch it, drop the document), damaged input that changes the text (do not rely on the
+   library to detect it), remote updates taken for local ones in undo (apply them with an origin), the unit of
+   length (count in the unit of the limit), and updates that wait for unseen changes (refuse them). One the
+   adapter cannot contain and the application must avoid: two values of one mark on overlapping ranges merging
+   badly in yrs. Failures of size and speed (Loro and Automerge against yrs) cannot be contained. yrs was chosen on
+   that evidence, so the bar is read as "no failure that the adapter and the application cannot contain". For B to
+   displace D, it must open a view of 5,000 objects in under 1 second and keep memory per
    object within 3x of D's, while still giving the server a per-operation check.
 
 ### 14. The `Doc` interface
@@ -859,7 +942,9 @@ pub fn blobs_in_state(state: &Doc) -> impl Iterator<Item = BlobId> + '_;
   canonical bytes are equal) and for chunks. Section 03 may delta-encode the positions inside a canonical body for
   the wire and for snapshot chunks (for example against a base position per message), provided that decoding
   restores the canonical bytes exactly; the canonical form stays the form that is compared, hashed and stored in the
-  log. `new_blobs` is how the room keeps its blob reference table (sections 03 and 05) without scanning.
+  log. The spike says positions should be stored and sent as differences from a nearby base for memory and state
+  size and for speed, and not only for the wire: at 1,000 levels positions are 73% of the state bytes
+  (`../spike/results-2a-object-map.md`, "Depth"; `../spike/results-1-positions.md`). `new_blobs` is how the room keeps its blob reference table (sections 03 and 05) without scanning.
 
 ### 15. Types and operations by name
 
@@ -946,9 +1031,9 @@ One line each. These names are used by other sections; they will not change with
 
 | Crate | Version checked | License | Status | Why |
 |---|---|---|---|---|
-| `loro` | 1.17.1 (2026-10-22) | MIT | Active; fast-moving (many 1.13 to 1.14 fixes in lazy loading, tree and undo) | Candidate for text bodies only. |
-| `yrs` | 0.28.1 (2026-11-04) | MIT | Active; 0.x, so API may change | Candidate for text bodies only. |
-| `automerge` | 0.12.0 (2026-09-16) | MIT | Active | Considered; not preferred for text (undo and marks unverified). |
+| `loro` | 1.17.1 (2026-10-22) | MIT | Active; fast-moving (many 1.13 to 1.14 fixes in lazy loading, tree and undo) | Not chosen. The trial's alternative: careful with bad input, about 14 times the memory, 141 crates, three MPL-2.0 and one BSL-1.0. |
+| `yrs` | 0.28.1 (2026-11-04) | MIT | Active; 0.x, so API may change | **Chosen** for text bodies only (owner decision, 2026-11-12). Brings in 40 crates, none outside MIT or Apache-2.0 (trial). |
+| `automerge` | 0.12.0 (2026-09-16) | MIT | Active | Not chosen: behind on every measured figure but the size of a long document, and it panicked most. It has marks and no undo manager. |
 | `smallvec` | any recent | MIT OR Apache-2.0 | Widely used (not re-checked) | Order keys and small strings. |
 | `getrandom` / `rand` | any recent | MIT OR Apache-2.0 | Widely used (not re-checked) | Ids and key digits; `getrandom` has a wasm backend. |
 | `proptest` | dev only | MIT OR Apache-2.0 | (not re-checked) | The property tests above. |
@@ -983,11 +1068,12 @@ code. No library is needed for the object map by design.
 
 ## Questions for the owner
 
-Open. The merge model, offline replay, the whole-object eraser as default, the first app, who may restore versions
+Open, except where marked. The merge model, offline replay, the whole-object eraser as default, the first app, who may restore versions
 and Latin script first were decided on 2026-11-11 and 2026-11-12 and are in the Design.
 
-1. **Text library.** Which library edits the text bodies (Loro, yrs or another) is decided after the spike in design
-   part 13; the owner chooses on its result. The object map itself does not use a library.
+1. **Text library.** Decided on 2026-11-12: **yrs**, on the evidence of `../spike/results-2b-text-libraries.md`
+   (the consequences are in parts 10 and 13). The object map itself does not use a library. The text trial package
+   `spike/text-trial` stays until the yrs adapter exists.
 2. **Undo of my own creation.** It deletes the object even if others have since edited or grouped it. The
    alternative is to refuse the undo when others have touched it. Which do users expect?
 3. **Deleted content retention.** Deleted objects stay 30 days on the server and forever in named versions. Is that
@@ -1036,16 +1122,28 @@ read.
 24. Prakash and Knister, A framework for undoing actions in collaborative systems (search excerpt, not read in
     full). https://web.eecs.umich.edu/~aprakash/papers/undo-tochi94.pdf
 
+25. Spike results used above (in this repository): `../spike/results-2a-object-map.md` (the object map, order keys,
+    memory, state bytes), `../spike/results-2b-text-libraries.md` (the text trial).
+
+## Settled by the spike
+
+- That none of Loro, yrs or Automerge syncs a subset of a document: each was tried and none does
+  (`../spike/results-2b-text-libraries.md`, "Answers"). yrs does it only as a sub-document, which is a document of
+  its own.
+- Memory and size cost per tiny library document, and per-operation size: measured, in part 13 above.
+- yrs `UndoManager` behavior for remote changes: a remote edit applied in a plain transaction is undone with the
+  local ones; applied with its own origin it is left alone (Finding 5).
+- Automerge undo and marks: it has marks and no undo manager (Finding 7).
+- The byte estimate for a stroke (936 bytes for 200 samples) and for the fixed part of an object (82 bytes, a
+  prototype without the creator link and provenance): `../spike/results-2a-object-map.md`.
+
 ## Claims left unverified
 
-- That any of Loro, yrs or Automerge cannot sync a subset of a document's containers (only that no such feature was
-  found in the pages read).
-- Memory and size cost per tiny library document; per-operation metadata size in each library.
 - That tldraw merges per property; that Figma's current system matches the 2019 posts; that Figma keeps transform as
   one register (this design chooses it on its own reasoning).
-- yrs `UndoManager` behavior for remote changes; Automerge undo and marks; yrs tree support; interleaving behavior
-  of YATA and Automerge's list.
-- The byte estimates for strokes and object headers (derived, not measured).
+- yrs tree support; interleaving behavior of YATA and Automerge's list.
+- The byte estimates for object headers with the creator link and provenance, and for a real pen stroke (the
+  spike measured a random walk that packs worse).
 - Ink & Switch's statement on Automerge documents being the unit of sharing and per-document sync cost (search
   excerpt only).
 - David Greenspan's string-based fractional indexing write-up (could not be read), and Loro's rich-text compliance

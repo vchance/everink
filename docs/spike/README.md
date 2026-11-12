@@ -48,6 +48,18 @@ criterion for each.
 | 4. Controls and the further candidate | The same toolbar both ways; the owner's candidate behind the renderer interface | 12, 13 | Decided from the results |
 | 5. Storage | One SQLite file per room: commit and load timings | 9 | Decided from the results |
 
+## Decisions taken from the results
+
+Owner decisions of 2026-11-12, recorded in `AGENTS.md` › Owner decisions:
+
+- The text library is **yrs** (questions 5 and 6).
+- The fallback of a second connection for presence, and what to do about the 1 Mbit/s case, are decided after a
+  real-network test (question 8). That test is not one of this spike's slices; it needs the product's server.
+- `spike/text-trial` is kept until the yrs adapter exists.
+
+The corrections the results asked for were applied to `docs/design/` after slice 2. Later slices record theirs
+in their results files in the same way.
+
 ## Results
 
 | Slice | Results | Summary |

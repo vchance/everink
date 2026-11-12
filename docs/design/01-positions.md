@@ -260,6 +260,13 @@ pub struct Position { pub level: Level, pub x: Axis, pub y: Axis }
 `Axis` with a `Small` cell is exactly an `i128` worth of information, so all common-case arithmetic runs in 128-bit
 integers with no allocation (see "Cost").
 
+**As built in the spike** (`../spike/results-1-positions.md`), an axis is the one integer `n = cell * 2^64 + frac`,
+held inline when it fits 128 bits and as a big integer otherwise, with `cell()` and `frac()` as views of it. That
+is the same number and the same information as the pair above, so the canonical bytes do not change. The code
+does not keep a 64-bit cell and a 64-bit offset side by side, and the `Cell` enum above is a description and not
+the type. A position near the origin needs about 10 bits per level, so the inline form ends between depth 1 and
+depth 10.
+
 **Operations (all exact).**
 
 ```rust
@@ -310,7 +317,9 @@ and trailing bytes. Sizes:
 That is about 20 bits (2.5 bytes) more per position for each level deeper: 10 bits per axis. This confirms the
 high-level design's "about twenty more bits". At depth 100 a surface with 100,000 objects spends about 27 MB on
 anchors if each is stored whole, which is too much; section 03 and 02 should encode anchors **relative to a base
-position in the same message or chunk** (the difference of two nearby anchors has few significant bytes). Section 03
+position in the same message or chunk** (the difference of two nearby anchors has few significant bytes). The spike
+supports this twice over: encoding at depth is slow (see "Cost"), and slice 2a measured about 250 bytes more
+per object at 100 levels and about 2,500 more at 1,000 levels, in memory and in the state bytes alike (`../spike/results-2a-object-map.md`). Section 03
 may also derive an ordered index key by interleaving the bits of x and y (a Morton key): it has the S2 prefix
 property, a parent cell's key is a prefix of its children's.
 
@@ -367,7 +376,14 @@ normalize():
 After going finer, zoom is at least 2; after going coarser, at most 512; going back takes a factor-of-4 change.
 `/= 1024` and `*= 1024` are exact (powers of two) and `at_level` is a shift, so **finer is lossless**. Coarser drops
 10 bits of the center below 2^-54 coarse units; at zoom < 512 pixels per coarse unit that is under 2^-45 pixel. A
-zoom-out then zoom-in round trip can drift by that much; over a million round trips that is below 3e-8 pixel.
+zoom-out then zoom-in round trip was expected to drift by that much; over a million round trips, below 3e-8 pixel.
+**The spike found this is true only of the camera's own center, and not of what a person sees.** Zooming in
+multiplies any error in the center by the zoom factor, and the center loses ten bits each time the camera moves
+to a coarser level. A camera that zooms out to the top and back in about a fixed point on the screen does not come
+back to the same place: a thing that started in the middle of the screen ended about 6e18 pixels away after a
+round trip from depth 10, and the error is off the scale from depth 100 (`../spike/results-1-positions.md`,
+"A finding about zooming at depth"). More precision in the camera cannot fix it, because the center at the top
+of the trip does not contain the information. What does hold is listed under "How it is tested".
 
 **No visible jump.** The view of the world depends only on `(center, zoom * 1024^level)` and `normalize` preserves
 both exactly (finer) or to 2^-45 pixel (coarser). Cell boundaries are not special at all: `center` is one integer.
@@ -455,17 +471,36 @@ at most about `18V` = 74,000 pixels from the screen center; an f32 near 74,000 h
 which is the worst case, for geometry at the edge of the window and well off screen. Near the screen center (the
 visible area, within `V/2`) the spacing is under 0.001 pixel.
 
-**Cost (estimates, not measurements).**
-- Exact subtraction of two anchors: the common case (both cells `Small`, levels within 3 of each other) is `i128`
-  arithmetic, about 2 ns. A deep case is one big subtraction on `ceil((64 + 10 d) / 64)` words, where `d` is the
-  depth in levels: at depth 100 that is 17 words, roughly 20 to 40 ns with a careful in-place implementation.
-- Re-base for 10,000 objects: 10,000 subtractions, 10,000 conversions: about 0.5 ms at depth 100, 0.05 ms at shallow
-  depth. At one screen of panning per second and a re-base every 2V this runs about once per two seconds.
-- Per frame: one big subtraction (`center - R`) and 10,000 x about 10 flops: about 0.05 ms. The exact step runs on
-  re-base and on object entry, not every frame, so the per-frame exact work is one subtraction. The one budget for
-  the rest is the cut queue, 2 ms per frame (see "Budget" below). **Changed from `design.md`:** it said the exact
-  step runs "when the camera crosses into another cell"; the trigger here is distance from the render origin,
-  because a cell is 1024 units, which is anywhere between half a screen and a million screens depending on zoom.
+**Cost (measured in the spike, `../spike/results-1-positions.md`; Apple M4, native aarch64, medians of 51 runs).**
+These are one machine's figures. A slower machine, and WebAssembly (not yet measured), will be slower.
+
+| Quantity | Estimated before the spike | Measured |
+|---|---|---|
+| Exact subtraction, shallow | about 2 ns | 8 to 9 ns |
+| Exact subtraction at depth 100 | 20 to 40 ns, "with a careful in-place implementation" | 121 ns; 446 ns at depth 1,000 |
+| Re-base of 10,000 objects, shallow | 0.05 ms | 0.13 ms |
+| Re-base of 10,000 objects, depth 100 | 0.5 ms | 1.3 ms (2.2 ms on a GitHub-hosted x86-64 runner) |
+| Re-base of 10,000 objects, depth 1,000 | not estimated | 4.5 ms (9.5 ms on the same runner) |
+| One frame after a pan, 10,000 objects | 0.05 ms | 0.004 ms, the same at every depth |
+| Position size | 19 to 21 bytes shallow, 272 at depth 100, 3,094 at the cap | 20, 22, 272; 3,094 at the cap |
+
+- The subtraction figures are slower than estimated because the code is not in place: it clones a position to bring
+  it to the finer level and allocates the result. An in-place subtraction, or storing a view's objects as small
+  offsets from a shared base, would remove most of the cost; neither was tried. The inline form ends between depth 1
+  and depth 10.
+- **The central claim holds.** After a re-base, drawing costs the same at depth 1,000 as at depth 0, because the
+  per-frame work is floats (one exact subtraction, then per object a subtraction and two multiplies). The exact
+  step runs on re-base and on object entry, not every frame. **Changed from `design.md`:** it said the exact step
+  runs "when the camera crosses into another cell"; the trigger here is distance from the render origin, because a
+  cell is 1024 units, which is anywhere between half a screen and a million screens depending on zoom.
+- **A re-base does not reliably fit in a frame at depth.** It runs when the camera has moved far from the render
+  origin, about once per two screens of panning. The one budget for the rest of the frame is the cut queue, 2 ms
+  per frame (see "Budget" below), and the re-base shares it. A re-base of 10,000 objects is inside 2 ms on the
+  M4 up to depth 100, outside it on the CI runner at depth 100, and outside it everywhere at 1,000 levels. So a
+  re-base is **spread over frames** or made incremental, and not done in one frame. How is not designed yet.
+- Canonical bytes are slow to encode at depth (1.6 microseconds at 1,000 levels, because the cell is split off and
+  copied; 0.4 microseconds at depth 100). Together with the memory figures of section 02 this supports the rule that
+  positions travel as differences from a base inside a message (see "Canonical serialization").
 
 Entry into the window happens when section 03 delivers an object, when a rebase brings an already-held object into
 the window, or when a pan ends. These are the only events that call `Delta::to_f64` for an object.
@@ -972,6 +1007,8 @@ for cursors.
   the URL fragment (so it is not sent to the server on load). The depth cap bounds link length (up to about 4.2
   KB); links of typical depth are under 400 bytes. The same function powers "jump to this person" using their
   view rectangle.
+- **Why these matter at depth.** The spike confirmed that at depth they are the only way back to an exact spot:
+  zooming back by hand does not return to the same place (see "Camera"), and a jump does.
 - **Back/forward.** A history of camera states (after each animated jump, not each pan) with Back and Forward.
 - **Lost detection.** If the view contains nothing for more than 30 screens of panning at any scale, or after
   zooming out far with nothing in view, the controls offer "go home" and "go to nearest content" (a server query,
@@ -1043,7 +1080,8 @@ column says otherwise.
 | `Delta::to_f64` rounds to nearest even, same on every target | Compare against exact rational rounding from the reference implementation; golden vectors run on native and wasm32. |
 | Zooming through a level boundary has no jump | Project 1,000 fixed world points before and after `normalize` for random cameras: finer path identical to the bit in the center and exact in the scale; coarser path within 2^-44 pixel. Sweep zoom with the pointer exactly at 2048, 0.5, and ±1 ulp. |
 | Pan across any cell boundary is smooth | Pan by one pixel steps over 1e6 steps across cells at several levels: displacement of a fixed point is exactly the step (within 1e-9 px). |
-| Zoom keeps the focus point | `zoom_about` then project the focus point: error below 1e-6 pixel at every depth tested up to 1,024 levels. |
+| An object never moves, and a jump lands exactly | Four properties replace "a point drawn at any depth is found at exactly the same place later", which is true of the point and of a jump to it and false of zooming back by hand. (1) An object's stored position is untouched by anything the camera does. (2) `Camera::set` puts a position in the middle of the screen exactly, at any depth, whatever the camera did before. (3) One zoom step keeps the point under the pointer (next row). (4) Following a thing works: zooming out to the top and back, each step aimed at where the thing is now, keeps it within a thousandth of a pixel of where it started, from depths 1, 10 and 100. All four are tested in the spike. |
+| Zoom keeps the focus point | `zoom_about` then project the focus point: error below 1e-6 pixel at every depth tested up to 1,024 levels. In the spike, one zoom step keeps the point under the pointer to within a millionth of a pixel at depths 0 to 1,000. |
 | Re-base does not accumulate error | One million random pans; compare every prepared origin with a fresh exact conversion: difference below 1e-9 of a pixel. |
 | Camera-relative values are accurate | Random objects at levels -3 to 3 and at depth 1 to 1,000 levels: projected position vs reference rational arithmetic within 0.01 pixel in the window. |
 | Cut is faithful | For random curves and `Δ` from 1 to 200: compare the prepared pieces with a reference de Casteljau in rationals with 4,000 bits: control points within 2^-38 of the window side; winding number at 10,000 sample points inside the window identical. |
@@ -1186,6 +1224,15 @@ Fetched or searched on 2026-11-11 unless noted.
 - crates.io API, 2026-11-11: https://crates.io/api/v1/crates/num-bigint , /dashu , /malachite , /rug , /ibig , /libm
 - dashu-int docs: https://docs.rs/dashu-int/latest/dashu_int/
 
+- Spike results: `../spike/results-1-positions.md` (cost, golden file, the zoom finding),
+  `../spike/results-2a-object-map.md` (the cost of depth in memory and in state bytes).
+
+**Settled by the spike.**
+- Timing estimates for subtraction, re-base and per-frame update: measured on an Apple M4 (and a CI runner for two
+  figures), `../spike/results-1-positions.md`. Several were off by a factor of 3 or more; see "Cost".
+- Positions are the same on aarch64 and x86-64: one golden file of 1,988 lines passes byte for byte on both
+  (same file). wasm32 is not yet run.
+
 **Unverified claims.**
 - Pad++, Jazz, Piccolo and Endless Paper internals and depth limits (papers unreadable; store listing says nothing
   about representation).
@@ -1195,8 +1242,8 @@ Fetched or searched on 2026-11-11 unless noted.
 - Whether native and wasm32 `sin`, `exp` and similar functions give identical bits (assumed not).
 - Flush-to-zero of subnormals on some 32-bit ARM NEON configurations.
 - `num-bigint` 0.5.1 `no_std` support; wasmtime's license.
-- Timing estimates for big-integer operations, re-base, per-frame update and cut cost: these are my estimates
-  from operation counts, not measurements.
+- Timing estimates for the cut: these are my estimates from operation counts, not measurements (those for
+  big-integer subtraction, re-base and per-frame update are settled, above).
 - The claim that the van Wijk path keeps the interpolated-center error under a thousandth of a pixel (follows from
   the path shape; to be proven by the animation test).
 - The accuracy bound for the cut (2^-38 of the window side): derived by hand from the rounding rule, to be confirmed

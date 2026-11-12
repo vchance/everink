@@ -656,9 +656,9 @@ placeholder to be tested, not a derived figure. Rows that name a section take th
 | `MAX_OPS_PER_CHANGE`: operations in one change (objects created or changed) | 1,000 | Own proposal: A pasted library template or a group move. |
 | `MAX_STROKE_POINTS`: points per stroke | 20,000 | Own proposal: A pen at 240 Hz for 83 s; clients simplify, so real strokes are far smaller. |
 | `MAX_CUTS_PER_STROKE`: cuts per stroke | 64 | Section 02: past 64 the eraser replaces the stroke with pieces. |
-| `MAX_TEXT_CHARS`: text length, one text object (scalar values) | 50,000 | Own proposal: An essay. |
+| `MAX_TEXT_CHARS`: text length, one text object (scalar values) | 50,000 | Own proposal: An essay. yrs counts UTF-8 bytes by default, so the adapter counts scalar values itself (section 02). |
 | `MAX_TEXT_UPDATE_BYTES`: one text update | 64 KiB | Own proposal: Fits inside the change cap; a larger paste becomes several objects (section 02). |
-| `MAX_ORDER_KEY_BYTES`: order key length | 64 | Own proposal: Section 02 rebalances at 24 bytes, so 64 is far above any honest key and bounds a hostile one. |
+| `MAX_ORDER_KEY_BYTES`: order key length | 64 | Own proposal: Section 02 rebalances at 24 bytes, so 64 is far above any honest key and bounds a hostile one. The ends use counting keys of at most a few bytes (4 bytes for 100,000 objects in the spike), so the rebalance is for the remaining worst case only. |
 | `MAX_TREE_DEPTH`: group nesting depth | 16 | Own proposal: Recursion bound for every walk of the tree. |
 | Style runs per text object | 2,000 | Own proposal: Layout cost grows with runs. |
 | Path or polygon vertices, one shape (path nodes) | 20,000 | Own proposal: Same as strokes; section 06 adds its own render skip. |
@@ -1109,7 +1109,7 @@ creator; supply-chain attacker. The operator is trusted (accepted residual risk)
 | T8 | S/E: steal or guess an invite secret | Network; link holder | 256-bit secret; hash stored; the secret alone opens nothing (the socket takes only `auth { token }`); redemption needs the embedding app's backend and a signed-in person; redemption limit; per-link turn-off; expiry of new redemptions | N18 to N22 | A leaked link lets any person the embedding app signs in redeem it until the limit, expiry or turn-off; the owner sees and removes them | V6, V7 |
 | T9 | E: an invited person exceeds the link's role | Person with `via` | Effective role is the lower of token role and link role; Owner is not representable on a link; owner-only operations denied by role; a role change on the link applies to the next message | N23 to N27 | None known | V8 |
 | T10 | E: viewer writes | Viewer | The server decodes each object change itself and checks every field against the role; whole change refused | N28 to N34 | None known beyond bugs in the decoder | V8, V2 |
-| T11 | E: hand-made or raw text update bypassing checks | Viewer | Object changes are the server's own typed format, never a library blob; text updates are accepted only for text objects the role may edit, applied to a checked copy | N35 | Text-library limits on inspecting an update (open, question 1) | V8, V2 |
+| T11 | E: hand-made or raw text update bypassing checks | Viewer | Object changes are the server's own typed format, never a library blob; text updates are accepted only for text objects the role may edit, applied to a checked copy; an update of which a part has to wait for unseen changes is refused; a library panic is caught and the document dropped | N35 | yrs accepts some damaged updates that change the text to something nobody sent, so the library is not a check on what arrives (section 02) | V8, V2 |
 | T12 | S: a display name imitates another person | Any person | Names come only from the embedding app, which is trusted for them; control, format and bidirectional characters removed; length cap; no badge and no comparison with other names (owner decision, 2026-11-12) | N36, N38 | Look-alike names are possible and are the embedding app's to prevent | V2 |
 | T13 | T: an editor defaces, directly or through a link | Editor, person with an editor link | Suspend a link's people; remove a person; `Op::DeleteBy` by user or by link; turn the link off; versions with a "before restore" point; limits | N39 to N42 | Visible damage until an owner acts (accepted, high-level design). People who came through an editor link have full editor limits, so a leaked link gives up to `max_redemptions` people the full write budget; no tighter limit applies (question 7) | V2 |
 | T14 | R: deny having restored a version, changed a link | Owner or editor | Audit trail with hash chain, actor, session | N43, N44 | The operator can rewrite the table and recompute the chain unless it is anchored outside | V16 |
@@ -1223,11 +1223,16 @@ wasm client never verifies tokens and links no crypto for them.
 The owner answered the earlier questions on identity, guests, restore, depth cap, jump and follow, the first app and
 the merge model on 2026-11-11 and 2026-11-12; they are applied above. What is still open:
 
-1. **Which library edits text (reserved).** The merge model is decided: the server holds its own object map and a
-   CRDT library is used only for text inside text objects. Security still needs one thing from that library: the
-   server must be able to check, before applying a text update, that it touches only the text object the sender may
-   edit. Recommendation: put "inspect before apply" in the spike's comparison of the text libraries; if a library
-   cannot, the server applies the update to a scratch copy and compares.
+1. **Which library edits text.** Decided on 2026-11-12: **yrs**. The merge model is decided: the server holds its own
+   object map and a CRDT library is used only for text inside text objects. Security needed one thing from that
+   library: the server must be able to check, before applying a text update, that it touches only the text object
+   the sender may edit. The trial found that a yrs update decodes on its own and shows what was inserted, so it can
+   be read before it is applied; the scratch copy remains the check for the length limits
+   (`../spike/results-2b-text-libraries.md`). The same trial adds rules for the adapter that bear on hostile input:
+   catch a panic from the library around every call that takes outside bytes and drop that document (yrs panicked on
+   13 of 6,000 damaged inputs); do not rely on the library to detect damaged input (yrs accepted some that changed
+   the text); and refuse any update of which a part has to wait for changes the server has not seen, since such
+   updates are accepted and parked unchecked (section 02, "Hostile updates").
 2. **May viewers export the whole surface?** Recommended: off by default, a tenant setting. A viewer can already see
    everything by panning, but export makes copying one click.
 3. **Deletion grace period.** Recommended: immediate deletion for the owner with a typed confirmation, and no undo.
@@ -1283,9 +1288,12 @@ All fetched on 2026-11-11 unless noted.
   `ed25519-dalek`, `pasetors`, `biscuit-auth`, `aws-lc-rs`, `ring`, `governor`, `rustls`, `cargo-deny`, `cargo-vet`,
   `cargo-audit`, `unicode-security`, `unicode-normalization`, `subtle`, `getrandom`)
 
+Settled by the spike: yrs can show what an update inserts before it is applied (it decodes on its own;
+`../spike/results-2b-text-libraries.md`).
+
 Not verified, listed together: Miro's sharing model; Figma's socket authentication; y-sweet token expiry and levels;
 Liveblocks token lifetime; any third-party audit of a crate named above; GCRA being governor's algorithm; the
-`OpenSSL` license in `aws-lc-sys`; Loro and yrs ability to inspect an update before applying it; reproducibility of
+`OpenSSL` license in `aws-lc-sys`; reproducibility of
 the `wasm-bindgen` plus `wasm-opt` chain; Trusted Types compatibility of generated glue; Google's separate content
 domain; backup retention norms; legal sufficiency of the privacy design; which publishers' `cargo-vet` audits can be
 imported; GitHub or Sigstore attestation details; EdDSA support in particular embedder languages.

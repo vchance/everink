@@ -79,8 +79,8 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   CI flaky; do not add timing thresholds to it. The pacing rule's own tests use made-up time.
 - `spike/text-trial` has tests that assert a library's recorded limit (for example that yrs panics on some
   damaged bytes). When one fails after a version change, the library changed: update
-  `docs/spike/results-2b-text-libraries.md`, do not just flip the assertion. Which library edits text is the
-  owner's decision; the trial does not make it.
+  `docs/spike/results-2b-text-libraries.md`, do not just flip the assertion. The owner chose yrs on
+  2026-11-12; the trial stays until the yrs adapter exists.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions
@@ -125,6 +125,19 @@ first; WCAG 2.2 AA for the built-in controls.
   stay unnamed in this repository for now ("Keep it unnamed for now"). Its details are kept outside this
   repository.
 
-Ask, do not decide: which CRDT library edits text, the controls toolkit (after the spike), whether to use, name or
+Decided (owner Von Chance, 2026-11-12, five questions asked one at a time after slice 2 of the spike; the options
+as offered and the answers are quoted in https://github.com/vchance/everink/pull/13):
+- **The text library is yrs.** The evidence is `docs/spike/results-2b-text-libraries.md`; what the adapter must
+  do because of it is in `docs/design/02-document-model.md`.
+- **The second connection for presence stays in the design as a fallback, undecided.** Whether to keep or drop
+  it is decided after cursor lag has been measured over a real network path.
+- **The 1 Mbit/s case stays open the same way.** The spike found the 200 ms cursor target met from about
+  2 Mbit/s up and missed at 1 Mbit/s; whether to accept that or meet it is decided after the real-network test.
+- **`spike/text-trial` is kept until the yrs adapter exists**, then its yrs tests move there and it is removed.
+- **The hourly scheduled run of `ci` has never fired** (first seen 2026-11-12). The owner's answer was to leave
+  it for now: an agent does not investigate or change it until asked, and says so when it reports CI evidence.
+
+Ask, do not decide: the controls toolkit (after the spike), dropping or keeping the presence fallback and the
+1 Mbit/s target (after a real-network test), whether to use, name or
 describe that further candidate here, publishing or reserving package names, registering domains, and opening the
 repository to outside contributors.

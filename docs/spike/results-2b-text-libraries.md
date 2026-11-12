@@ -9,6 +9,8 @@ Loro 1.17.1, yrs 0.28.1 and Automerge 0.12.0.
 **Which library edits text is the owner's decision** (`AGENTS.md` › Owner decisions). This file gives the
 evidence and, at the end, what the evidence points to. It decides nothing.
 
+**Decided since:** on 2026-11-12 the owner chose **yrs**, and to keep this trial until the yrs adapter exists.
+
 ## Answers
 
 **Question 5: can any of them sync part of a document? No.**

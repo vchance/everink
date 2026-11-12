@@ -38,6 +38,10 @@ figure in this table is a 95th percentile.
 - **Two more corrections to the design:** the limit must start small, and the rule only works if the operating
   system is also kept from holding unsent bytes.
 
+**Decided since:** on 2026-11-12 the owner chose to decide two things after cursor lag has been measured over a
+real network path: whether to keep the second connection as a fallback, and what to do about 1 Mbit/s. Until
+then the design keeps the fallback and its stated target.
+
 ## What was built
 
 | Part | What it is |
