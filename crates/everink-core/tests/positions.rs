@@ -466,13 +466,17 @@ fn float_conversion_handles_the_ends_of_its_range() {
     );
     assert_eq!(to_f64_x(&BigInt::from(1), l, coarse), Rel::Near(0.0));
     assert_eq!(to_f64_x(&BigInt::zero(), l, coarse), Rel::Near(0.0));
-    // A value that rounds up across 2^-1000 from below is kept: 2^53 + ... is not needed; the rule is on the
-    // rounded value, as at the top.
-    let rounds_up = (one.clone() << 60u32) - &one; // 60 one-bits: rounds to 2^60
+    // Rounding up across the small end. Measured in units of a level 100 coarser, a step is 2^-1054 units, so
+    // 2^54 - 1 steps is just under 2^-1000. It rounds to 2^-1000, and the limit is applied to the rounded value, as
+    // at the top: it is kept.
+    let rounds_up = (one.clone() << 54u32) - &one;
     assert_eq!(
         to_f64_x(&rounds_up, l, Level(-100)),
-        Rel::Near(f64::from_bits((1023u64 + 60 - 54 - 1000) << 52))
+        Rel::Near(two_pow_minus_1000)
     );
+    // One bit shorter stays below the limit after rounding and becomes zero.
+    let stays_under = (one.clone() << 53u32) - &one;
+    assert_eq!(to_f64_x(&stays_under, l, Level(-100)), Rel::Near(0.0));
 }
 
 #[test]

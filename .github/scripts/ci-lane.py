@@ -22,6 +22,9 @@ import subprocess
 import sys
 
 PRODUCT_JOBS = ("lint", "test")
+# How many runs' job lists one decision may fetch. Past this the lane stops looking and runs, so a long row of
+# skip runs can never make the `changes` job slow.
+MAX_JOB_LOOKUPS = 40
 LANE_EVENTS = ("schedule", "workflow_dispatch")
 GATE = datetime.timedelta(hours=4)
 
@@ -34,11 +37,15 @@ def executed(jobs):
 
 def find_covering(runs, jobs_of, branch, exclude_id=None):
     """`runs` newest first. Returns the latest lane run on `branch` that executed its product jobs, or None."""
+    looked = 0
     for r in runs:
         if r.get("id") == exclude_id or r.get("status") != "completed":
             continue
         if r.get("event") not in LANE_EVENTS or r.get("head_branch") != branch:
             continue
+        if looked >= MAX_JOB_LOOKUPS:
+            return None
+        looked += 1
         if executed(jobs_of(r["id"])):
             return r
     return None
@@ -80,7 +87,10 @@ def main():
     # runs on the branch.
     covering = find_covering(gh_json(f"{base}&head_sha={head}").get("workflow_runs", []), jobs_of, branch, this_run)
     if covering is None:
-        covering = find_covering(gh_json(f"{base}&branch={branch}").get("workflow_runs", []), jobs_of, branch, this_run)
+        newest = []
+        for page in (1, 2):  # the newest 200 runs on the branch
+            newest += gh_json(f"{base}&branch={branch}&page={page}").get("workflow_runs", [])
+        covering = find_covering(newest, jobs_of, branch, this_run)
     return decide(head, datetime.datetime.now(datetime.timezone.utc), covering)
 
 
@@ -122,10 +132,13 @@ def self_test():
     case("this run is ignored", [run(999, "schedule", "aaa", "success", 0, ran)], "aaa", "run")
     case("a run still in progress is ignored", [run(1, "schedule", "aaa", None, 0, ran, status="in_progress")],
          "aaa", "run")
+    many_skips = [run(100 - i, "schedule", "aaa", "success", i, skipped) for i in range(60)]
+    case("a long row of skip runs stops the search and runs", many_skips + [run(1, "schedule", "aaa", "success", 70, ran)],
+         "aaa", "run")
     case("a run with no product jobs does not cover", [run(1, "schedule", "aaa", "success", 1,
                                                            [{"name": "changes", "conclusion": "success"}])],
          "aaa", "run")
-    print("ci-lane self-test: 16 cases passed")
+    print("ci-lane self-test: 17 cases passed")
 
 
 if __name__ == "__main__":

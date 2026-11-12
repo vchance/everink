@@ -32,7 +32,7 @@ case "$event" in
     ;;
   schedule)
     # The integration lane: every job on the branch head, unless that head is already covered (ci-lane.py).
-    decision=$(python3 "$here/ci-lane.py") || decision=run
+    decision=$(python3 -I "$here/ci-lane.py") || decision=run
     case "$decision" in
       skip|gate) emit false false "lane: $decision" ;;
       carry-failure) emit false false "lane: carrying an earlier failure on this head" true ;;

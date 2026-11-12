@@ -113,7 +113,7 @@ almost all "too far".
 | Target | Result | Where |
 |---|---|---|
 | aarch64 macOS | passed | local, Apple M4 |
-| x86-64 Linux | passed for the first version of the file (680 lines) in [run 43171633451](https://github.com/vchance/everink/actions/runs/43171633451); for this version, see the `test` job of the latest `ci` run on the pull request that added this slice | GitHub's `ubuntu-24.04` |
+| x86-64 Linux | passed: the 1,988-line file in [run 43174145527](https://github.com/vchance/everink/actions/runs/43174145527) (revision 3e625c2), and its first, 680-line version in [run 43171633451](https://github.com/vchance/everink/actions/runs/43171633451). One line of the range-end cases changed after that; the pull request that added this slice records the run for the final file | GitHub's `ubuntu-24.04` |
 | wasm32 | not run | slice 3 adds the target |
 
 ## A finding about zooming at depth
@@ -172,7 +172,10 @@ test failed, and with the floor rule removed the shift test failed.
    01 asks for a thin wrapper so the library can be swapped, and the timings above are the reason it might be.
    Before slice 2 builds on this crate, those four should take and return a type of this crate.
 3. **The reference tests run 40,600 pairs,** not the million the design names.
-4. **A level difference above 2^20 levels panics** (`MAX_SHIFT_LEVELS`) instead of allocating without bound. Bytes
+4. **The camera's fields are public,** so a caller can still write a bad zoom into them directly and bypass the
+   checks its methods make. They should become private, with getters, in the same change that wraps the
+   big-integer type.
+5. **A level difference above 2^20 levels panics** (`MAX_SHIFT_LEVELS`) instead of allocating without bound. Bytes
    from the network cannot reach it: `check_cap_bytes` refuses any level beyond the cap first.
 
 ## What the design should change

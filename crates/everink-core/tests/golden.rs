@@ -133,7 +133,7 @@ fn build() -> String {
         ("2^-1000", BigInt::from(16), -95),
         ("15*2^-1004", BigInt::from(15), -95),
         ("2^-1004", one.clone(), -95),
-        ("round-up", (one.clone() << 60u32) - &one, -100),
+        ("round-up", (one.clone() << 54u32) - &one, -100),
     ];
     for (name, d, unit) in cases {
         let delta = Delta {
@@ -175,7 +175,14 @@ fn results_match_the_golden_file_byte_for_byte() {
 fn the_golden_file_exercises_the_float_conversion() {
     // Guards against the file going back to being almost all Far: count what the lines actually contain.
     let built = build();
-    let float = |s: &str| s.len() == 16 && s.chars().all(|c| c.is_ascii_hexdigit());
+    // A finite, non-zero float: sixteen hex digits that are not all zero (zero and minus zero are excluded, so a
+    // conversion that went back to returning zeros would fail here).
+    let float = |s: &str| {
+        s.len() == 16
+            && s.chars().all(|c| c.is_ascii_hexdigit())
+            && s != "0000000000000000"
+            && s != "8000000000000000"
+    };
     let near_b = built
         .lines()
         .filter(|l| l.starts_with("b "))
