@@ -56,7 +56,7 @@ operation, which rounds once where the plain form rounds twice. The evidence her
 fused operation, and the file written there passes on two targets that cannot use it (wasm32, and x86-64 as it
 is built by default, where the feature is off). So the compiler did not fuse on aarch64. CI also runs both
 golden files on x86-64 with the feature switched on (`-C target-feature=+fma`), where it could fuse and must
-not. That settles the item for this toolchain. It is a test and not a guarantee: a later compiler could change
+not, in an optimised build as well as an unoptimised one (the optimised runs were added with slice 3b). That settles the item for this toolchain. It is a test and not a guarantee: a later compiler could change
 it, and these runs are what would notice.
 
 **What wasm32 means here.** `wasm32-wasip1` under Node is the same WebAssembly arithmetic a browser runs, in the
@@ -205,8 +205,8 @@ failed; with the outline's bands turned the other way round, the coverage test a
    (Finding 2). Replace the cost estimates with these figures, native and wasm32, and settle whether a level
    costs five halvings or ten (Finding 3).
 3. Section 01, "Float rules" and its unverified list: no fused multiply-add was seen from this toolchain, on
-   aarch64 or on x86-64 with the feature on; the golden files are the standing check. Add `log2` to the banned list (the camera's display value
-   used it; it is now marked as outside shared geometry).
+   aarch64 or on x86-64 with the feature on; the golden files are the standing check. Add `log2` to the banned
+   list (the camera's display value used it; it is now marked as outside shared geometry).
 4. Sections 01 and 07: the first wasm32 figures (Finding 4).
 5. Section 06, "Stored format" and the tests: the pressure table as built, and what the corpus is.
 

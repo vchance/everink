@@ -26,6 +26,7 @@ jobs:
     outputs:
       rust: ${{ steps.select.outputs.rust }}
       text: ${{ steps.select.outputs.text }}
+      render: ${{ steps.select.outputs.render }}
       all: ${{ steps.select.outputs.all }}
       carry_failure: ${{ steps.select.outputs.carry_failure }}
     steps:
@@ -80,7 +81,14 @@ jobs:
         env:
           RUSTFLAGS: -C target-feature=+fma
           CARGO_TARGET_DIR: target/fma
-        run: cargo test -p everink-core --test outlines --test golden --locked
+        # Optimised as well as not: it is the optimiser that could fuse a multiply and an add.
+        run: |
+          cargo test -p everink-core --test outlines --test golden --locked
+          cargo test --release -p everink-core --test outlines --test golden --locked
+      - name: Golden files in an optimised build, natively and on wasm32
+        run: |
+          cargo test --release -p everink-core --test outlines --test golden --locked
+          cargo test --release -p everink-core --test outlines --test golden --target wasm32-wasip1 --locked
       - name: Timing examples build and run
         run: |
           cargo run --release --locked --example bench_positions
@@ -114,9 +122,32 @@ jobs:
       - name: Size and timing run builds and runs
         run: cargo run --release --locked --manifest-path "$MANIFEST"
 
+  # The renderer trial (spike slice 3b): a package outside the workspace, with vello_gpu, vello_cpu and wgpu.
+  # A hosted runner has no GPU, so only the processor renderer runs here; the GPU figures are taken on a machine
+  # that has one. It runs when the trial, the core crate or the toolchain changes, and on the full runs.
+  render-trial:
+    name: render-trial
+    needs: [changes]
+    if: ${{ needs.changes.outputs.all == 'true' || needs.changes.outputs.render == 'true' }}
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
+    timeout-minutes: 20
+    env:
+      MANIFEST: spike/render-trial/Cargo.toml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Format check
+        run: cargo fmt --manifest-path "$MANIFEST" --check
+      - name: Clippy, warnings are errors
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets --locked -- -D warnings
+      - name: The trial builds and runs (2,000 strokes, processor renderer only; no GPU here, so the two renderers are not compared)
+        run: cargo run --release --locked --manifest-path "$MANIFEST" 2000
+
   ci-result:
     name: ci-result
-    needs: [changes, lint, test, text-trial]
+    needs: [changes, lint, test, text-trial, render-trial]
     if: ${{ always() }}
     runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
     timeout-minutes: 2
