@@ -240,17 +240,17 @@ fixes that a `.svg` is never stored or served as a blob.
 **Output is normalized.** The server applies EXIF orientation, converts an embedded ICC profile to sRGB with
 `moxcms` (pure Rust), reduces 16-bit and floating-point channels to 8 bits, and **drops all metadata** (EXIF, GPS,
 XMP, ICC) from every derived file. Colors outside sRGB are therefore clipped; the help text says so. The original
-keeps its metadata, so it is served only to members (Questions for the owner, 7).
+keeps its metadata, so only the owner and editors may download it; viewers get display copies (owner decision,
+2026-11-12).
 
 ### Limits
 
-Section 08's limits table is the home of these figures; it adopts the member figures below and has stricter guest
-figures (guests may upload only images, and smaller ones). The values shown are for member sessions so the reasoning
-can be read next to them; if the two ever differ, 08 is right. The limits the server enforces from this section
-(file sizes and pixels, decoder memory and time, metadata size, font glyphs and axes, placeholder and alt-text size,
-playback writes per user and per object and the anchor tolerance, presigned address lifetime) are mirrored in 08's
-table as rows "set by section 05", with the figures given here. Each limit is checked at the earliest point that can
-know it.
+Section 08's limits table is the home of these figures; it adopts the figures below. The values are repeated here so
+the reasoning can be read next to them; if the two ever differ, 08 is right. The limits the server enforces from
+this section (file sizes and pixels, decoder memory and time, metadata size, font glyphs and axes, placeholder and
+alt-text size, playback writes per user and per object and the anchor tolerance, presigned address lifetime) are
+mirrored in 08's table as rows "set by section 05", with the figures given here. Each limit is checked at the
+earliest point that can know it.
 
 | Limit | Default | Where checked | How the number was chosen |
 |---|---|---|---|
@@ -276,7 +276,7 @@ headers only, with caps on box depth, box count and table count.
 Every derive job runs in a separate OS process (`everink-media-worker`) with memory and CPU limits, no network and,
 where the platform allows, a syscall filter. A crash or kill is retried twice, then marks the blob
 `Rejected(Internal)`. The server process never decodes pixels. The media worker is part of build step 4 (images),
-not step 6. No media tool runs outside this sandbox: the optional external transcoder below is started by the worker
+not step 6. No media tool runs outside this sandbox: the optional external converter below is started by the worker
 under the same limits, and no `ffmpeg`-class tool is ever run unsandboxed.
 
 ### The placeholder
@@ -383,7 +383,7 @@ recently used. Both are starting values.
 pub enum Variant {
     Orig,                          // bytes as uploaded
     Tile(ImageTileKey),            // image tile
-    Playback,                      // video: transcoded file, only if an operator configured a transcoder
+    Playback,                      // video: converted file, only if an operator configured a converter
     Manifest,                      // small CBOR: probe results for video and fonts, summary for images
 }
 
@@ -412,7 +412,7 @@ staging/<upload-id>                              being received; deleted after 2
 t/<tenant>/b/b3-<64 hex>/orig                     the original
 t/<tenant>/b/b3-<64 hex>/m                        manifest
 t/<tenant>/b/b3-<64 hex>/t/<k>/<x>_<y>            image tiles
-t/<tenant>/b/b3-<64 hex>/playback                 transcoded video, if any
+t/<tenant>/b/b3-<64 hex>/playback                 converted video, if any
 ```
 
 Ids are hex only, so a name cannot contain `..` or a separator. The tenant prefix is what limits sharing to one
@@ -444,8 +444,9 @@ Uppy) work for embedders. It runs over HTTP, not the WebSocket.
    user, surface, blob and size, and is valid until the session ends and for at most 24 hours. Every upload request
    (`POST`, `PATCH` and `HEAD`) is checked against the revoked-session list and against the session's upload
    floor (section 08), so an upload is refused after a link is turned off, after the session ends for any reason,
-   and after its role loses upload rights. A guest who is frozen becomes a viewer at once: grants issued before
-   the freeze stay dead, and they keep read access to blobs.
+   and after its role loses upload rights. People who came through an invite link and are suspended become viewers
+   at once: their upload floor is raised (section 08), grants issued before stay dead, and they keep read access to
+   blobs.
 2. `POST /v1/uploads` with `Tus-Resumable: 1.0.0`, `Upload-Length: <bytes>`, `Authorization: Bearer <grant>` and
    `Upload-Metadata` carrying `blob` (the `b3-` id) and `surface`. Reply `201` with `Location`, or `200` with
    `Everink-State: present` when the same surface already references the blob (nothing to upload).
@@ -459,6 +460,10 @@ Uppy) work for embedders. It runs over HTTP, not the WebSocket.
    moves it to `Processing`, and queues the media worker.
 6. If the server restarts mid-upload it rebuilds the hasher from the staged bytes at the next `PATCH` (one read of
    the staged file; rare).
+7. If an upload request is refused because the room was loaded again (a new lease epoch, section 08), the client
+   asks for a fresh upload grant for the same blob and size. The staged upload is found by (tenant, surface, blob,
+   size), not by the grant, so the new grant continues the same staged upload from its `HEAD` offset and a large
+   upload does not start over.
 
 Chunking: start at 1 MiB per `PATCH`, double up to 8 MiB while each chunk takes under 5 s, halve on a timeout. A
 small image is one `POST` and one `PATCH`. Concurrent uploads: see Limits.
@@ -529,11 +534,11 @@ playback midway. A client that still gets `403` mid-video asks for a new grant a
 current target position (a glitch of about a second, once per 2 hours).
 
 **Revocation.** `everink-server` keeps a short list of revoked session ids for the longest grant lifetime (2 hours)
-and checks every blob request against it. Turning a share link off, or removing a person, adds their session ids, so
-blob access stops at once, apart from the up to 60 seconds of an already issued presigned address (above). If the
-list cannot be read, video requests are refused (fail closed), as section 08 says. The list is held in memory.
-It does not need to survive a restart: every grant carries the room's lease epoch (sections 03 and 08), a room
-that is loaded again has a new one, and a grant from an earlier epoch is refused, so the client asks again.
+and checks every blob request against it. Turning an invite link off, or removing a person, adds their session ids,
+so blob access stops at once, apart from the up to 60 seconds of an already issued presigned address (above). If the
+list cannot be read, video requests are refused (fail closed), as section 08 says. The list is held in memory. It
+does not need to survive a restart: every grant carries the room's lease epoch (sections 03 and 08), a room that is
+loaded again has a new one, and a grant from an earlier epoch is refused, so the client asks again.
 
 **Response headers.** Section 08's table is the only list of headers a blob response carries (content type, type
 sniffing, disposition, sandboxing policy, cache policy, cross-origin policy, referrer policy); this section repeats
@@ -545,7 +550,7 @@ video source that is not CORS-enabled.
 **Images are never served as uploaded for display.** What clients display are the derived, re-encoded tiles, which
 carry no metadata. An original (`Variant::Orig`) is download-only. It is fetched from a separate path, `/o/`, with
 its own MAC context string (`everink-blob-orig-v1`), sent as an attachment, and the room issues such an address only
-to members (never to guests), as section 08 specifies.
+to the owner and editors, as section 08 specifies.
 
 ### Reference tracking and garbage collection
 
@@ -605,18 +610,18 @@ server-side copy of the blob into the receiving tenant at the time of use (an as
 | MP4 / MOV | HEVC (H.265) | AAC | Partial: Safari yes, Chrome and Edge on supporting hardware, Firefox varies | Platform dependent; patent-encumbered |
 
 The first two rows are the **baseline**: always accepted. AV1 is accepted with a warning that some viewers cannot
-play it. HEVC is accepted only if the optional transcoder below is configured, because an HEVC clip is the default
+play it. HEVC is accepted only if the optional converter below is configured, because an HEVC clip is the default
 format of recent iPhones and many viewers could not play it. Anything else (MKV, AVI, ProRes, 10-bit H.264) is
-refused with a reason, or transcoded when the transcoder exists.
+refused with a reason, or converted when the converter exists (owner decision, 2026-11-12).
 
-**Does the server transcode?** Not in the core. The server only **probes** a video (reads the container header with
-a memory-safe demuxer; it decodes no frames), validates the numbers in `VideoFields`, and stores the file as is.
-Reasons: transcoding needs an encoder (x264 is GPL; hardware encoders are platform bound; OpenH264 is BSD-2-Clause
+**Does the server convert?** Not in the core. The server only **probes** a video (reads the container header with a
+memory-safe demuxer; it decodes no frames), validates the numbers in `VideoFields`, and stores the file as is.
+Reasons: converting needs an encoder (x264 is GPL; hardware encoders are platform bound; OpenH264 is BSD-2-Clause
 but its patent coverage depends on using Cisco's own binaries, which I did not verify); it is heavy CPU; and it is a
-service decision for the operator. An operator can configure an **external transcoder** command (typically
-`ffmpeg`, run as a separate process so its licence does not reach Everink) that the media worker calls for files
+service decision for the operator. An operator can configure an **external converter** command (typically `ffmpeg`,
+run as a separate, sandboxed process so its licence does not reach Everink) that the media worker calls for files
 outside the baseline. It produces H.264/AAC MP4, stored as `Variant::Playback`; the blob id stays the hash of what
-was uploaded. If no transcoder is configured, files outside the baseline are refused. Codec licences are then the
+was uploaded. If no converter is configured, files outside the baseline are refused. Codec licences are then the
 operator's responsibility (this is not legal advice).
 
 Container probe candidates: `mp4parse` (Mozilla) and `symphonia`, both believed MPL-2.0 (file-level copyleft;
@@ -627,11 +632,12 @@ entry is not needed.
 **Streaming.** v1 is **progressive download with HTTP range requests** of the single stored file: the web shell
 gives `<video>` the grant URL and the browser asks for the ranges it needs; native players do the same over HTTP. An
 MP4 whose index (`moov`) is at the end still plays (the player reads the tail first), only with a slower start. HLS
-and DASH are not used in v1: they need a transcoded ladder of segments; Safari plays HLS natively but other browsers
-need JavaScript players on top of Media Source Extensions, iPhone Safari needs the separate `ManagedMediaSource`
-(MDN: experimental, limited availability), and Rust shells have no equivalent. Revisit when files regularly exceed
-500 MB or one video has more than ten simultaneous viewers; a CDN in front of the media origin is the first, cheaper
-step.
+and DASH are not used in v1 (the first app is a whiteboard, so video keeps its place in build step 6 and neither HLS
+nor a converter is a priority): they need a converted ladder of segments; Safari plays HLS natively but other
+browsers need JavaScript players on top of Media Source Extensions, iPhone Safari needs the separate
+`ManagedMediaSource` (MDN: experimental, limited availability), and Rust shells have no equivalent. Revisit when
+files regularly exceed 500 MB or one video has more than ten simultaneous viewers; a CDN in front of the media
+origin is the first, cheaper step.
 
 **When a client fetches video bytes.** A video's data is requested only when the object is on screen at 160 pixels
 wide or more, first with `preload="metadata"`; the poster fills in until the first frame is ready. Full buffering
@@ -692,7 +698,7 @@ Native v1 uses a CPU copy of each frame (1080p NV12 is about 3 MB, so about 180 
 hold for video: browsers and operating systems decode with C and C++ code. Browsers sandbox it. On native,
 Media Foundation and AVFoundation run in the app process. This design keeps the risk small by decoding only files
 the server accepted and probed, and lists a sandboxed helper process for native decoding as hardening for later
-(Questions for the owner, 6).
+(Questions for the owner, 3).
 
 ### Synchronized playback
 
@@ -861,40 +867,42 @@ forbids `unsafe` but is now in maintenance mode, so it is not chosen. Shaping an
 
 **Shipped set.** Compiled into the core as a table of `(family, style, build, blob id, scripts)`, so a document
 names a font by family and build number and every client resolves the same bytes. The files are not embedded in the
-wasm (size) but served from the server's static path under their blob ids, which are known at build time. Proposed
-families (the selection is a product question; each licence is checked when added, as design.md requires):
+wasm (size) but served from the server's static path under their blob ids, which are known at build time. Text on
+the surface is Latin script only at first release (owner decision, 2026-11-12), so the shipped set is Latin only: no
+CJK or emoji fonts are shipped, sliced or fetched. Proposed families (which Latin fonts beyond Inter is still an
+open question; each licence is checked when added, as design.md requires):
 
 | Role | Family | Licence | Status |
 |---|---|---|---|
 | Sans (default) | Inter (variable) | SIL OFL 1.1; "Inter" is a Reserved Font Name, so a modified copy must be renamed | verified |
-| Serif, mono, hand-drawn style | to be chosen from OFL families | each read at addition | unverified |
-| Fallback by script | Noto Sans per script, Noto Sans CJK, Noto Color Emoji | OFL (Noto CJK since 1.002; emoji font OFL, earlier versions Apache-2.0) | from secondary sources |
+| Serif, mono, hand-drawn style (Latin) | to be chosen from OFL families | each read at addition | unverified |
 
 OFL permits bundling with software but not selling the font by itself, and the licence text must travel with it.
 Everink ships the licence files next to the fonts and lists them in a notices file.
 
-**Custom fonts.** A user uploads `.ttf` or `.otf`. TrueType collections, WOFF and WOFF2 are refused in v1 (WOFF2
-needs a Brotli-based decoder whose Rust options I did not evaluate). The worker parses with `read-fonts`, requires
-the tables a text renderer needs, applies the caps in Limits, reads the OS/2 `fsType` embedding flags, and records
-family, weight, style and Unicode coverage in the manifest. If `fsType` says the font may not be embedded, the
-upload is `Rejected(FontRestricted)` (a legal position to confirm, Questions for the owner, 5). Any client that
-lays out text with the font downloads it as an ordinary blob through a grant.
+**Custom fonts.** A member who can edit uploads `.ttf` or `.otf` (owner decision, 2026-11-12). TrueType collections,
+WOFF and WOFF2 are refused in v1 (WOFF2 needs a Brotli-based decoder whose Rust options I did not evaluate). The
+worker parses with `read-fonts`, requires the tables a text renderer needs, applies the caps in Limits, reads the
+OS/2 `fsType` embedding flags, and records family, weight, style and Unicode coverage in the manifest. If `fsType`
+says the font may not be embedded, the upload is `Rejected(FontRestricted)` (owner decision, 2026-11-12). Any client
+that lays out text with the font downloads it as an ordinary blob through a grant.
 
 **Subsetting.** An uploaded font is **not** subsetted: other editors need every glyph to keep typing, and a subset
 would be a different file with a different hash. Delivery cost is controlled by (a) the 20 MiB cap plus HTTP
-compression, and (b) for the very large *shipped* CJK fonts, build-time slicing into files that each cover a block
-of code points (the Google Fonts approach, where each slice declares its Unicode range). An offline tool generates
-the slices, and the builtin table lists them so a client downloads only the slices a text needs. Candidates for the
-tool: `subsetter` (typst; MIT OR Apache-2.0; forbids `unsafe`) or Fontations' own subsetter (not confirmed).
+compression. The shipped Latin fonts are small enough to need no slicing. If scripts with very large fonts are added
+later, build-time slicing into files that each cover a block of code points (the Google Fonts approach, where each
+slice declares its Unicode range) is the route; candidate tools are `subsetter` (typst; MIT OR Apache-2.0; forbids
+`unsafe`) or Fontations' own subsetter (not confirmed).
 
-**Fallback for missing glyphs.** The fallback chain is a fixed list in the builtin table, ordered by script and not
-by what the operating system has: the run's font; then, for the missing code point's script, the first builtin
-family that covers it; then Noto Color Emoji for emoji; then the font's `.notdef` glyph (the "tofu box"). Runs carry
-a language tag where it matters (Han unification: one code point is drawn differently for Chinese, Japanese and
-Korean), an input from section 06. While a needed font file is not downloaded, its text is laid out with the last
-available font and laid out again when the font arrives, with the text box's stored size unchanged. A font is in one
-of three states to the renderer: `Ready`, `Loading`, `Failed` (draw `.notdef`). Because the chain and the builtin
-build number are in the document, two clients with all files present produce the same layout.
+**Fallback for missing glyphs.** Latin script only at first release (owner decision, 2026-11-12). The chain is the
+run's font, then the builtin Latin fonts in the order of the builtin table (never whatever the operating system
+has), then the font's `.notdef` glyph (the "tofu box"). Other scripts and emoji therefore show as missing-glyph
+boxes until support is added, and no fallback fonts for them are shipped or fetched; the per-script chain, language
+tags for Han unification and an emoji font wait for that work. While a needed font file is not downloaded, its text
+is laid out with the last available font and laid out again when the font arrives, with the text box's stored size
+unchanged. A font is in one of three states to the renderer: `Ready`, `Loading`, `Failed` (draw `.notdef`). Because
+the chain and the builtin build number are in the document, two clients with all files present produce the same
+layout.
 
 ## Failure modes
 
@@ -935,7 +943,8 @@ build number are in the document, two clients with all files present produce the
 | A reader without a reference gets no grant | Grants for a blob in another surface of the same tenant, in another tenant, and nonexistent: all answered `Denied` identically |
 | A viewer cannot read a blob only a deleted object referenced | Delete the only object that references a blob; a viewer's grant request is `Denied`; garbage collection still keeps the blob until the purge horizon |
 | An upload after a link is turned off is refused | `POST`, `PATCH` and `HEAD` with the old upload grant after revocation: each refused |
-| A frozen guest keeps read access and loses upload grants | Freeze a guest mid-upload: the next `PATCH` is refused, reads of blobs still succeed |
+| Suspended invite-link people keep read access and lose upload grants | Suspend one mid-upload: the next `PATCH` is refused, reads of blobs still succeed |
+| An upload continues after the room is loaded again | Reload the room (new lease epoch) mid-upload; a fresh grant for the same blob and size continues from the `HEAD` offset and the final blob is identical |
 | Response headers are the same in presigned and proxy mode | Run 08's header test against both modes |
 | Grants expire and are bound to one blob | Expired tag, tag of blob A used on blob B, tampered `exp`: each `403` |
 | Identical files are shared inside a tenant and not across tenants | Two uploads, then a storage listing |
@@ -975,7 +984,7 @@ Versions were read from docs.rs or repositories on 2026-11-11 where stated; "unv
 | `mp4parse` / `symphonia` / `mp4` | unverified | believed MPL-2.0 / MPL-2.0 / unverified | unverified | Container probe; choose one in the spike |
 | `gstreamer-rs` | unverified | Bindings unverified; GStreamer core LGPL | Active | Linux native playback, optional, loaded at run time |
 | `objc2`, `windows` | unverified | unverified | Active | AVFoundation and Media Foundation bindings |
-| FFmpeg (operator-run process only) | n/a | LGPL 2.1+ or GPL, by build | n/a | Optional external transcoder, never linked |
+| FFmpeg (operator-run process only) | n/a | LGPL 2.1+ or GPL, by build | n/a | Optional external converter, never linked |
 | Not used: `timingsrc` | n/a | LGPL-3.0 | Group closed 2025 | Ideas only |
 | Not used: `ttf-parser` | n/a | MIT OR Apache-2.0 | Maintenance mode; recommends Fontations | |
 
@@ -1009,27 +1018,27 @@ statically.
   WebSocket at all. Both 04 and 05 use the same offset.
 - **06.** Needs from media, and gets: decoded images as tiles at the mip levels above (tile size 512, levels
   `0..=K`), with the maximum texture size taken from the active back end (a tile never exceeds 512, so only back
-  ends with a smaller limit are affected); font bytes for a per-script fallback set that includes an emoji font; and
-  storage for overview-picture blobs (ordinary hash-named blobs, written by the headless renderer through the same
-  `BlobStore` and listed in the `PicTile { octave, tx, ty }` table that 03 holds, read with the same grants, and
-  kept live while that table or a retained copy of it lists them). It supplies `ExtentOracle` for images and videos
-  from their stored `size`. It draws tiles, blends levels while zooming, magnifies pixels with its chosen filter,
-  clips quads to the visible rectangle, draws video through the per-back-end path in Video (WebGPU, WebGL2, CPU),
-  owns text layout and shaping, language-tagged runs, the *use* of the fallback chain defined here, and re-layout
-  when a font arrives. It draws the blob-status badges.
+  ends with a smaller limit are affected); font bytes for the Latin builtin set (no per-script fallback fonts and no
+  emoji font at first release); and storage for overview-picture blobs (ordinary hash-named blobs, written by the
+  headless renderer through the same `BlobStore` and listed in the `PicTile { octave, tx, ty }` table that 03 holds,
+  read with the same grants, and kept live while that table or a retained copy of it lists them). It supplies
+  `ExtentOracle` for images and videos from their stored `size`. It draws tiles, blends levels while zooming,
+  magnifies pixels with its chosen filter, clips quads to the visible rectangle, draws video through the
+  per-back-end path in Video (WebGPU, WebGL2, CPU), owns text layout and shaping, the *use* of the fallback chain
+  defined here, and re-layout when a font arrives. It draws the blob-status badges.
 - **07.** The platform API gains: an HTTP client with `Range`, streaming `PATCH` upload and cancellation
   (design.md's platform table lists only a WebSocket for Network); the `PlatformVideoPlayer` defined in this section
   (07 refers to it and keeps no sketch of its own); a persistent file store for pending uploads and the tile cache;
   user-activation awareness on the web; an unmute control in the shared controls. 07's package list includes
   `everink-media`.
-- **08.** Holds the single limits table (adopting the member figures here, with stricter guest figures), who may
-  upload, the upload-grant and blob-grant definitions (HMAC-SHA-256, the `/b/` and `/o/` paths) and key rotation,
-  the upload grant (bound to user, surface, blob and size, valid until the session ends and for at most 24 hours,
-  checked against the revoked-session list on every upload request), the 60-second presigned-address gap in its
-  threat table, the cap on blob ids per grant request, the CORS origin list and the separate media site, the one
-  list of response headers (presigned mode must set the same ones, else proxy mode), the rows "set by section 05"
-  that mirror this section's server-enforced limits, MPL-2.0 on its licence allow-list for the container probes,
-  freezing of guests (frozen guests keep read access and lose upload grants), whether libraries may be shared across
+- **08.** Holds the single limits table (adopting the figures here), who may upload, the upload-grant and blob-grant
+  definitions (HMAC-SHA-256, the `/b/` and `/o/` paths) and key rotation, the upload grant (bound to user, surface,
+  blob and size, valid until the session ends and for at most 24 hours, checked against the revoked-session list on
+  every upload request), the 60-second presigned-address gap in its threat table, the cap on blob ids per grant
+  request, the CORS origin list and the separate media site, the one list of response headers (presigned mode must
+  set the same ones, else proxy mode), the rows "set by section 05" that mirror this section's server-enforced
+  limits, MPL-2.0 on its licence allow-list for the container probes, suspension of the people who came through an
+  invite link (they become viewers, keep read access and lose upload grants), whether libraries may be shared across
   tenants (assumed not, or by copy), and global rate limits. It requires, and this section states: images re-encoded
   and never served as uploaded, SVG refused, `nosniff`, attachment for originals, a sandboxing CSP, a cross-origin
   resource policy, server-computed hashes, unreferenced uploads cleaned after 24 hours, and no unsandboxed
@@ -1037,28 +1046,20 @@ statically.
 
 ## Questions for the owner
 
-1. **Animated pictures.** Refuse (this design), or convert animated GIF and WebP to a looping silent video at paste
-   time? Conversion adds a transcoder and storage for something people paste often.
-2. **SVG.** Never stored as an image (this design). Should a later release import SVG as editable Everink objects?
-   It suits unlimited zoom but is a feature with its own bounds.
-3. **Video that is not H.264/AAC or VP9/Opus** (iPhone HEVC, ProRes, MKV). Refuse, or allow an operator-run external
-   `ffmpeg`? The second makes pasting from a phone work and puts codec licensing on the operator.
-4. **Default limits** (50 MiB images, 128 megapixels, 2 GiB video, 20 MiB fonts) and whether **guests** may upload
-   at all. Product and cost decisions; the figures live in section 08's table.
-5. **Custom fonts.** Allow users to upload fonts at all, and honor the font's embedding flag (`fsType`) by refusing
-   restricted ones? This is a legal position as well as a product one.
-6. **Native video decoding in the app process.** Accept it for v1 (this design), or require a sandboxed helper
+Decided on 2026-11-12 and stated in the Design above: animated images are refused in the first version; video
+outside the baseline is refused unless the operator configures an external converter run as a separate sandboxed
+process; originals are downloadable by the owner and editors only; members who can edit may upload TTF and OTF
+fonts, and a font whose embedding flag forbids embedding is refused; text is Latin script only at first, with no CJK
+or emoji fonts shipped; the first app is a whiteboard.
+
+1. **SVG.** Never stored as an image (this design). Should a later release import SVG as editable Everink objects?
+   It is a feature with its own bounds.
+2. **Default limits** (50 MiB images, 128 megapixels, 2 GiB video, 20 MiB fonts). Product and cost decisions; the
+   figures live in section 08's table.
+3. **Native video decoding in the app process.** Accept it for v1 (this design), or require a sandboxed helper
    process before release? Browsers already sandbox decoders.
-7. **Originals.** Serve original files (with their metadata, including GPS) only to members, as attachments (this
-   design), or to everyone who can see the surface?
-8. **Default muted video** for every person until they unmute (this design). Confirm.
-9. **Shipped font families** beyond Inter, and whether a hand-drawn style is wanted.
-10. **CRDT library** (reserved for the owner). Media needs only a per-property last-writer-wins value that is
-    replaced whole (so `PlaybackState` is one value) and a way for the server to act as an author. Both Loro and yrs
-    have maps whose plain values should behave that way, but I did not verify either's API; the spike should check.
-    No other preference follows from media.
-11. **First app** (reserved). A video-heavy first app (a planning wall, a classroom board) raises the priority of
-    HLS and a transcoder; a notebook or whiteboard does not.
+4. **Default muted video** for every person until they unmute (this design). Confirm.
+5. **Which Latin fonts to ship beyond Inter**, and whether a hand-drawn style is wanted.
 
 ## Sources
 
@@ -1095,7 +1096,6 @@ All read 2026-11-11 unless noted. "via search summary" means only a search resul
 - Fontations https://github.com/googlefonts/fontations ; ttf-parser https://github.com/harfbuzz/ttf-parser
 - subsetter https://github.com/typst/subsetter and fontcull https://lib.rs/crates/fontcull (via search summary)
 - Inter https://github.com/rsms/inter
-- Noto CJK licence history https://github.com/notofonts/noto-cjk/blob/main/Sans/README-third_party.md (via search summary)
 - WebGPU `importExternalTexture` https://developer.mozilla.org/en-US/docs/Web/API/GPUDevice/importExternalTexture
 - WebCodecs https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API and https://caniuse.com/webcodecs
 - `requestVideoFrameCallback` https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback

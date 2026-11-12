@@ -8,8 +8,8 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
 idea and research stage: the repository holds only documents (`README.md`, `docs/`), no code, build or tests yet.
-The core language is Rust (owner decision, below). `docs/vision.md` lists the decisions still open (CRDT library,
-which first app); they are the owner's to make.
+The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
+what is still open; those decisions are the owner's to make.
 
 ## Commands
 ```sh
@@ -67,5 +67,21 @@ answers are quoted in https://github.com/vchance/everink/pull/5): unlimited deep
 libraries; video synchronized for everyone; signed tokens and guest share links; the server reads content; toolbars
 and menus shared and built in Rust; named versions. The table is in `docs/design.md` › Owner decisions.
 
-Ask, do not decide: the CRDT library, which first app proves the library, publishing or reserving package names,
-registering domains, and opening the repository to outside contributors.
+Decided (owner Von Chance, 2026-11-11 and 2026-11-12, the fifteen questions of the detailed design asked one at a
+time; the options as offered and the answers are quoted in https://github.com/vchance/everink/pull/7). The table is
+in `docs/design/README.md` › Owner decisions. In short: Everink holds its own server-ordered object map, with a
+CRDT library only for text; the first app is a whiteboard; WebGPU and WebGL2 are supported; the controls toolkit is
+chosen after the spike; an offline edit wins when it arrives; the owner and editors may restore versions; jump and
+follow are on by default with an opt-out; whole-object eraser by default; Latin script and an English interface at
+first; WCAG 2.2 AA for the built-in controls.
+- **No anonymous guests** (2026-11-12). This replaces "guest share links" in the decision of 2026-11-11 above: a
+  share link is an invitation, and the person signs in through the embedding app before it grants anything.
+
+- **A further candidate for the spike** (2026-11-12). The owner asked that a project of theirs be considered in
+  this architecture, to be used only if it makes sense ("we can build out more backends as needed"), and that it
+  stay unnamed in this repository for now ("Keep it unnamed for now"). Its details are kept outside this
+  repository.
+
+Ask, do not decide: which CRDT library edits text, the controls toolkit (after the spike), whether to use, name or
+describe that further candidate here, publishing or reserving package names, registering domains, and opening the
+repository to outside contributors.

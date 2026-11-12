@@ -167,10 +167,10 @@ The document is a map from object id to object. Within an object:
 - Text content is a sequence that merges concurrent typing.
 - Deleting leaves a marker, so a delete and a concurrent edit agree.
 
-The detailed design proposes that Everink holds this map itself, ordered by the server, and uses a CRDT library
-only for the text inside text objects. The reason is that each client holds part of a surface, and none of the
-candidate libraries (Loro, yrs, Automerge) documents a way to sync part of a document. That finding is for the
-spike to confirm, and the choice stays the owner's ([`design/02-document-model.md`](design/02-document-model.md)).
+Everink holds this map itself, ordered by the server, and uses a CRDT library only for the text inside text
+objects (owner decision, 2026-11-12; [`design/02-document-model.md`](design/02-document-model.md)). The reason is
+that each client holds part of a surface, and none of the candidate libraries (Loro, yrs, Automerge) documents a
+way to sync part of a document. The spike still checks that finding, and compares the libraries for text.
 The server may refuse a change outright: one that would put a group inside itself, or that breaks a role or a
 limit. **Undo is per user:** it reverses your own changes and leaves everyone else's alone. There are no locks.
 Other people's selections are shown in their color, which is usually enough to stop two people grabbing the same
@@ -302,19 +302,22 @@ view subscriptions, routes presence, provides the shared clock, and saves a chan
 independent, so many surfaces spread across machines by surface id. The blob store is separate (a directory or any
 S3-style store).
 
-**Who users are** (owner decision 4). Two ways onto a surface:
+**Who users are** (owner decision 4, changed on 2026-11-12: no anonymous guests). Everyone on a surface is
+identified by the app that embeds Everink. There is one way on:
 
-- **A signed token** from the app that embeds Everink, carrying a user id, a display name and a role (owner, editor
-  or viewer). Everink ships no account system of its own.
-- **A share link**, if the surface's owner turns one on, with the role it grants. Anyone with the link joins as a
-  guest under a name they type. Guests get a color and a cursor like anyone else; the owner can turn the link off.
+- **A signed token** from the embedding app, carrying a user id, a display name and a role (owner, editor or
+  viewer). Everink ships no account system of its own.
+- **An invite link** is how someone new is brought in. A surface's owner makes one with a role and an expiry (30
+  days by default). The link grants nothing by itself: the person signs in through the embedding app, the app
+  redeems the invite for them, and they then join with a token like anyone else, under their real name. Everink
+  remembers which link each person came through, so an owner can turn a link off, which ends the access it gave.
 
 **Versions** (owner decision 7). The server takes snapshots as a surface changes and keeps them for a set period
-(start with 30 days). A member with the editor role can save a **named version**, which is kept until deleted;
-guests cannot manage versions. A version can be opened read-only, copied from, or restored. Restoring is itself a
-change, so it can be reversed by restoring the snapshot from just before. Who may restore is a decision for the
-owner; until it is made, only a surface's owner may. This is recovery from accidents, not a recording: the surface
-cannot be replayed stroke by stroke.
+(30 days), fewer as they get older: every one for a day, one an hour for a week, one a day after that. The owner
+and editors can save a **named version**, which is kept until deleted. A version can be opened read-only, copied
+from, or restored. The owner and editors may restore; everyone on the surface is told right after, and the state
+just before is saved first, so a restore can itself be reversed. This is recovery from accidents, not a
+recording: the surface cannot be replayed stroke by stroke.
 
 **Offline.** A client keeps working on the objects it has. Its changes are saved locally and sent on reconnect,
 where they merge by the rules above.
@@ -330,18 +333,17 @@ carries the full review, in [`design/08-identity-and-security.md`](design/08-ide
 | Embedding app | say who a user is and what role they have on its own surfaces, by signing tokens | issue tokens for another app's surfaces |
 | Owner, editor | change the surface within their role | exceed the role, flood the room |
 | Viewer | read | change anything |
-| Guest (share link) | act within the link's role | be who their typed name says they are |
 | Anyone on the network | nothing | read or alter traffic |
 
 What the design does about the ways these can go wrong:
 
 - **Every change is checked by the server** against the sender's role, the surface's limits, and size and rate
-  caps, more strictly for guests. A client is never believed about who it is or what it may do.
-- **A guest's name is a label, not an identity.** Guests are marked as guests on their banner.
-- **Share links** are long random values, grant one role, and can be turned off; turning one off disconnects the
-  guests who came through it. A link is a secret inside an address, and addresses leak through browser history
-  and logs, so the secret sits in the part of the address a browser does not send onward and is exchanged for a
-  session at once.
+  caps. A client is never believed about who it is or what it may do.
+- **Names come from the embedding app,** never from what a person types into Everink.
+- **Invite links** are long random values, carry one role, expire, and can be turned off; turning one off ends
+  the access of the people who came through it. A link is a secret inside an address, and addresses leak through
+  browser history and logs, so the secret sits in the part of the address a browser does not send onward, and it
+  is worth nothing without a sign-in.
 - **Tokens** expire and are bound to one tenant (one embedding app) and one surface. The server trusts only the
   keys configured for that tenant, so one app's tokens are worthless on another's surfaces. Keys are rotated by
   overlap and tokens revoked by a per-tenant cut-off time.
@@ -360,11 +362,12 @@ What the design does about the ways these can go wrong:
   request, where someone is working, and repeated jumps amount to following them. That is accepted for people
   sharing a surface, and a person can turn off being found this way.
 - **Local copies stay on the machine.** The cache and offline changes are on disk or in browser storage. Signing
-  out or leaving a guest session clears them.
+  out clears them.
 
 Left open and accepted: the operator can read everything; anyone on a surface can find out where anyone else on it
-is working; and a person with an editor link can deface a surface until the link is turned off. The remedies for
-the last are an owner's "delete everything by this guest or link", freezing guests, and versions.
+is working; and a person invited as an editor can deface a surface until the link is turned off. They are
+identified, which anonymous guests would not have been. The remedies are an owner's "delete everything by this
+person or link", suspending the people who came through a link, and versions.
 
 ## When things fail
 
@@ -434,7 +437,7 @@ Each step is usable on its own and is the unit the detailed designs will follow.
 |---|---|
 | 0. Spike | One stroke type, two clients, a server, native and web, with level-and-cell positions. Picks the CRDT library and measures the targets. |
 | 1. Single-user canvas | Camera with unlimited pan and zoom, ink, shapes, select, move, undo, saved locally, first toolbars, the text-entry bridge. |
-| 2. Shared surface | Whole-surface sync, cursors with names and colors, live ink, tokens and share links. |
+| 2. Shared surface | Whole-surface sync, cursors with names and colors, live ink, tokens and invite links. |
 | 3. View-scoped sync | Server spatial index across levels, view subscriptions, cursor routing by view, client cache, jump to person. |
 | 4. Text, images, libraries | Text editing, paste and drop, blob store and media worker, built-in and user libraries. |
 | 5. Bounded surfaces, roles, versions, offline | Surface limits, owner/editor/viewer, named versions, reconnect merge. |
@@ -450,12 +453,14 @@ https://github.com/vchance/everink/pull/5.
 | 1 | Zoom | Unlimited deep zoom |
 | 2 | Libraries of pre-drawn objects | Both: a built-in set and libraries users make |
 | 3 | Video playback | Synchronized for everyone |
-| 4 | Who users are | Both: signed tokens from an embedding app, and guest share links |
+| 4 | Who users are | Signed tokens from an embedding app. Guest share links were dropped on 2026-11-12: a link is now an invitation that needs a sign-in |
 | 5 | The server reads content | Yes |
 | 6 | Toolbars and menus | Shared, built once in Rust |
 | 7 | History | Named versions |
 
-Still open from `vision.md`: the CRDT library, and which first app proves the library.
+The fifteen decisions on the detailed design (2026-11-11 and 2026-11-12) are listed in
+[`design/README.md`](design/README.md) › Owner decisions. Among them: the first app is a whiteboard, and Everink
+holds its own object map with a CRDT library only for text. Still open: which library edits text.
 
 ## The detailed design
 

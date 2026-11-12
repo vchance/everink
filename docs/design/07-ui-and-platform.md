@@ -7,7 +7,8 @@ Status: detailed design, 2026-11-11, proposal.
 This section covers everything between the core and the person (or the embedding app) that is not the drawing of the
 surface itself:
 
-- the shared controls (toolbars, pickers, dialogs, menus) in `everink-ui`, and the choice of toolkit for them;
+- the shared controls (toolbars, pickers, dialogs, menus) in `everink-ui`, and the two toolkit candidates the spike
+  compares;
 - the platform API, the contract between the core and a shell, and how the core stays free of input and output;
 - the two shells, native desktop (`everink-native`) and web (`everink-web`): windowing, event loop, input,
   clipboard, drag-and-drop, local storage, packaging;
@@ -18,7 +19,7 @@ surface itself:
 
 It leaves to other sections: positions, camera and zoom arithmetic (01); the document model, merge and undo (02);
 the sync protocol, server and server storage (03); presence and cursors (04); media decoding, fonts and the blob
-store (05); drawing, ink, text layout and the GPU renderer (06); tokens, roles, share links, limits and the threat
+store (05); drawing, ink, text layout and the GPU renderer (06); tokens, roles, invite links, limits and the threat
 model (08). Where this section needs something from them it says so under "What this assumes of other sections".
 
 Terms. A **shell** is the platform-specific program around the core: it owns the window or canvas element and talks
@@ -38,8 +39,8 @@ gets for free, and Everink must rebuild each item:
    accessibility API, and the web has a fourth (ARIA in the DOM). Without an explicit description every control and
    object is invisible to people who use one.
 2. **Text entry is not free.** Only a real text field gets IME, spell-check, autofill, the emoji picker, handwriting
-   and the on-screen keyboard. Text objects and every single-line field (hex color, guest name, version name,
-   library search) depend on one bridge.
+   and the on-screen keyboard. Text objects and every single-line field (hex color, version name, library search)
+   depend on one bridge.
 3. **Many input devices.** Pointer input is mouse, touch or pen. Pens carry pressure (0 to 1) and tilt, and a
    browser may merge several samples into one event (a 240 Hz pen into a 60 Hz event loop). A trackpad pinch is a
    wheel event with a modifier flag in Chromium and Firefox but separate gesture events in Safari (unverified,
@@ -47,9 +48,11 @@ gets for free, and Everink must rebuild each item:
 4. **The browser is single-threaded and refuses to block.** Anything that waits must be asynchronous, and some
    actions only work inside a user-gesture handler (showing the on-screen keyboard, reading the clipboard, starting
    sound).
-5. **Graphics support varies by browser and changes by release.** This section cites no browser's WebGPU status. 06
-   covers browsers without WebGPU with a fallback chain (`vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`,
-   behind its `Backend` trait), so the shell never assumes WebGPU: it asks the renderer which backend it got.
+5. **Graphics support varies by browser and changes by release.** This section cites no browser's WebGPU status.
+   Owner decision, 2026-11-12: the WebGPU and WebGL2 paths are supported and tested; the processor-only path is best
+   effort (it must open and work, slowly, and is not tuned or tested as a full experience). 06 provides the fallback
+   chain (`vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind its `Backend` trait), so the shell never
+   assumes WebGPU: it asks the renderer which backend it got.
 6. **Embedding.** Goal 4 means an embedder has its own page, headers, content security policy and accessibility
    story. Requiring special headers or a whole window would make Everink hard to embed.
 
@@ -109,7 +112,7 @@ text stack" means controls and canvas use one shaper and font set (Parley, 06's 
 
 | Option | Version, license | wgpu native + browser | Shares surface and text stack | Accessibility | Text input and IME | Verdict |
 |---|---|---|---|---|---|---|
-| egui | 0.37.0, MIT OR Apache-2.0 | Yes both; `egui-wgpu` draws into a host pass | Surface yes; text stack no (own, not Parley) | AccessKit on Windows and macOS per README [2]; none on web but an experimental reader | Hidden `<input>` on web [9]; known web and mobile issues | Fastest start; fails shared text and web a11y |
+| egui | 0.37.0, MIT OR Apache-2.0 | Yes both; `egui-wgpu` draws into a host pass | Surface yes; text stack no (own, not Parley) | AccessKit on Windows and macOS per README [2]; none on web but an experimental reader | Hidden `<input>` on web [9]; known web and mobile issues | **Candidate 2**, carried into the spike |
 | Xilem / Masonry | 0.4.0, Apache-2.0 | Native yes; browser only through DOM backend [3] | Same family as Vello and Parley, but owns its window and loop | AccessKit, native | Parley IME to-do [14] | Fits the stack best; too early, no canvas-web path |
 | Iced | 0.14.0, MIT | wgpu yes; web path uncertain [23] | Own renderer and text | AccessKit on a fork | Unverified on web | Reject |
 | Floem | 0.2.0, MIT | Native only [15] | No | Not stated | Not stated | Reject (no web) |
@@ -117,21 +120,39 @@ text stack" means controls and canvas use one shaper and font set (Parley, 06's 
 | GPUI | 0.2.2, Apache-2.0 | Own renderer; web new [13] | Owns its renderer | Not read | Unverified | Reject |
 | Dioxus Native / Blitz | 0.3.0-beta.4, MIT OR Apache-2.0 | Vello based; web unclear [15] | Vello and Parley yes; large CSS engine | AccessKit a goal | Unclear | Reject for now; heavy for ten dialogs |
 | Slint | 1.18.1, GPL-3.0 OR royalty-free (disclosure) OR commercial | Yes | Own renderer | AccessKit | Yes | Reject: not MIT OR Apache-2.0 and passes conditions to embedders |
-| Purpose-built retained UI on Everink's renderer | ours, MIT OR Apache-2.0 | Whatever 06 gives | Yes, both, by construction | Emits `accesskit::TreeUpdate` | Reuses the canvas text bridge | **Chosen** |
+| Purpose-built retained UI on Everink's renderer | ours, MIT OR Apache-2.0 | Whatever 06 gives | Yes, both, by construction | Emits `accesskit::TreeUpdate` | Reuses the canvas text bridge | **Candidate 1**, carried into the spike |
 
-Three facts decide. First, the control set is small (button, toggle, slider, swatch grid, color area, list, tab
-strip, popover, modal, tooltip, single-line text field, menu); a general toolkit's layout engine, theme system and
-widget catalog would be used a tenth of the way. Second, Everink must build the text-entry bridge for canvas text
-anyway; a toolkit's own IME saves only its own fields, and a second IME path means a second test matrix on every OS.
-Third, web accessibility is the hard part and no candidate has it: AccessKit has no web adapter [4], so Everink
-writes the DOM mirror itself, and a mirror written from AccessKit's tree type accepts any toolkit that emits that
-type.
+**The toolkit is not chosen yet** (owner decision, 2026-11-12). The step-0 spike builds the same toolbar (tool
+palette, color swatches, undo and redo, zoom indicator) and the same single-line text field (the hex field) twice,
+and the choice is made on the result. Both sit behind the `Controls` trait (below), so the rest of the system does
+not change with the outcome. The other toolkits in the table are rejected for the reasons shown: Xilem/Masonry has
+no canvas-web path, Iced, Floem, Makepad and GPUI fail on web or on their own renderer, Blitz is heavy for about a
+dozen widgets, and Slint's license is not MIT OR Apache-2.0 and would pass its conditions to every embedder.
 
-Given up: speed to a first toolbar (egui would have one in days), a mature focus and layout model, free bug fixes,
-and some risk of wrong widget behavior (focus traps, scroll containers, popover placement). Mitigation: `everink-ui`
-meets the rest of the system through one trait, `Controls` (below); egui can sit behind it for the plain controls,
-at the price of two text stacks. The step-0 spike builds the tool palette, the zoom indicator and a hex field on the
-real renderer to find out. Layout uses `taffy` (MIT, 0.15.1 [1]).
+- **Candidate 1: Everink's own small toolkit.** A retained widget tree laid out by `taffy` (MIT, 0.15.1 [1]),
+  painted through 06's scene API and shaped with 06's text service, emitting `accesskit::TreeUpdate`, reusing the
+  canvas text bridge for its text fields. The control set is small (button, toggle, slider, swatch grid, color area,
+  list, tab strip, popover, modal, tooltip, single-line text field, menu). Cost: Everink writes focus handling,
+  scroll containers and popover placement itself.
+- **Candidate 2: egui** (0.37.0, MIT OR Apache-2.0 [1]) with `egui-wgpu` drawing into a host render pass, behind
+  `Controls`. Cost: its own text stack (not Parley), AccessKit coverage that its README lists as native Windows and
+  macOS only [2], and a hidden `<input>` text agent on the web with open issues [9].
+
+What each must show in the spike, on the same fixed scope, measured and written into this section:
+
+| Criterion | What must be shown |
+|---|---|
+| Accessibility on desktop | The toolbar and the field reach UI Automation, NSAccessibility and AT-SPI with correct roles, names and states, checked with a screen reader on each |
+| Accessibility on the web | The tree reaches the DOM mirror (Everink writes the mirror for either candidate, since AccessKit has no web adapter [4]) with the same roles and names; keyboard operation and visible focus work |
+| Text composition | Latin accent composition (dead keys) works in the field on macOS, Windows and the web without the preedit being rewritten; a CJK preedit smoke test is recorded for later work |
+| One text stack or two | Whether the controls shape text with the same shaper and fonts as canvas text; if two stacks, the measured difference in glyph shapes and metrics |
+| Wasm size | The brotli and raw size added by the toolbar and field over the baseline build, against the budget under Packaging |
+| Effort | Person-days to reach the fixed scope, lines of code, and the widget behaviors still missing (focus trap, scroll, popover placement) |
+| Frame cost | Layout, painting and accessibility update within the 1 ms per frame planning figure |
+| Maintenance and license | Both are MIT OR Apache-2.0 today; release cadence and breaking-change history over the spike period |
+
+The owner also asked that a project of theirs be considered where it makes sense; it is evaluated in the spike, its
+details are kept outside this repository, and nothing here depends on it until then.
 
 ### Windowing and event loop
 
@@ -139,7 +160,7 @@ real renderer to find out. Layout uses `taffy` (MIT, 0.15.1 [1]).
 |---|---|---|---|
 | winit everywhere | yes, 0.31 beta | `winit-web` exists [12] | One loop type; web IME, pen tilt and DOM access limited and unverified |
 | winit native, direct `web-sys` on the web | yes | own DOM code | More code; full control of IME, pointers, clipboard, mirror and the container |
-| A toolkit's loop (eframe, Masonry) | per toolkit | per toolkit | Ties the shell to a toolkit: rejected with the toolkit |
+| A toolkit's loop (eframe, Masonry) | per toolkit | per toolkit | Ties the shell to a toolkit: not used, whichever toolkit wins |
 
 Chosen: winit natively with `accesskit_winit`, direct `web-sys` on the web. The web shell must mount into an element
 the embedder supplies, and must own the textarea, the mirror, `getCoalescedEvents` and the clipboard events; winit's
@@ -285,8 +306,8 @@ pub trait SurfaceHost {
 }
 
 pub trait Transport {                          // the one WebSocket per surface (03 owns the protocol)
-    /// Opens the socket; `url` carries no secret. The first frame the core sends is `auth { token }` (members) or
-    /// `auth { ticket }` (guests, from the link exchange) as 08 defines it; the shell never puts either in the address.
+    /// Opens the socket; `url` carries no secret. The first frame the core sends is only `auth { token }`, as 08
+    /// defines it; the shell never puts the token in the address.
     async fn connect(&mut self, url: &str, subprotocol: &str) -> Result<(), NetError>;
     fn send(&mut self, frame: &[u8]) -> Result<(), NetError>;   // binary frame; never blocks
     fn buffered_amount(&self) -> u64;          // bytes queued, not yet on the wire
@@ -310,7 +331,7 @@ pub trait Storage {                             // see "Local storage"
     async fn blob_get(&self, hash: BlobHash, range: Option<Range<u64>>) -> Result<Option<Vec<u8>>, StorageError>;
     async fn usage(&self) -> StorageUsage;     // used bytes, quota if known, whether persistence was granted
     async fn request_persistence(&self) -> bool; // web: navigator.storage.persist(); native: true
-    async fn clear_all(&self, identity: IdentityScope) -> Result<(), StorageError>;   // sign-out, guest exit
+    async fn clear_all(&self, identity: IdentityScope) -> Result<(), StorageError>;   // sign-out
 }
 
 pub trait Clipboard {
@@ -530,15 +551,26 @@ text-input and on winit's coverage, which is unverified and on the manual list. 
 second `TextBridge` (attach to the canvas, answer `characterboundsupdate`, apply `textformatupdate`), falling back
 to the textarea.
 
-**The bridge is needed in build step 1**, not step 4: the hex field of the color picker is a text field. The
-guest-name field (step 2) and version name and library search (later) reuse it; the text-formatting bar does not
-need it.
+**Scripts (owner decision, 2026-11-12).** Text on the surface supports Latin script only at first release; other
+scripts and emoji show as missing-glyph boxes until support is added, and no CJK or emoji fonts are shipped or
+fetched. The bridge still carries Latin accent composition (dead keys, which produce a preedit). Composition for
+other scripts (Chinese, Japanese, Korean, and the Windows and Linux input method frameworks) is kept in this design
+as later work: the `TextInputState` and `TextEvent` shapes already support it, and only its test matrix and fonts
+are deferred. The interface is English with every string in one table (`Strings`, keyed by stable ids, from the
+first commit); right-to-left layout is designed for (layout uses logical start and end, and a mirroring flag exists)
+and not shipped.
+
+**The bridge is needed in build step 1**, not step 4: the hex field of the color picker is a text field. The version
+name and library search fields (later) reuse it; the text-formatting bar does not need it.
 
 ### Controls: the toolkit
 
-`everink-ui` is a retained tree of widgets in an arena, laid out by `taffy`. It paints through **06's scene API into
-the same frame as the canvas** and shapes text with **06's shared text service (Parley)**, so controls and canvas
-share one renderer and one text stack. Each widget produces an `accesskit::Node`.
+The first app is a whiteboard with about 50 active people per surface as the planning figure (owner decision,
+2026-11-12), and the control list is written for one. Whichever candidate wins, `everink-ui` meets the system
+through the `Controls` trait below and paints through **06's scene API into the same frame as the canvas**.
+Candidate 1 also shapes text with **06's shared text service (Parley)**, so controls and canvas share one renderer
+and one text stack, and builds a retained widget tree in an arena laid out by `taffy`; every widget produces an
+`accesskit::Node`. Candidate 2 produces the same `UiFrame` from egui's output.
 
 ```rust
 pub trait Controls {
@@ -558,12 +590,13 @@ pub struct UiContext<'a> { pub commands: &'a mut Vec<Command>, pub announce: &'a
 - **Input order.** Controls see pointers first; a hit or pointer capture keeps the canvas from seeing the event.
   Keyboard events go to the focused control, else the canvas. Controls live in screen pixels and know nothing of the
   position system (01).
-- **Layout.** Docked panels (tool palette at an edge, top bar), popovers (pickers, menus), modals (share, versions).
-  Under 600 CSS px (a starting value) the palette becomes a bottom bar and modals go full width. UI scale is the OS
-  or browser scale times a user setting (80 to 200 percent). Targets are at least 24 by 24 CSS px, 44 by 44 on
-  touch.
+- **Layout.** Docked panels (tool palette at an edge, top bar), popovers (pickers, menus), modals (invite,
+  versions). Under 600 CSS px (a starting value) the palette becomes a bottom bar and modals go full width. UI scale
+  is the OS or browser scale times a user setting (80 to 200 percent). Targets are at least 24 by 24 CSS px, 44 by
+  44 on touch.
 - **Theme** is a struct of tokens (below), defaulting to the OS appearance, reduced motion and forced colors from
-  `Event::Appearance`. A UI script the shipped fonts lack loads a font from the blob store (05).
+  `Event::Appearance`. No font is fetched for the interface; it is English, and right-to-left layout is designed for
+  and not shipped.
 - **Focus.** One focus order per panel; `Tab` moves between panels and controls; arrow keys move inside a group
   (palette, swatches, menus) as the WAI-ARIA authoring practices describe (unverified here, confirmed per widget);
   `Escape` closes the topmost popover or modal and returns focus; modals trap focus. The canvas is one tab stop and
@@ -579,9 +612,8 @@ pub struct UiContext<'a> { pub commands: &'a mut Vec<Command>, pub announce: &'a
 | Zoom and level indicator, zoom in/out, reset to home, "fit content" | 1 | "Level 3, 12x" (wording from 01); announced on change, rate-limited; tells a person where they are in an unbounded space |
 | Context menu (copy, paste, delete, duplicate, order, group) | 1, grows | Right click, long press or the `Menu` key |
 | Connection status | 2 | Online, reconnecting, offline with N unsent changes |
-| Share dialog (owner only): create or revoke link, role, copy link, guest list | 2 | Content from 08 |
-| Guest-name prompt (single-line field) | 2 | |
-| People list (name, color, guest mark); "jump to" | 2; jump 3 | Panel fed by 04's people data |
+| Invite dialog (owner): make an invite link with a role (viewer or editor) and an expiry (30 days by default), see who came through it, turn it off, suspend its people | 2 | Content from 08; the link address is handed to the embedding app, never opened by Everink |
+| People list (name, color), "jump to", the opt-out of being located, and who follows whom | 2; jump and follow 3 | Panel fed by 04's people data |
 | Saved places list; "more here if you zoom in" markers | 3 | The markers are overlay (06) |
 | Text formatting bar (font, size, weight, color, alignment) | 4 | Follows the selected text object |
 | Library browser (built-in and user libraries; search; drag out; save selection as template) | 4 | Thumbnails from 06 |
@@ -651,9 +683,12 @@ names for icon buttons; 1.3.1 and 4.1.2 roles, names, states; 1.4.3 and 1.4.11 c
 states, per theme); 1.4.4 and 1.4.10 UI scale to 200 percent; 1.4.13 dismissible tooltips; 2.1.1 and 2.1.2 keyboard,
 no trap; 2.4.3 and 2.4.7 focus order and visible focus; 2.4.11 focus not obscured (the camera keeps a selection out
 from under panels); 2.5.1 pinch has a single-pointer alternative (zoom buttons); 2.5.7 dragging alternatives; 2.5.8
-target size 24 by 24 CSS px; 3.3.7 no redundant entry; 3.3.8 no password or puzzle (a guest types a name only); no
-flashing, and animation respects reduced motion. The first release claims: built-in controls designed to WCAG 2.2
-AA, and the drawing activity has the limits above. Publishing a conformance statement is the owner's call.
+target size 24 by 24 CSS px; 3.3.7 no redundant entry; 3.3.8 no password or puzzle (Everink asks for none; sign-in
+belongs to the embedding app); no flashing, and animation respects reduced motion. **Commitment (owner decision,
+2026-11-12).** The built-in controls meet WCAG 2.2 AA: keyboard operation, screen-reader labels, contrast and focus.
+The canvas exposes a selection summary and a list of objects in view, and objects can be moved and resized from the
+keyboard. Freehand drawing has no keyboard equivalent, and a published statement says so. The criteria above are
+what this commitment binds the controls to; the statement is published after the first screen-reader pass.
 
 ### Clipboard and drag-and-drop
 
@@ -708,25 +743,42 @@ Namespaces: `doc` (change-log chunks and snapshots per surface, 03), `outbox` (c
   cannot fit, the UI says "Unsaved changes cannot be kept offline; stay connected"; (5) Safari's cap on
   script-written storage for sites not visited for a while (7 days) is unverified and on the test list, as it
   affects offline claims.
+- **A stroke in progress when the connection or the app dies** (owner decision, 2026-11-12: nothing is lost unless
+  the device itself is lost). Drawing never needs the network: the stroke carries on locally and the preview fades
+  on other screens (04). While a stroke is being drawn, online or offline, the points so far are saved to the
+  durable `outbox` at most every 250 ms (a starting value), as an unfinished-stroke record. When the pen lifts the
+  core replaces that record with the finished stroke as a normal `Change`, which is sent as usual, or on reconnect.
+  If the app or tab dies first, the next start finds the unfinished record, finishes the stroke as if the pen had
+  lifted, and sends it once (the record and the change share one `ClientChangeId`, so a repeat is refused by 03's
+  per-client resubmission check). At most the last 250 ms of a stroke can be lost. The server never commits a stroke
+  on someone's behalf.
 - **Contract.** All implementations (memory, redb, IndexedDB, OPFS) pass one test suite; memory is also what the
   server's headless core uses.
-- **Sign-out and guest exit.** `Command::SignOut { force }` first tries to send the outbox. If changes remain
-  unsent, and the connection is down or refused, the core emits `Notification::UnsentChanges(count)` and does
-  nothing more until the embedder or person confirms with `force: true` (a warning in the UI; an embedder decides in
-  its own). After that, or when the outbox is empty, it calls `clear_all` for that identity: every namespace and
-  every blob file, plus any in-memory token. A guest's data lives under a random per-session scope.
+- **Sign-out.** `Command::SignOut { force }` first tries to send the outbox. If changes remain unsent, and the
+  connection is down or refused, the core emits `Notification::UnsentChanges(count)` and does nothing more until the
+  embedder or person confirms with `force: true` (a warning in the UI; an embedder decides in its own). After that,
+  or when the outbox is empty, it calls `clear_all` for that identity: every namespace and every blob file, plus any
+  in-memory token.
 
 ### Network and token supply
 
 The shell implements `Transport` (browser `WebSocket`; native `tokio-tungstenite` 0.30.0 [1] with rustls) and
 `HttpClient` (`fetch`; native `reqwest` or `hyper`, not evaluated). It reports `Opened` and `Closed(code)`;
 reconnect timing is the core's, jittered and persisted across restarts as needed by 03. Tokens (08): the embedder
-supplies an async `TokenProvider`, called at connect and when a token is about to expire (effect `GetToken`). A
-share link is read by the shell from the page address; **at mount, before any `await`, the shell removes the
-fragment from the visible address (`history.replaceState`)** and passes the secret to the core as
-`Command::JoinWithLink(secret)` (Rust: `join_with_link`). The exchange is 08's. Size and rate limits (message sizes,
-upload sizes, clipboard payload) are in 08's limits table; this section names them and carries no numbers of its
-own.
+supplies an async `TokenProvider`, called at connect and when a token is about to expire (effect `GetToken`). There
+are no anonymous guests (owner decision, 2026-11-12): everyone is identified by the embedding app, and the first
+frame on the socket is only `auth { token }`. An invite address, if the page address carries one, is not used by
+Everink: **`take_invite_secret()` (section 08's name) removes the fragment from the visible address
+(`history.replaceState`) and returns the secret**. A page usually reads the secret before it has a token, so the
+embedding app can call `take_invite_secret()` itself before Everink is mounted; the shell also calls it at mount,
+before any `await`, as a safeguard. `Notification::InviteReceived` is the convenience for a page that mounts Everink
+first: the shell hands it the secret. In both cases the app signs the person in, redeems the invite with Everink
+(08) and issues connect tokens that carry the granted role and the link's id. The embedding app has two further
+duties when it supplies tokens, which 08 defines: when it redeems an invite it tells Everink whether the person
+already has access it granted directly (`has_direct`), and the first time it grants direct access to a person who
+came only through a link, the token it issues carries `direct: true`; otherwise Everink refuses that token. Size and
+rate limits (message sizes, upload sizes, clipboard payload) are in 08's limits table; this section names them and
+carries no numbers of its own.
 
 ### The embedding API
 
@@ -745,8 +797,12 @@ pub enum Command {
     InsertText(String), InsertImage(ImageSource),
     SaveVersion { name: String }, OpenVersion(VersionId), RestoreVersion(VersionId), CloseVersion,
     SetReadOnly(bool),                       // embedder-side only; can only lower what the token allows
-    SetUiVisibility(UiVisibility), SetTheme(Theme), SetLocale(String), SetShortcuts(ShortcutMap),
-    Connect, Disconnect, JoinWithLink(String), SetDisplayName(String), SignOut { force: bool },
+    SetUiVisibility(UiVisibility), SetTheme(Theme), SetLocale(String) /* "en" only at first */, SetShortcuts(ShortcutMap),
+    Connect, Disconnect, SignOut { force: bool },
+    Invite(InviteCommand),                   // Create{role, expires, max_redemptions, label}, TurnOff(LinkId),
+                                             // ChangeLink{link, label, role, max_redemptions, expires}, ListPeople(LinkId),
+                                             // SuspendPeople(LinkId), ResumePeople(LinkId), RemovePerson{link: LinkId, user: UserId},
+                                             // DeleteBy(DeleteFilter)  // DeleteFilter::{ByUser(UserId), ByLink(LinkId)}
     Export(ExportRequest),                   // image of the view or selection, via 06
 }
 #[non_exhaustive]
@@ -756,6 +812,7 @@ pub enum Notification {
     HistoryChanged { can_undo: bool, can_redo: bool },
     Connection(ConnectionState), Peers(Vec<PeerSummary>), SyncStatus { unsent: usize }, UnsentChanges(usize),
     TokenNeeded, Error(EverinkError), ExportReady(ExportId, Vec<u8>),
+    InviteReceived(String), InviteCreated(String),  // the address is for the embedding app
     LinkOpened,                              // a link in a text object was activated; the embedder decides
 }
 ```
@@ -774,7 +831,7 @@ const ink = await Everink.mount(containerElement, {
   server: "wss://draw.example.com",                  // no default
   surface: "surface-id",
   getToken: async () => fetchTokenFromMyBackend(),   // 08 defines the token; the embedder signs it
-  ui: { controls: "full" | "minimal" | "none", hide: ["share", "versions"], accessibility: "auto" | "on" },
+  ui: { controls: "full" | "minimal" | "none", hide: ["invite", "versions"], accessibility: "auto" | "on" },
   theme: { mode: "auto" | "light" | "dark", tokens: {...} },
   locale: "en",
 });
@@ -787,7 +844,7 @@ ink.destroy();
   shadow root so host CSS cannot reach the hidden elements.
 - **Hiding controls.** `none` creates no widgets at all; the mirror then holds only the canvas and the objects list,
   and the embedder owns the accessibility of its own controls. `minimal` keeps tool palette, color and undo; `hide`
-  removes controls by stable id (`tools`, `color`, `zoom`, `people`, `share`, `library`, `versions`, `format`,
+  removes controls by stable id (`tools`, `color`, `zoom`, `people`, `invite`, `library`, `versions`, `format`,
   `status`, `menu`). Shortcuts keep working unless `SetShortcuts` removes them. Unlike tldraw and Excalidraw [20], a
   host cannot replace one control with its own component; it can hide all and draw its own.
 - **Theming.** `Theme` tokens: color roles (surface, panel, text, muted text, accent, danger, focus ring, canvas
@@ -857,6 +914,7 @@ Pens live on tablets, so these constrain the first design:
 | IndexedDB or OPFS unavailable (private window, blocked data) | `Storage` falls back to memory; the status says changes will not be kept if the tab closes |
 | Wheel misclassified, or a browser reserves a shortcut | Sticky class and a visible "scroll wheel: zoom or pan" setting; the shortcut table avoids reserved keys and the embedder can disable bindings |
 | Two Everink instances in one page, or an embedder that hides all controls | Each instance has its own shadow root, textarea, mirror and storage scope; with controls hidden, shortcuts and the objects list still work and the embedder owns its controls' accessibility |
+| A stroke is in progress when the connection or the app dies | The stroke continues locally and its preview fades on other screens. Its points are saved to the `outbox` every 250 ms, online or offline; after an app death the next start finishes it as if the pen had lifted and sends it once. At most the last 250 ms is lost; the server never commits a stroke for the author |
 | Sign-out with unsent changes | `UnsentChanges(count)`; nothing is cleared until `force: true` |
 | Token provider fails or is slow | `TokenNeeded`; the surface stays usable offline; sync reconnects when a token arrives |
 
@@ -871,7 +929,10 @@ Pens live on tablets, so these constrain the first design:
 | Pointer, pen and touch | Eight coalesced samples arrive as eight with pressure, tilt and timestamps unchanged; a mouse has `pressure: None`; hover and leave arrive; scripted pen hover plus touch pans and does not draw |
 | Wheel classification | Recorded traces from the listed devices are replayed; 99 percent classified correctly (a starting threshold) |
 | IME on the web | Drive composition through Chromium's remote debugging interface (`Input.imeSetComposition`, unverified): preedit then commit, a cancelled composition, a remote edit during composition; assert the document text and that the textarea is not rewritten mid-composition |
-| IME on desktop and phones | Manual matrix per release: macOS (Japanese, Pinyin, Korean), Windows (Microsoft IME), Linux (IBus, Fcitx 5; X11 and Wayland), iOS Safari and Android Chrome keyboards |
+| IME on desktop and phones | Manual matrix per release for Latin accent composition (dead keys) on macOS, Windows (US-International), Linux (IBus, Fcitx 5; X11 and Wayland), iOS Safari and Android Chrome keyboards; the rows for Japanese, Pinyin and Korean are kept in the list and run when other scripts are added |
+| Toolkit comparison | The spike table under Options is filled for both candidates on the same toolbar and hex field; the choice is recorded with the numbers |
+| Renderer backends | Browser tests run on the WebGPU and WebGL2 paths; the processor-only path has a smoke test that it opens and a stroke can be drawn, with no performance claim |
+| Stroke in progress when the connection or the app dies | Scripted: cut the connection mid-stroke, finish the stroke, restore the connection, and assert one finished stroke arrives once; kill the app mid-stroke while connected, restart, and assert the stroke appears exactly once; kill it offline mid-stroke and assert the journaled points are recovered as a finished stroke |
 | Accessibility tree is complete | Property test over the widget arena: every actionable widget has a role and a non-empty name; every `TreeUpdate` is consistent (no node without parent, stable ids) |
 | Mirror equals the tree and is safe | Snapshot test of `TreeUpdate` to DOM; `axe-core` over the mirror (unverified fit); a fuzz test with names containing markup asserts they appear as text and no element or attribute is injected (the mirror uses `textContent` only) |
 | Screen readers work | Manual pass per release with NVDA, VoiceOver (macOS, iOS), Orca, TalkBack over a fixed script: find tool, change color, hear the objects list, edit text |
@@ -893,7 +954,8 @@ Latest on crates.io on 2026-11-11 [1] unless noted.
 | `accesskit_winit` | 0.34.2 | Apache-2.0 only | Active | Native adapter, `everink-native` only. Compatible with MIT OR Apache-2.0, but the native binary is then distributed under Apache-2.0 terms; library crates must not depend on it |
 | `winit` | 0.31.0-beta.4 (stable 0.30.13) | Apache-2.0 | Active | Native windowing and input; stay on 0.30 until 0.31 is stable |
 | `wgpu` | 30.0.1 | MIT OR Apache-2.0 | Active | GPU access (through 06) |
-| `taffy` | 0.15.1 | MIT | Active | Layout for the retained UI |
+| `taffy` | 0.15.1 | MIT | Active | Layout for candidate 1 |
+| `egui`, `egui-wgpu` | 0.37.0 (`egui-wgpu` unchecked) | MIT OR Apache-2.0 | Active; breaking changes each release [2] | Candidate 2, spike only until the choice |
 | `web-sys`, `js-sys` | 0.3.107 | MIT OR Apache-2.0 | Active | Direct DOM access |
 | `wasm-bindgen`, `wasm-bindgen-cli` | 0.2.130 | MIT OR Apache-2.0 | Active; moved out of rustwasm [18] | Rust to JS boundary and build step; pinned |
 | `wasm-bindgen-futures` | 0.4.80 | MIT OR Apache-2.0 | Active | Futures on the browser's single thread |
@@ -906,11 +968,10 @@ Latest on crates.io on 2026-11-11 [1] unless noted.
 | `parley` | 0.12.0 | Apache-2.0 OR MIT | Active | Via 06: the one text stack |
 | `serde`, `postcard` or `ciborium`, `smallvec` | not checked | MIT OR Apache-2.0 each (unverified) | | Command and clipboard encoding |
 
-Considered and not used: egui 0.37.0 (MIT OR Apache-2.0), xilem and masonry 0.4.0 (Apache-2.0), iced 0.14.0 (MIT),
-floem 0.2.0 (MIT), gpui 0.2.2 (Apache-2.0), makepad-widgets 1.0.0 (MIT OR Apache-2.0), blitz-dom 0.3.0-beta.4 (MIT
-OR Apache-2.0), slint 1.18.1 (GPL-3.0-only OR Slint royalty-free OR Slint commercial; **incompatible with an MIT OR
-Apache-2.0 library** because embedders would inherit its conditions). Test-only tools such as `axe-core` (MPL-2.0,
-unverified) are not shipped.
+Considered and not used: xilem and masonry 0.4.0 (Apache-2.0), iced 0.14.0 (MIT), floem 0.2.0 (MIT), gpui 0.2.2
+(Apache-2.0), makepad-widgets 1.0.0 (MIT OR Apache-2.0), blitz-dom 0.3.0-beta.4 (MIT OR Apache-2.0), slint 1.18.1
+(GPL-3.0-only OR Slint royalty-free OR Slint commercial; **incompatible with an MIT OR Apache-2.0 library** because
+embedders would inherit its conditions). Test-only tools such as `axe-core` (MPL-2.0, unverified) are not shipped.
 
 ## What this assumes of other sections
 
@@ -931,47 +992,35 @@ unverified) are not shipped.
   API.
 - **04 (presence):** cursors, selections and live ink are drawn by the core overlay; the shell supplies pointer,
   hover and leave activity and `Hidden`/`Visible`; this section supplies the people-list panel from 04's data (name,
-  color, guest flag, view summary).
+  color, whether the person can be located, who follows them, view summary).
 - **05 (media):** `HttpClient` with `Range` and streaming `PATCH`, the shell-side implementation of 05's
   `PlatformVideoPlayer` (`open`, `set_rate`, `seek`, `position_us`, `output_latency_us`, `next_frame`; sound blocked
   for lack of user activation is reported as `Completed::AudioBlocked` and the controls then show the unmute
   control), the `uploads` and `tiles` stores, `user_activation()` and the unmute control are provided here; 05
-  defines `DecodeRequest`, `VideoOp`, fonts for non-Latin controls from the blob store, and pasted-media rules.
+  defines `DecodeRequest`, `VideoOp`, and pasted-media rules (no interface fonts are fetched).
 - **06 (rendering):** a scene API for `SceneFragment` painted in the same frame as the canvas; the shared text
   service (Parley); the wgpu device; `request_frame()` and the pen-sample stream (coalesced samples, timestamps)
   delivered by this section; the `desynchronized` canvas it asks for through `live_ink_target`; selection-to-PNG;
   and the `Backend` fallback chain (`vello_gpu` on WebGPU, then WebGL2, then `vello_cpu`).
-- **08 (identity):** the token is an opaque string through `TokenProvider`; the share-link fragment and exchange;
-  `Capabilities` per role for disabling controls; every limit (media, clipboard, message sizes) in its table; what a
-  guest may type as a name; the rules for who may create, delete or restore versions.
+- **08 (identity):** the token is an opaque string through `TokenProvider`; the invite address and its redemption by
+  the embedding app, with connect tokens that carry the link id; `Capabilities` per role for disabling controls;
+  every limit (media, clipboard, message sizes) in its table; the rules for who may create, delete or restore
+  versions.
 
 ## Questions for the owner
 
-1. **Which browsers are supported, and at what level?** 06 gives a fallback chain, but the software and WebGL2 paths
-   are slower. Does the first release promise full performance on WebGPU browsers only, or an equal experience
-   everywhere? Recommendation: promise the WebGPU experience and "works, slower" on the others, and publish the
-   tested browser list with dates.
-2. **How far may embedders customize the controls?** First release: hide-and-command only. Custom toolbar buttons,
+Answered by the owner on 2026-11-11 and 2026-11-12 and now stated in the Design: browser support levels, the first
+app (a whiteboard), the accessibility commitment, interface language and scripts, and the identity model without
+guests. Still open:
+
+1. **How far may embedders customize the controls?** First release: hide-and-command only. Custom toolbar buttons,
    plug-in tools or replaced controls cost a large API surface. Recommendation: wait for the first embedder's
    request.
-3. **The first app** (reserved). Recommendation: a whiteboard; the control list and accessibility plan are written
-   for one. A notebook would need document-style text editing in step 1, and a planning surface needs structured
-   objects not yet designed.
-4. **The CRDT library** (reserved). This section does not depend on it: the text bridge needs only windowed text and
-   caret mapping (02).
-5. **Accessibility commitment.** Aim for WCAG 2.2 AA on the controls and publish a limited statement ("controls
-   conform; freehand ink is a pointing activity") after the first screen-reader pass? A published statement has
-   legal weight in some places. Recommendation: yes, limited.
-6. **Languages.** English only first, with every string in one table, or more scripts and right-to-left layout? Each
-   script needs fonts (05) and IME coverage.
-7. **Desktop distribution.** Platforms first, signing identities, store or direct download. Recommendation: macOS
-   and Windows first (pen tablets), Linux as a tarball.
-8. **Mobile and tablets.** When, and native apps or the web build only? Nothing here prevents either.
-9. **Package names and the npm scope** (`@everink/web`, `everink`, `everink-runtime`): the owner's; placeholders
+2. **Desktop platforms and signing.** Platforms first, signing identities, store or direct download. Recommendation:
+   macOS and Windows first (pen tablets), Linux as a tarball.
+3. **Mobile and tablet timing.** When, and native apps or the web build only? Nothing here prevents either.
+4. **Package names and the npm scope** (`@everink/web`, `everink`, `everink-runtime`): the owner's; placeholders
    here.
-10. **Toolkit risk gate.** Accept building the controls on the project's own renderer with the spike as the check,
-    or start on egui behind the same trait and replace it? Recommendation: own renderer. If speed to a first toolbar
-    matters more, egui is the fallback and its costs (two text stacks, no web accessibility) are in Options.
 
 ## Sources
 

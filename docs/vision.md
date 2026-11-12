@@ -96,15 +96,19 @@ existing C++/wasm work and reuses Google's ink code directly.
 
 1. ~~Rust or C++ for the core?~~ Decided: Rust (see Decisions).
 2. Loro or yrs? Loro handles movable trees and reordering well; yrs has the larger ecosystem and hosted servers.
+   Narrowed on 2026-11-12: Everink holds its own object map, so the library is needed only for the text inside
+   text objects. Which one is still open; the spike compares them.
 3. How to shard a CRDT document by tile without breaking cross-tile objects such as long strokes? Proposed answer in
    [design.md](design.md): do not shard by tile; the object is the unit of sync.
 4. Vector only, or vector plus raster tiles for imported images? The owner wants pasted images and possibly video
    (2026-11-11); [design.md](design.md) proposes them as placed objects, with no raster painting.
 5. ~~License: permissive (MIT/Apache-2.0) or copyleft?~~ Decided: MIT OR Apache-2.0 (see Decisions).
-6. Which first app proves the library: a whiteboard, a notebook, or a planning surface?
+6. ~~Which first app proves the library: a whiteboard, a notebook, or a planning surface?~~ Decided: a whiteboard
+   (owner, 2026-11-12).
 
 ## Next steps
 
-1. Decide question 2 with a small Rust spike: one stroke type, two clients, a server, native and web.
+1. Run the spike: one stroke type, two clients, a server, native and web. Its questions are listed in
+   [design/README.md](design/README.md); question 2 above is one of them.
 2. Write requirements with acceptance criteria for the spike.
 3. Measure: stroke latency, merge time, and memory for 100k strokes.

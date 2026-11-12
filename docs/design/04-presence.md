@@ -4,10 +4,10 @@ Status: detailed design, 2026-11-11, proposal.
 
 ## Scope
 
-This section designs the short-lived channel that shows people to each other: cursors with name banners, the
-colors, other people's selections, strokes still being drawn ("live ink"), the who-is-here list, and "jump to" and
-"follow". It covers the wire messages, the server's routing, the smoothing on the receiving side, the timeouts, the
-transport and the limits.
+This section designs the short-lived channel that shows people to each other: cursors with name banners, the colors,
+other people's selections, strokes still being drawn ("live ink"), the who-is-here list, and "jump to" and "follow".
+It covers the wire messages, the server's routing, the smoothing on the receiving side, the timeouts, the transport
+and the limits.
 
 It leaves to other sections:
 
@@ -18,34 +18,36 @@ It leaves to other sections:
 | The sync protocol, authentication handshake, the server's spatial index of objects, the shared clock | 03 |
 | Brush shape, how a stroke outline is drawn, drawing cursors and banners | 06 |
 | Where the who-is-here panel and its accessibility live, pointer events | 07 |
-| Roles, guest rules, token contents, rate limits per role, the threat model | 08 |
+| Roles, invite links, token contents, rate limits per role, the threat model | 08 |
 
 `Position` and `View` are used here as opaque types. Section "What this assumes of other sections" lists the few
 operations on them that this design needs.
 
 A word on terms. A **session** is one connection of one person (one browser tab or one app window); a person with
 two tabs has two sessions. A **tick** is one run of the server's presence loop, every 33.3 ms. A **snapshot** is the
-set of cursor states the server sends one receiver in one tick. **Newest wins** means a message replaces the
-earlier state of the same kind, so a lost message costs nothing once the next arrives.
+set of cursor states the server sends one receiver in one tick. **Newest wins** means a message replaces the earlier
+state of the same kind, so a lost message costs nothing once the next arrives.
 
 ## The problem
 
 Presence has to feel instant, so it cannot wait for anything durable, and it must not become the thing that slows
-the room down. Concrete numbers:
+the room down. The planning figure is a whiteboard with about 50 active people per surface (owner decision,
+2026-11-12), so the headline case is a room of 20 to 50 people; rooms of 200 and 2000 are headroom, and the design
+degrades in them on purpose rather than failing. Concrete numbers:
 
-- A cursor sampled 30 times a second, each sample carrying a position, is a few hundred bytes of overhead per
-  second per person. In a room of 200 where everyone can see everyone, every sample is fanned out 199 times:
-  without limits, 200 x 199 x 30 = 1.2 million cursor updates a second leave the server. Everyone-to-everyone does
-  not scale, so the server must send each receiver only what it needs, at a rate that fits a budget.
+- A cursor sampled 30 times a second, each sample carrying a position, is a few hundred bytes of overhead per second
+  per person. In a room of 200 where everyone can see everyone, every sample is fanned out 199 times: without
+  limits, 200 x 199 x 30 = 1.2 million cursor updates a second leave the server. Everyone-to-everyone does not
+  scale, so the server must send each receiver only what it needs, at a rate that fits a budget.
 - A position costs bytes in proportion to depth (section 01: 19 bytes at the origin, about 2.5 bytes more per level,
   up to about 3.1 KB at the depth cap). A cursor ten levels down is about 44 bytes, not 19.
-- A position at one depth has to be compared exactly with a view at another. A naive loop does
-  senders x receivers exact comparisons per tick: 2000 x 2000 = 4 million per tick.
-- A stroke is drawn by a pen that samples at 120 to 240 Hz. Sending every sample, to everyone, as separate
-  messages is the largest presence traffic there is.
-- The network is not steady. If one slow packet holds up the ones behind it, a cursor that is 400 ms old is shown
-  as current. For cursors, old data is worse than no data.
-- Names and guest names are text typed by strangers, shown over the work of others.
+- A position at one depth has to be compared exactly with a view at another. A naive loop does senders x receivers
+  exact comparisons per tick: 2000 x 2000 = 4 million per tick.
+- A stroke is drawn by a pen that samples at 120 to 240 Hz. Sending every sample, to everyone, as separate messages
+  is the largest presence traffic there is.
+- The network is not steady. If one slow packet holds up the ones behind it, a cursor that is 400 ms old is shown as
+  current. For cursors, old data is worse than no data.
+- Names come from the embedding app's tokens, but they are still unvetted text, shown over the work of others.
 
 ## What others do
 
@@ -71,52 +73,51 @@ and a user-side switch are expected.
 **Liveblocks presence.** Presence is a JSON object per user, temporary: "A user's Presence resets every time they
 disconnect." Updates are throttled by default to one WebSocket message per 100 ms (10 per second; configurable from
 16 to 1000 ms). After a connection is lost, other users' lists are cleared only after `lostConnectionTimeout`,
-default 5000 ms, to avoid flicker on quick reconnects
-([Liveblocks client API](https://liveblocks.io/docs/api-reference/liveblocks-client)). Presence-size limits were
-in the part of the page not read (unverified).
+default 5000 ms, to avoid flicker on quick reconnects ([Liveblocks client
+API](https://liveblocks.io/docs/api-reference/liveblocks-client)). Presence-size limits were in the part of the page
+not read (unverified).
 
 **Yjs awareness.** Each client's state is a schemaless JSON object with a per-client clock that only increases; a
-state is overwritten only by a newer clock. A client with no update from a peer for 30 seconds marks it offline,
-so clients re-announce regularly. A new peer receives the full awareness state, then increments
-([Yjs docs, Awareness](https://docs.yjs.dev/api/about-awareness)). A 15-second renewal interval that I
-remember from the source was not on the page (unverified).
+state is overwritten only by a newer clock. A client with no update from a peer for 30 seconds marks it offline, so
+clients re-announce regularly. A new peer receives the full awareness state, then increments ([Yjs docs,
+Awareness](https://docs.yjs.dev/api/about-awareness)). A 15-second renewal interval that I remember from the source
+was not on the page (unverified).
 
 **tldraw.** Cursor, selection and viewport travel as "presence records"; `OverlayUtil` draws collaborator cursors,
-brushes, scribbles and selections; there are pages on cursor chat and user following
-([tldraw collaboration docs](https://tldraw.dev/docs/collaboration)). The pages I could read gave no update rate or
-idle timeout (unverified). Its cursor smoothing library, perfect-cursors (MIT), "interpolat[es] the cursors'
-locations based on a set of connected curves", is driven by `addPoint` calls and a per-animation-frame callback,
-and its README says services typically throttle to one update per 50 to 80 ms
+brushes, scribbles and selections; there are pages on cursor chat and user following ([tldraw collaboration
+docs](https://tldraw.dev/docs/collaboration)). The pages I could read gave no update rate or idle timeout
+(unverified). Its cursor smoothing library, perfect-cursors (MIT), "interpolat[es] the cursors' locations based on a
+set of connected curves", is driven by `addPoint` calls and a per-animation-frame callback, and its README says
+services typically throttle to one update per 50 to 80 ms
 ([perfect-cursors](https://github.com/steveruizok/perfect-cursors)). I did not read its source, so the exact spline
 and timing are unverified.
 
-**Game netcode.** The same problem, remote things whose position arrives in bursts, is solved in games.
-Glenn Fiedler's snapshot interpolation article: keep received snapshots in a buffer and render slightly in the
-past so the next snapshot has usually arrived; choose the delay to survive two lost packets in a row (about 3 send
-intervals at 2 to 5 percent loss: 300 ms at 10 snapshots per second, about 150 ms at 30, about 85 ms at 60);
-extrapolation can lower the delay but works only for roughly 50 to 250 ms on mostly straight motion
-([Gaffer on Games, Snapshot Interpolation](https://gafferongames.com/post/snapshot_interpolation/)).
-Valve's Source networking documents an interpolation delay of 100 ms by default for remote entities; the page
-returned HTTP 403 to me, so that figure is from memory and unverified
-([Valve, Source Multiplayer Networking](https://developer.valvesoftware.com/wiki/Source_Multiplayer_Networking)).
-**Interest management** is the game term for what requirement 7 asks for: send each client only the entities
-inside its area of interest. Everink's area of interest is the view.
+**Game netcode.** The same problem, remote things whose position arrives in bursts, is solved in games. Glenn
+Fiedler's snapshot interpolation article: keep received snapshots in a buffer and render slightly in the past so the
+next snapshot has usually arrived; choose the delay to survive two lost packets in a row (about 3 send intervals at
+2 to 5 percent loss: 300 ms at 10 snapshots per second, about 150 ms at 30, about 85 ms at 60); extrapolation can
+lower the delay but works only for roughly 50 to 250 ms on mostly straight motion ([Gaffer on Games, Snapshot
+Interpolation](https://gafferongames.com/post/snapshot_interpolation/)). Valve's Source networking documents an
+interpolation delay of 100 ms by default for remote entities; the page returned HTTP 403 to me, so that figure is
+from memory and unverified ([Valve, Source Multiplayer
+Networking](https://developer.valvesoftware.com/wiki/Source_Multiplayer_Networking)). **Interest management** is the
+game term for what requirement 7 asks for: send each client only the entities inside its area of interest. Everink's
+area of interest is the view.
 
-**Transports.** WebTransport (QUIC, with unreliable datagrams) is marked "Baseline 2026" by MDN
-([MDN, WebTransport datagrams](https://developer.mozilla.org/en-US/docs/Web/API/WebTransport/datagrams));
-caniuse shows 92.37 percent global support, with Chrome 97, Edge 98, Firefox 114, and Safari (desktop and iOS)
-from 26.4; Chrome for Android from 157 and Firefox for Android from 160
-([caniuse](https://caniuse.com/webtransport)). On the Rust side `wtransport` 0.7.2 (MIT OR Apache-2.0, updated
-2026-08-11) serves WebTransport with datagrams
-([crates.io wtransport](https://crates.io/crates/wtransport),
-[docs.rs](https://docs.rs/wtransport/latest/wtransport/)). The Rust `webrtc` crate is 0.21.1 (MIT/Apache-2.0,
-updated 2026-11-07) ([crates.io webrtc](https://crates.io/crates/webrtc)).
+**Transports.** WebTransport (QUIC, with unreliable datagrams) is marked "Baseline 2026" by MDN ([MDN, WebTransport
+datagrams](https://developer.mozilla.org/en-US/docs/Web/API/WebTransport/datagrams)); caniuse shows 92.37 percent
+global support, with Chrome 97, Edge 98, Firefox 114, and Safari (desktop and iOS) from 26.4; Chrome for Android
+from 157 and Firefox for Android from 160 ([caniuse](https://caniuse.com/webtransport)). On the Rust side
+`wtransport` 0.7.2 (MIT OR Apache-2.0, updated 2026-08-11) serves WebTransport with datagrams ([crates.io
+wtransport](https://crates.io/crates/wtransport), [docs.rs](https://docs.rs/wtransport/latest/wtransport/)). The
+Rust `webrtc` crate is 0.21.1 (MIT/Apache-2.0, updated 2026-11-07) ([crates.io
+webrtc](https://crates.io/crates/webrtc)).
 
 **Accessible colors.** The Okabe-Ito palette (vermillion, bluish green, sky blue, blue, reddish purple, and
 orange/yellow tones, avoiding yellow-green) is described as unambiguous to people with and without color-vision
-deficiency; the authors also advise redundant coding by shape, not color alone
-([Okabe and Ito, Color Universal Design](https://jfly.uni-koeln.de/color/)). ColorBrewer and Tableau offer
-categorical palettes of 8 to 12 colors, but their color-vision behavior was not checked here (unverified).
+deficiency; the authors also advise redundant coding by shape, not color alone ([Okabe and Ito, Color Universal
+Design](https://jfly.uni-koeln.de/color/)). ColorBrewer and Tableau offer categorical palettes of 8 to 12 colors,
+but their color-vision behavior was not checked here (unverified).
 
 ## Options considered
 
@@ -133,17 +134,16 @@ Three questions have real alternatives: the transport, the smoothing, and how a 
 | Fallback needed | No | No (it is the fallback) | Yes, the WebSocket path | Yes |
 | Priority of presence over changes | In the server's writer only; bytes already in the kernel cannot be reordered | Full: separate queues and separate TCP streams | Full | Full |
 
-Section 03 chooses **A** for the first version. I agree on cost, not on delay: A
-leaves one connection to authenticate, rate-limit, time out and close (sections 03, 07 and 08 all describe one
-socket), and needs only a writer that serves presence first. What it gives up is quantified under "Transport
-details": with section 03's adaptive unsent limit (20 ms of drain) a cursor message waits behind bulk data for about
-40 ms at most at any link speed above about 1.6 Mbit/s, and more below that. **B** is the fallback and has a
-trigger: if in the spike the cursor lag during a bulk view fill still exceeds the target (200 ms end to end, see
-"Smoothing on the receiver") with that rule, on links the product must support, presence moves to a second socket.
-**C** is not enough alone, because networks that block UDP need the WebSocket path anyway; it is added behind the
-same message format when measurement shows that TCP stalls matter. **D** is rejected: it is the heaviest to run,
-needs signaling and TURN servers, and its only benefit over C is older-browser reach that C already has at 92
-percent.
+Section 03 chooses **A** for the first version. I agree on cost, not on delay: A leaves one connection to
+authenticate, rate-limit, time out and close (sections 03, 07 and 08 all describe one socket), and needs only a
+writer that serves presence first. What it gives up is quantified under "Transport details": with section 03's
+adaptive unsent limit (20 ms of drain) a cursor message waits behind bulk data for about 40 ms at most at any link
+speed above about 1.6 Mbit/s, and more below that. **B** is the fallback and has a trigger: if in the spike the
+cursor lag during a bulk view fill still exceeds the target (200 ms end to end, see "Smoothing on the receiver")
+with that rule, on links the product must support, presence moves to a second socket. **C** is not enough alone,
+because networks that block UDP need the WebSocket path anyway; it is added behind the same message format when
+measurement shows that TCP stalls matter. **D** is rejected: it is the heaviest to run, needs signaling and TURN
+servers, and its only benefit over C is older-browser reach that C already has at 92 percent.
 
 **Smoothing of remote cursors**
 
@@ -155,9 +155,9 @@ percent.
 | Cursor motion is erratic by nature | Fine | Fine | Fine | Poor: hands stop and turn within a few frames |
 | Cost | Trivial | Small | Small | Needs velocity on the wire, correction logic |
 
-I choose **3**. A pointing hand changes direction too often for dead reckoning (4), which Fiedler also found
-fails once motion is not straight. Option 2 is the closest relative; 3 is the same idea with an explicit,
-adaptive delay and a defined behavior on loss. Given up: about 100 ms of delay compared with 4.
+I choose **3**. A pointing hand changes direction too often for dead reckoning (4), which Fiedler also found fails
+once motion is not straight. Option 2 is the closest relative; 3 is the same idea with an explicit, adaptive delay
+and a defined behavior on loss. Given up: about 100 ms of delay compared with 4.
 
 **Who receives what**
 
@@ -180,10 +180,10 @@ of the cursors that receiver should see, at a rate and size that fit that receiv
 small buffer per remote cursor and draws it slightly in the past. Presence is never stored; when a room process
 restarts, presence starts empty and refills within a second as clients re-announce.
 
-The view of a session is never sent in a presence message. Section 03's `SetView` already carries it
-(a `ViewMsg` holding 01's `ViewRect`, exact and unpadded), and the server's presence module reads it from there
-in-process: one source of truth, no second copy to disagree with. Presence carries only the cursor's position and
-the sender's zoom scale (01's `ViewScale`).
+The view of a session is never sent in a presence message. Section 03's `SetView` already carries it (a `ViewMsg`
+holding 01's `ViewRect`, exact and unpadded), and the server's presence module reads it from there in-process: one
+source of truth, no second copy to disagree with. Presence carries only the cursor's position and the sender's zoom
+scale (01's `ViewScale`).
 
 ### Identifiers
 
@@ -194,9 +194,6 @@ pub struct SessionIdx(pub u16);
 
 /// Millisecond clock of the room, wraps every 49.7 days; compare with wrapping subtraction.
 pub struct RoomMs(pub u32);
-
-/// Set by the server from how the session joined (section 08); a client cannot choose it.
-pub enum PeerKind { Member, Guest }
 ```
 
 A room supports at most 65,535 live sessions by this index width; the real cap is in section 08's limits table.
@@ -206,19 +203,19 @@ A room supports at most 65,535 live sessions by this index width; the real cap i
 All messages are binary, little-endian, with LEB128 varints where marked (v). Every message starts with a one-byte
 type. Every message is **self-contained and at most 1000 bytes**, so that the same format can later ride in a QUIC
 datagram (the largest datagram a QUIC path accepts is about 1200 bytes minus headers; the exact browser limit is
-read from `transport.datagrams.maxDatagramSize` at run time, unverified here). Nothing depends on the order in
-which messages arrive; where order matters, a sequence number lets the receiver decide.
+read from `transport.datagrams.maxDatagramSize` at run time, unverified here). Nothing depends on the order in which
+messages arrive; where order matters, a sequence number lets the receiver decide.
 
 **Positions on the wire.** A cursor position is section 01's `QPos`: a `Position` whose fractions are rounded to a
 multiple of 2^-14 level units (carrying into the cell), which the sender does before it sends. On the wire it is the
 canonical `Position` serialization: a level, then per axis a length-prefixed cell and an 8-byte fraction. Its size
 is `P(d)` for a position d levels from the origin level: `P(0)` is 19 bytes and `P(d)` is about `19 + 2.5 d` bytes,
-up to about 3.1 KB at the depth cap (01). Routing and the exact "inside the view" test use the `QPos` as sent,
-so every machine agrees. Rounding to 2^-14 unit is at most 1/16 pixel at the finest in-level zoom (2048 pixels per
-unit gives 1/8 pixel), invisible for a pointer. One exception to the 1000-byte rule follows from the size: a
-position deeper than about 350 levels (`P` over 900 bytes) makes its message larger, up to about 3.3 KB. Such a
-message is legal on the WebSocket and would have to use the reliable path if datagrams are added. The decoder checks
-the depth cap on the raw bytes with 01's `Position::check_cap_bytes` before building any number.
+up to about 3.1 KB at the depth cap (01). Routing and the exact "inside the view" test use the `QPos` as sent, so
+every machine agrees. Rounding to 2^-14 unit is at most 1/16 pixel at the finest in-level zoom (2048 pixels per unit
+gives 1/8 pixel), invisible for a pointer. One exception to the 1000-byte rule follows from the size: a position
+deeper than about 350 levels (`P` over 900 bytes) makes its message larger, up to about 3.3 KB. Such a message is
+legal on the WebSocket and would have to use the reliable path if datagrams are added. The decoder checks the depth
+cap on the raw bytes with 01's `Position::check_cap_bytes` before building any number.
 
 **Delta mode for snapshots.** A snapshot may carry a `base` position and write each entry's position with 01's
 `Position::encode_delta(base)` and read it with `decode_delta`, which costs 3 to 6 bytes for a nearby position
@@ -233,7 +230,7 @@ the spike to decide.
 /// What a client sends. Sizes are payload bytes at depth 0, P = P(0) = 19.
 pub enum ToServer {
     /// First presence message after the connection is up. About 20 bytes. `resume` lets a reconnect keep session and
-    /// color. A guest's typed name is not here: it travels in section 08's join exchange.
+    /// color. The name is not here: it comes from the token (section 08).
     PresenceHello { proto: u8, resume: Option<[u8; 16]>, locale_dir: u8 },
     /// Hot path, up to 30 per second. 9 + P = 28 bytes. Not sent while an ink or drag message is (they carry the
     /// pointer themselves), so a session never sends more than about 30 presence messages a second.
@@ -310,8 +307,8 @@ pub enum DragMsg {
 ```
 
 `ObjectId` is the id the finished stroke will have in the document (section 02 lets a client choose it before the
-pen lifts); I assume 16 bytes. `StrokeBrush` is the style block of 06 and 02 (`brush`, `base_width`, `style_ver`),
-a few bytes. `Delta` is 01's exact difference with its canonical serialization.
+pen lifts); I assume 16 bytes. `StrokeBrush` is the style block of 06 and 02 (`brush`, `base_width`, `style_ver`), a
+few bytes. `Delta` is 01's exact difference with its canonical serialization.
 
 ```rust
 /// What the server sends.
@@ -342,7 +339,6 @@ pub enum ToClient {
 pub struct PeerInfo {
     pub who: SessionIdx, pub user: UserKey /* opaque; same for two tabs of one person */,
     pub name: String,            // sanitized, disambiguated, <= 24 grapheme clusters (see names)
-    pub kind: PeerKind,          // from the server (section 08); the banner's "guest" label comes from this
     pub color: ColorSlot, pub glyph: Glyph,
     pub locatable: bool,         // section 08's per-session flag; false hides the jump action
 }
@@ -375,58 +371,56 @@ name. The redundant shape follows the Okabe-Ito authors' advice not to rely on c
 
 - **Palette.** Seven hues taken from Okabe-Ito (orange #E69F00, sky blue #56B4E9, bluish green #009E73, yellow
   #F0E442, blue #0072B2, vermillion #D55E00, reddish purple #CC79A7; hex values from memory of the published
-  palette, to be checked against the source in the first test) each in two lightness steps, giving **14 slots**,
-  and **4 glyphs** (circle, square, triangle, diamond): **56 distinct (color, glyph) pairs**. Past 56 live
-  sessions in a room, pairs repeat and the name tells people apart.
+  palette, to be checked against the source in the first test) each in two lightness steps, giving **14 slots**, and
+  **4 glyphs** (circle, square, triangle, diamond): **56 distinct (color, glyph) pairs**. Past 56 live sessions in a
+  room, pairs repeat and the name tells people apart.
 - **Contrast against any background.** The cursor arrow and the banner are drawn with a 1.5 px white inner outline
   and a 1 px near-black outer outline, so they separate from light, dark and busy backgrounds whatever their fill.
-  The fill therefore need not contrast with the background; it must be distinguishable from the other fills, and
-  the banner text must be readable on it. Text is black or white, whichever has more contrast with the fill. For
-  any fill, the better of the two gives at least 4.58:1 (the minimum over all luminances is at relative luminance
-  0.179, computed from the WCAG formula), so the 4.5:1 rule for normal text is always met.
+  The fill therefore need not contrast with the background; it must be distinguishable from the other fills, and the
+  banner text must be readable on it. Text is black or white, whichever has more contrast with the fill. For any
+  fill, the better of the two gives at least 4.58:1 (the minimum over all luminances is at relative luminance 0.179,
+  computed from the WCAG formula), so the 4.5:1 rule for normal text is always met.
 - **Color-vision deficiency.** The slot list is accepted only if a build-time test passes: for every pair of slots,
   in normal vision and in simulated protanopia, deuteranopia and tritanopia (Machado et al. 2009 matrices), the
   distance in OKLab must be at least a threshold. The seven base hues are chosen to satisfy it by the Okabe-Ito
   design; the seven second-lightness steps are generated and tuned until the test passes, and the thresholds (start
-  with 8 for normal vision and 5 under simulation, on a 0 to 100 scale) are test targets I have not verified. If
-  the test cannot be met for 14, the palette shrinks and the glyphs carry more of the load.
+  with 8 for normal vision and 5 under simulation, on a 0 to 100 scale) are test targets I have not verified. If the
+  test cannot be met for 14, the palette shrinks and the glyphs carry more of the load.
 - **Assignment.** On join the server picks the (color, glyph) pair as follows: let `pref = hash(user_key) mod 56`;
   take the first free pair at or after `pref`, scanning color slots before glyphs (so the first 14 sessions all get
-  different colors). "Free" means unused by a live session in the room. When no pair is free, take the pair with
-  the fewest live holders, ties broken by `pref` order.
-- **Stability.** The same person (same `user_key`: the token's user id, or a guest's session id) gets the same pair
-  on every reconnect as long as it is free. The room remembers the pair of a departed session for 10 minutes in
-  memory only; the memory is released earlier if the pair is needed. A restart of the room process loses it, which
-  only changes a color. Two sessions of one person share the pair (same person, same color), and the who list shows
-  one entry with a "2 devices" note.
-- **Large rooms.** With more than 56 sessions colors repeat by design. Only cursors in view are drawn, and the
-  most that can be drawn is bounded by the cap below, so repeats are rare in practice.
+  different colors). "Free" means unused by a live session in the room. When no pair is free, take the pair with the
+  fewest live holders, ties broken by `pref` order.
+- **Stability.** The same person (same `user_key`, the token's user id) gets the same pair on every reconnect as
+  long as it is free. The room remembers the pair of a departed session for 10 minutes in memory only; the memory is
+  released earlier if the pair is needed. A restart of the room process loses it, which only changes a color. Two
+  sessions of one person share the pair (same person, same color), and the who list shows one entry with a "2
+  devices" note.
+- **Large rooms.** With more than 56 sessions colors repeat by design. Only cursors in view are drawn, and the most
+  that can be drawn is bounded by the cap below, so repeats are rare in practice.
 - **Own cursor.** The local pointer is the system pointer, not a banner. The user's own color shows in the who list
   and in their selection handles.
 
 ### Names and banners
 
-- **Source.** A token gives a display name (section 08); a guest types one. The server sanitizes both; the client
-  never sends a name in a presence message (a guest's typed name arrives in section 08's join exchange).
+- **Source.** Everyone is identified by the embedding app, so every name banner shows the display name from the
+  person's token (section 08). The server sanitizes it; the client never sends a name in a presence message. A
+  person who joined through an invite link is an ordinary member and gets the same banner, with no label.
 - **Sanitizing.** Unicode NFC; remove control characters, bidirectional override and isolate characters (U+202A to
   U+202E, U+2066 to U+2069), zero-width characters and tag characters; collapse runs of whitespace; trim; allow at
   most 3 combining marks in a row (stops stacked "zalgo" text from covering the work); cut to the display-name limit
-  in section 08's limits table (64 for members, 40 for guests; I count grapheme clusters, 08 should say which unit
-  it means). A banner shows at most 24 grapheme clusters and ends longer names with an ellipsis; the who list shows
-  all. A name that is empty after this becomes "Guest" for guests and the user id's short form for members.
+  in section 08's limits table (I count grapheme clusters). A banner shows at most 24 grapheme clusters and ends
+  longer names with an ellipsis; the who list shows all. A name that is empty after this becomes the short form of
+  the user id.
 - **Plain text only.** Names are drawn by the core's text layout as plain text, wrapped in a first-strong isolate so
   that a right-to-left name cannot reorder the banner around it. Never markup. Banner height is fixed and clipped.
 - **Collisions.** If two live sessions of different people have the same name after case folding and compatibility
   normalization, the later one gets " (2)", " (3)" and so on. For confusable names (one name that looks like another
-  by Unicode confusable skeleton, for example Latin and Cyrillic letters) the same rule applies, so a guest cannot
-  borrow a member's name.
-- **Guests.** A guest's banner ends in a small "guest" label (text, not only color), always. A guest cannot be
-  made to look like a member: the label is added by the renderer from the server's `kind` field (`PeerKind`), not
-  part of the name.
+  by Unicode confusable skeleton, for example Latin and Cyrillic letters) the same rule applies, so a person cannot
+  borrow another's name.
 - **Level of detail on screen.** Drawing every banner in a crowd hides the work. A receiver draws at most **50
-  banners** at once: the followed person, anyone hovering near the receiver's own pointer, the most recently
-  active, then the nearest to the pointer. The other visible cursors are drawn as arrows in their color and glyph
-  with the name on hover. This is a client choice and costs no bandwidth.
+  banners** at once: the followed person, anyone hovering near the receiver's own pointer, the most recently active,
+  then the nearest to the pointer. The other visible cursors are drawn as arrows in their color and glyph with the
+  name on hover. This is a client choice and costs no bandwidth.
 
 ### Server: tables and index
 
@@ -477,15 +471,15 @@ next snapshot. This lateness is accepted for flings; the spike measures it.
 **Views index.** For each level that some session's view is on, a hash map from cell to the list of sessions whose
 padded region overlaps that cell. A view covers few cells at its own level: its width is at most a screen's worth of
 pixels divided by the zoom within the level, which is at least 0.5 pixel per unit (the camera range of section 01),
-so a 2,000-pixel screen spans about 4,000 units, 4 to 5 cells of 1024 units per axis with the pad. The set of
-levels in use, `view_levels`, is kept with a count per level.
+so a 2,000-pixel screen spans about 4,000 units, 4 to 5 cells of 1024 units per axis with the pad. The set of levels
+in use, `view_levels`, is kept with a count per level.
 
 **Cursor index.** A sparse, path-compressed tree over (level, cell): a node exists only for a cell that holds a
 cursor, or where two cursor paths branch, and each node keeps the cursors directly in it and a count beneath. A
-cursor update moves one entry; a query by rectangle descends only nodes that overlap the rectangle. Because
-chains of single-child nodes are compressed, depth is bounded by the number of cursors, not by the number of levels.
-This is the same kind of occupied-cells-with-counts structure that section 03 builds for objects; if 03's index
-exposes a point-item interface, `CursorIndex` should be an instance of it, not a second implementation.
+cursor update moves one entry; a query by rectangle descends only nodes that overlap the rectangle. Because chains
+of single-child nodes are compressed, depth is bounded by the number of cursors, not by the number of levels. This
+is the same kind of occupied-cells-with-counts structure that section 03 builds for objects; if 03's index exposes a
+point-item interface, `CursorIndex` should be an instance of it, not a second implementation.
 
 **Routing a cursor update (a sender moved).** Once per tick, for each sender whose pointer changed:
 
@@ -525,8 +519,8 @@ diff with visible -> entered / left
 Cost is the number of cells in the region (at most about 25) plus the cursors found, plus a descent whose length is
 the number of occupied branching nodes, not the number of levels. With 2000 receivers all panning at once: 2000
 queries per tick at an assumed 3 microseconds is 6 ms of the 33 ms tick, once. Typical rooms have a few people
-moving at a time, so it is much less. A receiver who is zoomed far out (its region at a coarse level covers
-cells holding very many deeper cursors) hits the cap below instead of receiving them all.
+moving at a time, so it is much less. A receiver who is zoomed far out (its region at a coarse level covers cells
+holding very many deeper cursors) hits the cap below instead of receiving them all.
 
 The result of both directions is symmetric in effect but computed separately, as requirement 7 demands: A sees B
 when B is in A's region; B sees A when A is in B's region; neither implies the other.
@@ -548,8 +542,8 @@ overhead once per message. A snapshot of more than 36 entries is split into `k =
 section "KB" is 1000 bytes.
 
 The budgets below are named limits, `presence_down_budget` (per receiver) and `presence_room_egress` (per room), and
-the cursor cap is `max_visible_cursors`. Section 08's limits table owns their values; the figures
-used here (32 KB/s, 100 Mbit/s, 200) are what I propose for that table and what the arithmetic assumes.
+the cursor cap is `max_visible_cursors`. Section 08's limits table owns their values; the figures used here (32
+KB/s, 100 Mbit/s, 200) are what I propose for that table and what the arithmetic assumes.
 
 **Uplink (one client sending).** `Pointer`: 28 + 66 = 94 bytes, 30 per second = 2.8 KB/s = 22.6 kbit/s while the
 pointer moves. Nothing is sent while it is still, except a heartbeat every 2 s. A client drawing live ink or
@@ -557,8 +551,8 @@ dragging sends ink or drag messages in place of `Pointer`, not in addition, so i
 messages a second. This matters for section 08's presence rate limit (see "Limits and hostile senders").
 
 **Downlink budget.** Each receiver has a presence budget `B` (default 32 KB/s, 256 kbit/s), and the room has a total
-egress budget for presence (default 100 Mbit/s, 12.5 MB/s). The effective per-receiver budget is
-`B_eff = min(B, room_budget / receivers)`. For a receiver with `n` cursors to show, the server picks:
+egress budget for presence (default 100 Mbit/s, 12.5 MB/s). The effective per-receiver budget is `B_eff = min(B,
+room_budget / receivers)`. For a receiver with `n` cursors to show, the server picks:
 
 1. the rate `r` = the highest of 30, 15, 10, 6, 5 snapshots per second (every 1st, 2nd, 3rd, 5th or 6th tick) with
    `r x S(n) <= B_eff`;
@@ -572,13 +566,18 @@ Snapshots to different receivers are staggered by `receiver index mod divisor` s
 |---|---|---|---|---|---|
 | 2 | 1 | 30 Hz | 30 x S(1) = 3.0 KB/s (24 kbit/s) | 6.0 KB/s | 2.8 KB/s |
 | 20 | 19 | 30 Hz (S = 586 B) | 30 x 586 = 17.6 KB/s (141 kbit/s) | 352 KB/s (2.8 Mbit/s) | 2.8 KB/s |
+| 50 (headline case) | 49 | 15 Hz (k = 2, S = 1,469 B; 30 Hz = 44 KB/s is over 32 KB/s) | 15 x 1,469 = 22.0 KB/s (176 kbit/s) | 1.1 MB/s (8.8 Mbit/s) | 2.8 KB/s |
 | 200 | 199 | 5 Hz (k = 6, S = 5,811 B; 6 Hz = 34.9 KB/s is over 32 KB/s; 10 Hz = 58 KB/s) | 29.1 KB/s (232 kbit/s) | 5.8 MB/s (47 Mbit/s) | 2.8 KB/s |
 | 2000 | 200 (cap) | room budget 12.5 MB/s / 2000 = 6.25 KB/s; 5 Hz needs S <= 1,250 B: n = 40 gives k = 2, S = 1,226 B; n = 41 gives 1,253 B, over | 6.25 KB/s (50 kbit/s) | 12.5 MB/s (100 Mbit/s) | 2.8 KB/s |
 
-In typical use the numbers are lower, because the dirty filter sends only senders that moved. With 10 percent of a
-200-person room moving, a snapshot holds about 20 moving entries plus the 1 Hz refresh share (199 / 30 = 7 at 30
-Hz): 27 entries, S = 802 B, 24 KB/s, which fits the budget at 30 Hz instead of 5 Hz. These are arithmetic on assumed
-sizes, not measurements; the first benchmark replaces them.
+The 50-person row is the planning case. In a whiteboard few people move at once: with 10 of 49 cursors moving, a
+snapshot holds 10 moving entries plus the refresh share (49 / 30 = 2), so 12 entries, S = 397 B, and the rate stays
+at 30 Hz with 11.9 KB/s per receiver and 0.6 MB/s (4.8 Mbit/s) of server egress; the worst case of all 49 moving at
+once drops to 15 Hz and a smoothing delay near 140 ms. In general the numbers are lower than the table, because the
+dirty filter sends only senders that moved. With 10 percent of a 200-person room moving, a snapshot holds about 20
+moving entries plus the 1 Hz refresh share (199 / 30 = 7 at 30 Hz): 27 entries, S = 802 B, 24 KB/s, which fits the
+budget at 30 Hz instead of 5 Hz. These are arithmetic on assumed sizes, not measurements; the first benchmark
+replaces them.
 
 The 2000-person worst case shows what the design gives up: with everyone in one place and everyone moving, a
 receiver sees 40 cursors at 5 Hz, delayed by about 400 ms (see smoothing). That is by design: the alternative is a
@@ -594,16 +593,15 @@ entries it is 200 / 6 x 199 = 6,600 per tick, 0.2 million a second, under 1 perc
 
 ### Smoothing on the receiver
 
-The receiver keeps, per visible remote cursor, a ring of the last 8 samples `(t, pos)`, where `t` is the sample
-time in room time (`server_time - age_ms`).
+The receiver keeps, per visible remote cursor, a ring of the last 8 samples `(t, pos)`, where `t` is the sample time
+in room time (`server_time - age_ms`).
 
-**Clock.** The receiver estimates room time with the shared clock offset: section 03's `Ping`/`Pong`
-on the WebSocket, answered outside the ordered change queue, with the minimum-delay sample of the last 8 (the
-estimate itself is section 05's). Its accuracy only has to be steady, not exact: a constant error shifts all cursors
-equally and cancels in `render_time`. The server converts a sender's samples to room time by
-estimating the sender's clock offset as the minimum of `arrival - sender_time` over the last 64 messages (the
-standard minimum-delay filter), so uplink jitter is removed from the sample times and only the sender's real cadence
-remains.
+**Clock.** The receiver estimates room time with the shared clock offset: section 03's `Ping`/`Pong` on the
+WebSocket, answered outside the ordered change queue, with the minimum-delay sample of the last 8 (the estimate
+itself is section 05's). Its accuracy only has to be steady, not exact: a constant error shifts all cursors equally
+and cancels in `render_time`. The server converts a sender's samples to room time by estimating the sender's clock
+offset as the minimum of `arrival - sender_time` over the last 64 messages (the standard minimum-delay filter), so
+uplink jitter is removed from the sample times and only the sender's real cadence remains.
 
 **Render time.** `render_time = room_now - D`. `D` is the interpolation delay:
 
@@ -617,8 +615,8 @@ D changes by at most 1 ms per frame (slew), so a change in network quality never
 At 30 Hz and a steady connection, jitter is about 5 ms, so D is about 76 ms; this keeps two lost snapshots from
 starving the buffer (Fiedler's rule is about 3 intervals, 100 ms; 2 intervals plus 2 jitters is a deliberate
 reduction, because a cursor tolerates a brief hold better than a physics object). At 5 Hz, D is 400 ms (the clamp).
-So the smoothing delay stays under the 100 ms only while a receiver is at 30 Hz; at lower rates the
-design trades delay for bandwidth, on purpose.
+So the smoothing delay stays under the 100 ms only while a receiver is at 30 Hz; at lower rates the design trades
+delay for bandwidth, on purpose.
 
 **Interpolation.** Find samples `a` and `b` with `a.t <= render_time < b.t`. Interpolate with a cubic Hermite curve
 between them, with tangents `(b - prev_a) / (b.t - prev_a.t)` at `a` (centered, if the sample before `a` exists) and
@@ -641,9 +639,8 @@ sample arrives, the error between the drawn and the true position is removed ove
 
 **Delay as seen by the user.** One-way cursor lag = uplink latency (about RTT/2) + wait for the tick (mean 17 ms, at
 most 33) + downlink (RTT/2) + D + any wait behind queued bulk data (see "Transport details"). At RTT 60 ms and 30
-Hz: 30 + 17 + 30 + 76 = about 153 ms, which is inside the 200 ms target with 47 ms to spare for
-queueing. design.md's earlier "no more than 100 ms" cannot be met by a design that buffers, so the target is
-restated. For
+Hz: 30 + 17 + 30 + 76 = about 153 ms, which is inside the 200 ms target with 47 ms to spare for queueing.
+design.md's earlier "no more than 100 ms" cannot be met by a design that buffers, so the target is restated. For
 rooms of at most 25 visible cursors the server may forward a pointer update on arrival instead of waiting for the
 tick (saves 17 ms mean); this is an optimization to take only if measurement says it matters.
 
@@ -661,13 +658,13 @@ two `ViewScale` values (level difference x 10 octaves, plus the difference withi
 | 10^6 or more in either direction | The cursor is drawn at 60 percent opacity with a double-line badge, because the person cannot see what I am drawing at my scale and I cannot see what they point at |
 
 The badge is the "note of how much deeper" from design.md. Text of the badge is part of the accessible description
-of the cursor (section 07). The banner is placed to the lower right of the arrow and moves to the left or above
-when it would leave the screen, so it stays readable at the edge.
+of the cursor (section 07). The banner is placed to the lower right of the arrow and moves to the left or above when
+it would leave the screen, so it stays readable at the edge.
 
-A person far shallower than me can have a cursor inside my view whose real hand movement is a very large movement
-in the world; the discontinuity rule above shows it where it is. A person far deeper than me whose cursor is in my
-view moves it in tiny world steps: it sits nearly still on my screen, which is correct, and it is the reason the
-badge exists.
+A person far shallower than me can have a cursor inside my view whose real hand movement is a very large movement in
+the world; the discontinuity rule above shows it where it is. A person far deeper than me whose cursor is in my view
+moves it in tiny world steps: it sits nearly still on my screen, which is correct, and it is the reason the badge
+exists.
 
 ### Selections of other people
 
@@ -725,10 +722,10 @@ The pen's samples are collected by the client in the order they arrive, thinned 
   layer ("live ink" of the rendering section), in the sender's color tint only at the pen position (a small dot);
   the stroke itself is drawn in its own brush color so the preview matches the final.
 - **Provisional anchor.** While drawing, the stroke's center is not known, but 06 anchors a finished stroke at the
-  center of its bounding box. The preview therefore uses the pen-down `Position` (`Begin.first`) as a
-  provisional anchor and the points as lattice offsets from it. For preview and final to be the same world points,
-  06 places the final anchor a whole number of 2^-16 object units from `first` when the pen lifts (
-  agreed with 06), so preview and final stroke coincide exactly.
+  center of its bounding box. The preview therefore uses the pen-down `Position` (`Begin.first`) as a provisional
+  anchor and the points as lattice offsets from it. For preview and final to be the same world points, 06 places the
+  final anchor a whole number of 2^-16 object units from `first` when the pen lifts ( agreed with 06), so preview
+  and final stroke coincide exactly.
 - **The swap, without a flicker.** The preview is keyed by the stroke's `ObjectId`, which is the id of the finished
   object. Each frame the renderer checks, for each preview, whether the local copy of the document contains an
   object with that id. If it does, the preview is not drawn in that frame and the object is, in the same frame: one
@@ -740,23 +737,34 @@ The pen's samples are collected by the client in the order they arrive, thinned 
   difference is at most the thinning tolerance of 0.15 pixel at the sender's zoom (above, and 06's), which is under
   the quarter pixel the swap test allows. A receiver at 1000 times the sender's zoom would see the difference, but
   it can see the stroke only through the part in its tiny view, and the swap there changes a corner at most.
-- **The drawer disconnects mid-stroke.** The server does not make a stroke for them (it would be a change authored
-  by a client that never sent it). On a connection loss the server sends `Cancel`-like removal for the live ink
-  after the disconnect timeout (6 s), and receivers freeze the preview, then fade it out over 300 ms. If the
-  drawer's client is still running (a network drop), it holds the stroke locally, keeps drawing, and commits it on
-  the document channel through the offline queue; receivers then see the finished stroke appear. If the client
-  itself died, the partial stroke is lost. See the owner questions.
+- **The drawer disconnects mid-stroke (owner decision, 2026-11-12).** The stroke is not lost, and the server never
+  commits a stroke on someone's behalf (it would be a change authored by a client that never sent it). What happens:
+  - On other screens, when the server declares the connection lost (6 s without a message) it removes the live ink,
+    and receivers freeze the preview for the time they have already waited and then fade it out over 300 ms. The
+    stroke thus vanishes about 6 seconds after the last point.
+  - On the drawer's device, the stroke survives a lost connection and also the app dying. While a stroke is being
+    drawn, online or offline, the device saves the points so far, with the `ObjectId` it already announced, to its
+    durable outbox at most every 250 ms (section 07 owns the mechanism). If only the connection is lost, the client
+    keeps drawing and finishes the stroke locally when the pen lifts, as an ordinary stroke in the offline queue.
+    If the app crashes or the tab is closed mid-stroke, even while connected, then at the next start an unfinished
+    stroke found in the outbox is finished as if the pen had lifted there.
+  - When the connection is up, the queue sends the finished stroke once as one `Op::Create` (the same `ObjectId`
+    makes a resend harmless). Others then see the whole stroke appear at once as an ordinary new object, with no
+    preview and no animation, however long afterwards (seconds to minutes, or after a restart of the app). It takes
+    its place in the order by the normal rules, which is on top if nothing else was added after it was made on the
+    drawer's device, and may be under objects others drew meanwhile. For others nothing else changes: the preview
+    fades after the timeout and the finished stroke arrives later.
+  - What can be lost: at most the last 250 ms of the stroke if the app dies, and the whole stroke only if the
+    device itself is lost. Nothing the server holds could restore it.
 - **Limits.** One live stroke per session; points kept by the server per stroke are capped at section 08's
   points-per-stroke limit (20,000, in section 08's table); live strokes per room at `max_live_strokes`. A stroke
-  that exceeds
-  the point cap still commits normally, only its preview stops growing.
+  that exceeds the point cap still commits normally, only its preview stops growing.
 
 ### Object drag previews
 
 Section 02 sends a drag's `Op::Set` of the `Xform` register on release and at most 5 times a second during a long
-drag. Between those writes the
-other people would see the objects jump. The preview uses the presence channel, as live ink does, at this depth of
-design (messages, size, rate; details are for the implementation):
+drag. Between those writes the other people would see the objects jump. The preview uses the presence channel, as
+live ink does, at this depth of design (messages, size, rate; details are for the implementation):
 
 - **Messages.** `DragMsg::Begin` names up to 32 of the dragged objects (the rest only counted, with a `bounds` box
   for all of them, as an `ExactBox`), `Move` carries the pointer `QPos` and the exact displacement `offset` (a
@@ -769,8 +777,8 @@ design (messages, size, rate; details are for the implementation):
   requirement 7. Entering receivers get `Begin` and the latest `Move`.
 - **Drawing.** The receiver draws each named object it holds, with its world `Placement` moved by `offset`
   (`Position::add_delta` on the placement's anchor), in the overlay layer and hides its document copy, in the
-  sender's color outline. Objects it does not hold are skipped; for `total > 32` it draws
-  the dashed `bounds` displaced the same way.
+  sender's color outline. Objects it does not hold are skipped; for `total > 32` it draws the dashed `bounds`
+  displaced the same way.
 - **The swap.** On `End { committed: true }` the preview stays until the document copy shows a placement change for
   one of the named ids (the `Op::Set` of its `Xform`), then the preview is dropped and the object drawn at its new
   place in the same frame; if no change arrives within 2 seconds, the preview is dropped and the object is where the
@@ -808,8 +816,8 @@ The who list is a panel (section 07); its data comes from here.
 - The server sends list changes only to sessions that have the panel open (`WhoSubscribe { open: true }`). Others
   receive nothing but the count (once per 5 s). This prevents the join storm: 2000 people joining in a minute would
   otherwise send 2000 x 2000 = 4 million updates. Changes are batched to one message per second per subscriber.
-- Two sessions of one person are shown once, with a device count. Guests are shown with the label. An entry shows
-  the glyph and color, name, state, and a "jump" button unless the person is not `locatable`.
+- Two sessions of one person are shown once, with a device count. An entry shows the glyph and color, name, state,
+  and a "jump" button unless the person is not `locatable`.
 
 ### Jump to and follow
 
@@ -826,42 +834,49 @@ The who list is a panel (section 07); its data comes from here.
   manual pan or zoom by the follower ends the follow (a `PresenceNotice` confirms). The target's cursor is always
   delivered to a follower, regardless of the region test and the cap, as Figma does. Followers see the target's
   cursor delayed by D, and the view stream is delayed to match, so the cursor and the camera stay together.
-- **Follower cap.** At most 50 followers per person; a 51st `Follow` is refused with a `PresenceNotice`. The
-  cost is stream rate times message size times followers. A `JumpTo` carrying a `ViewMsg` is about 50 bytes of
-  payload at depth 0 (two positions and `pixel_log2`) and about 120 bytes with transport overhead, so one follower
-  costs 15 x 120 = 1.8 KB/s of server egress and 50 followers cost 90 KB/s (0.72 Mbit/s) for one person, encoded
-  once and copied. The followed cursor is also exempt from the visible-cursor cap, so a follower never loses it; 50
-  of them add 50 entries to that person's fan-out, not to anyone else's. Without a cap, one person followed by a
+- **Follower cap.** At most 50 followers per person; a 51st `Follow` is refused with a `PresenceNotice`. The cost is
+  stream rate times message size times followers. A `JumpTo` carrying a `ViewMsg` is about 50 bytes of payload at
+  depth 0 (two positions and `pixel_log2`) and about 120 bytes with transport overhead, so one follower costs 15 x
+  120 = 1.8 KB/s of server egress and 50 followers cost 90 KB/s (0.72 Mbit/s) for one person, encoded once and
+  copied. The followed cursor is also exempt from the visible-cursor cap, so a follower never loses it; 50 of them
+  add 50 entries to that person's fan-out, not to anyone else's. Without a cap, one person followed by a
   2,000-person room would cost 3.6 MB/s (29 Mbit/s) for one camera. The limit is named `max_followers_per_person`
-  for section 08's table. A presenter with a larger audience needs a different mechanism (see the owner questions).
-- **Follow notice.** Section 08 requires that the target is told ("Ana is following you"). The server sends the
-  target a `PresenceNotice` when a follow starts and ends, and the who list shows the names of followers to the
-  target.
+  for section 08's table. A "present" mode that broadcasts one person's view to an audience over 50 is out of scope
+  for now (owner decision, 2026-11-12).
+- **Follow notice.** The followed person sees who follows them (owner decision, 2026-11-12): the server sends the
+  target a `PresenceNotice` when a follow starts and ends ("Ana is following you"), and the who list shows the names
+  of followers to the target.
+- **Switching it off for invite-link people.** An owner can turn jump and follow off for people who joined through
+  an invite link (owner decision, 2026-11-12; the surface setting is section 08's `invited_locatable`). The
+  session carries `via: Option<LinkId>` from the token. When the setting is off it works in both directions:
+  `Jump` and `Follow` from a session with `via` set are refused with a `PresenceNotice`, and `Jump` and `Follow`
+  aimed at such a session are refused too, as if it had opted out. The person's cursor, name and place in the who
+  list are unaffected.
 - **Privacy position and the cost of an opt-out.** The high-level design accepts that jump reveals where a person is
   working. Section 08 specifies the opt-out as a per-session `locatable` flag (default from the token's `loc` claim,
   otherwise on), and this design implements it as `ToServer::Locatable { on }` and `PeerInfo.locatable`. When off,
   the server refuses `Jump` and `Follow` aimed at that session, the who list shows no jump action for it, and its
   view is never put in any message; its location is visible only through its cursor, which by requirement 7 anyone
   who is looking at that place already sees. What an opt-out costs: (1) the person cannot be found from the list,
-  which defeats the common case of a teacher or presenter being followed, so presenters would leave it on, or the
-  product needs an explicit "present" mode; (2) it adds a state to test and explain; (3) the surface owner may want
-  to see everyone for moderation, which is a surface setting (08, question 5). The engineering cost is small (one
-  flag, three checks, one test). The default is a product decision, listed in the questions.
+  which defeats the common case of a teacher or presenter being followed, so presenters would leave it on; (2) it
+  adds a state to test and explain; (3) the owner's setting for invite-link people above is separate and does not
+  depend on it. The engineering cost is small (one flag, three checks, one test). Jump and follow are on by default
+  and each person can opt out (owner decision, 2026-11-12).
 
 ### Transport details
 
-- **First version: one WebSocket.** Presence is the `Presence(Bytes)` message of section 03 on the
-  session's one socket; there is no second connection, credential or timeout. Each presence message is one binary
-  WebSocket message. Compression (permessage-deflate) is off: messages are small and compression adds delay and CPU.
+- **First version: one WebSocket.** Presence is the `Presence(Bytes)` message of section 03 on the session's one
+  socket; there is no second connection, credential or timeout. Each presence message is one binary WebSocket
+  message. Compression (permessage-deflate) is off: messages are small and compression adds delay and CPU.
 - **Priority class.** The server's writer for a connection has a presence queue that holds the newest state only (a
   snapshot being built replaces an unsent one), and it is served before every other class (section 03 lists the
   others: control and `Ack`, `Apply`, bulk view fill). The server never queues a backlog of presence.
-- **Pacing of bulk data (owned by 03).** The server keeps a connection's unsent bytes below
-  `U`, the amount the connection drains in about 20 ms, clamped to 4 KiB to 64 KiB (`TCP_NOTSENT_LOWAT` or the
-  writer's own count; the server estimates the drain rate from how fast its writes complete). Bulk data (section
-  03's `Enter` chunks and any other large message) is written in chunks no larger than `U` and never larger than 16
-  KiB, and a chunk is written only while unsent bytes are under `U`. Presence is written whenever the socket accepts
-  it, ignoring `U`, but its queue holds one snapshot per receiver at most. 20 ms is the first value the spike tries.
+- **Pacing of bulk data (owned by 03).** The server keeps a connection's unsent bytes below `U`, the amount the
+  connection drains in about 20 ms, clamped to 4 KiB to 64 KiB (`TCP_NOTSENT_LOWAT` or the writer's own count; the
+  server estimates the drain rate from how fast its writes complete). Bulk data (section 03's `Enter` chunks and any
+  other large message) is written in chunks no larger than `U` and never larger than 16 KiB, and a chunk is written
+  only while unsent bytes are under `U`. Presence is written whenever the socket accepts it, ignoring `U`, but its
+  queue holds one snapshot per receiver at most. 20 ms is the first value the spike tries.
 - **Worst-case wait behind bulk data.** A presence message written now can wait behind every unsent byte plus the
   chunk being written: at most `A = U + chunk`, and the wait is `A / link speed` on the receiver's bottleneck link.
   Where `U` is not clamped, `U / speed` is 20 ms and `chunk / speed` is at most 20 ms, so the wait is **at most
@@ -919,15 +934,14 @@ The who list is a panel (section 07); its data comes from here.
   and every `Position` within the depth cap (01; checked on the raw bytes before any number is built), or the
   message is dropped and counted.
 - **Rates and caps are section 08's**. This section only names what it needs in that table: the presence message
-  rate per session (60 a second with a burst of 120 for members, 30 and 60 for guests); the jump rate; the points
-  per stroke; and four limits I propose adding: `max_live_strokes` per room, `max_visible_cursors` per receiver,
-  `presence_down_budget` per receiver and `presence_room_egress` per room. Over the limit, presence is dropped
-  without reply (08). The design keeps a drawing or dragging session at about 30 messages a second so the
-  60-a-second figure holds with room to spare: ink and drag messages replace `Pointer`, and `Selection`, `Activity`,
-  `Heartbeat` are rare.
-- Message sizes are checked before decoding (1000 bytes, or the depth-dependent size of one position for the
-  rare deep message) and decoders never allocate more than they were told (a declared length is checked against
-  the bytes present).
+  rate per session (60 a second with a burst of 120); the jump rate; the points per stroke; and four limits I
+  propose adding: `max_live_strokes` per room, `max_visible_cursors` per receiver, `presence_down_budget` per
+  receiver and `presence_room_egress` per room. Over the limit, presence is dropped without reply (08). The design
+  keeps a drawing or dragging session at about 30 messages a second so the 60-a-second figure holds with room to
+  spare: ink and drag messages replace `Pointer`, and `Selection`, `Activity`, `Heartbeat` are rare.
+- Message sizes are checked before decoding (1000 bytes, or the depth-dependent size of one position for the rare
+  deep message) and decoders never allocate more than they were told (a declared length is checked against the bytes
+  present).
 - `Selection.ids` are only ever used as keys into the receiver's own document; an id it does not hold is ignored.
 
 ## Failure modes
@@ -946,8 +960,8 @@ The who list is a panel (section 07); its data comes from here.
 | A cursor on a level the receiver has not been sent | Cursor display does not need the object data; it needs only its `Position`. It is drawn even where the receiver has no content yet. |
 | Position arithmetic out of range (`Delta::to_f64` returns `Far`) | The cursor jumps to the new sample. |
 | Clock offset estimate jumps | `D` slews 1 ms a frame, so a correction of 100 ms takes 100 frames; an offset step larger than 500 ms resets all buffers. |
-| A hostile name | Sanitized, truncated, drawn as plain text, labeled as a guest if a guest. |
-| The drawer disconnects mid-stroke | See Live ink. |
+| A hostile name | Sanitized, truncated, drawn as plain text; a confusable of another present name is disambiguated. |
+| The drawer disconnects or the app dies mid-stroke | See Live ink: the stroke is kept by the drawer's device and arrives later. |
 | Receiver's view changes during interpolation | Interpolation is in world offsets, converted at draw time, so the cursor follows the world, not the screen. |
 
 ## How it is tested
@@ -965,15 +979,16 @@ The who list is a panel (section 07); its data comes from here.
 | Smoothing is smooth and bounded | Recorded cursor traces with 0, 2 and 10 percent loss and 50 ms jitter: the drawn path has no step larger than 1.5 times the true step per frame, extrapolation never exceeds 100 ms, a teleport flag snaps |
 | Interpolation does not depend on depth | The same trace at levels 0 and 100 gives the same draw offsets to within 1/16 pixel |
 | Color assignment | The first 14 sessions in a room all differ in color; a rejoin gets the same pair; with 100 sessions, no pair has more than 2 holders; the palette passes the pairwise distance test under normal vision and the three simulated deficiencies; the black/white text choice meets 4.5:1 for every slot |
-| Names | A corpus of hostile names (bidi overrides, zero-width joiners, stacked combining marks, very long, confusables, empty, markup, emoji sequences) produces bounded, plain, collision-free banners; a guest cannot display a name equal to a member's |
+| Names | A corpus of hostile names (bidi overrides, zero-width joiners, stacked combining marks, very long, confusables, empty, markup, emoji sequences) produces bounded, plain, collision-free banners; no person can display a name equal to another present person's |
 | Live ink swap | A scripted drawer and viewer: for every frame between the last `Points` and the object arriving, exactly one of preview and object is drawn (no frame with none or both); the outlines differ by at most a quarter pixel; `End` before the object, and the object before `End`, both work |
-| Drawer disconnect | Kill the drawer's presence socket mid-stroke: previews fade within 7 s; reconnect and commit: the finished stroke appears; kill the client: no stroke appears |
+| Drawer disconnect | Cut the drawer's connection mid-stroke: other screens fade the preview within 7 s and no object appears; the drawer's device keeps the stroke; reconnect: the whole finished stroke appears once on every screen as an ordinary object; the server never creates a stroke itself |
+| Drawer app dies | Kill the drawer's app mid-stroke while it is still connected, restart it: the unfinished stroke is found in the outbox, finished and sent, and appears exactly once on every screen (also when the restart is after a reconnect and a resend); at most the last 250 ms of points are missing |
 | Timeouts | Fake clock tests for Active, Idle, Away, Silent, Gone, and hidden-tab behavior |
 | Back-pressure | A receiver that reads slowly: the server's queue for it never holds more than one snapshot of unsent presence |
 | Jump and follow | A session with `locatable` off refuses both and a refusal looks like a departed person; the jump rate limit holds; the target receives the follow notice; a follower gets the followed cursor outside the region and cap; manual pan ends a follow; no message to another client contains a view that was not requested (scan of all outputs, shared with 08's N87) |
 | Drag preview | A scripted dragger and viewer: the viewer's preview follows `Move`; after the `Set` arrives exactly one of preview and object is drawn in each frame; a lost `End` times out in 2 s; nothing from a preview reaches the document |
 | One socket keeps cursors timely | Throttled-socket test with a 50 MB view fill running: the wait is measured at 0.25, 1, 5, 20 and 100 Mbit/s with the 20 ms drain rule (and, for comparison, 40 ms) against the transport table (bound about 40 ms above the 4 KiB floor); cursor lag stays under 200 ms where the table says it can; the result decides whether the second-socket fallback is needed |
-| A session sends at most about 30 presence messages a second | Drive a drawing session and a dragging session at full rate: the count stays under 60 a second for members and 30 for guests (08's limits) |
+| A session sends at most about 30 presence messages a second | Drive a drawing session and a dragging session at full rate: the count stays under 60 a second (08's limit) |
 | Deep positions | A cursor at depth 100 and at the cap: the message decodes, the budget formula uses the real size, and an over-cap position is rejected from the raw bytes |
 | Limits | Rate-limit, size, non-finite number and impossible-position cases are dropped and counted |
 | Who list at scale | 2000 simulated joins: no more than the count message reaches closed panels; open panels get at most one batch a second |
@@ -1003,37 +1018,38 @@ come from crates.io on 2026-11-11; their health beyond the update date was not e
   `check_cap_bytes`, `ExactBox`, `ViewScale { level, q }`, and `ExactRect::contains` and `grown` on the view's
   rectangle (`ViewRect::exact_rect`).
 - **02.** A client can choose the `ObjectId` of a stroke before the pen lifts, and the committed stroke uses it.
-  `ObjectId` is at most 16 bytes. 02 sends a drag's `Op::Set` of the `Xform` register on release and at most 5
-  times a second during a long drag; the preview in this section covers the time between. The stored stroke is 06's
+  `ObjectId` is at most 16 bytes. 02 sends a drag's `Op::Set` of the `Xform` register on release and at most 5 times
+  a second during a long drag; the preview in this section covers the time between. The stored stroke is 06's
   `PackedPoints` (the `i32` lattice at 2^-16 plus pressure), and live ink uses the same lattice.
 - **03.** The server's presence module is told every session's current view (and each change) in-process from
   `SetView` (a `ViewMsg`), sent at least every 100 ms while the view moves and unpadded, and the server pads it by
-  1/8 for cursor routing. `Presence(Bytes)` is a priority class served before other classes, with the
-  adaptive unsent limit and chunks (4 to 64 KiB, chunks at most 16 KiB). `Ping`/`Pong` give the clock offset. The
-  object spatial index offers a point-item interface that `CursorIndex` can reuse. If the fallback is
-  ever used, 03's handshake says how a second socket attaches to a session.
+  1/8 for cursor routing. `Presence(Bytes)` is a priority class served before other classes, with the adaptive
+  unsent limit and chunks (4 to 64 KiB, chunks at most 16 KiB). `Ping`/`Pong` give the clock offset. The object
+  spatial index offers a point-item interface that `CursorIndex` can reuse. If the fallback is ever used, 03's
+  handshake says how a second socket attaches to a session.
 - **06.** An outline function that builds a stroke from a point list incrementally, identical for preview and final;
-  a way to draw the cursor, banner, badges, glyphs, selection outlines and the dashed bounds; the thinning
-  tolerance agrees with the stroke's own smoothing. `OutlineBuilder::push` and `finish` as in 06, and the final
-  stroke's anchor (the center of its bounding box) placed a whole number of 2^-16 object units from the
-  pen-down point `Begin.first`, so preview and final points are the same world points (agreed with section 06).
+  a way to draw the cursor, banner, badges, glyphs, selection outlines and the dashed bounds; the thinning tolerance
+  agrees with the stroke's own smoothing. `OutlineBuilder::push` and `finish` as in 06, and the final stroke's
+  anchor (the center of its bounding box) placed a whole number of 2^-16 object units from the pen-down point
+  `Begin.first`, so preview and final points are the same world points (agreed with section 06).
 - **07.** Pointer events with an activity signal and hover state, hidden-tab events, the who-list panel and its
   accessibility description, tool ids; one socket in `Transport`.
 - **08.** Which roles may send which messages (viewers: cursor and view, no ink); the presence message rate (60 a
-  second, burst 120; guests 30 and 60); the jump rate; display-name limits and their unit; the guest session id used
-  as `user_key`; `kind` on every session; the per-session `locatable` flag with its `loc` claim; the follow notice;
-  and a place in the limits table for `max_followers_per_person` (50), `max_live_strokes`, `max_visible_cursors`,
-  `presence_down_budget` and `presence_room_egress`, with a room cap on sessions.
+  second, burst 120); the jump rate; the display-name limit; the token's user id as `user_key`; `via:
+  Option<LinkId>` on every session; the per-session `locatable` flag with its `loc` claim; the follow notice; the
+  owner setting that turns jump and follow off for people who came through an invite link; and a place in the limits
+  table for `max_followers_per_person` (50), `max_live_strokes`, `max_visible_cursors`, `presence_down_budget` and
+  `presence_room_egress`, with a room cap on sessions.
 
 ## What this changes in docs/design.md
 
-- **"One WebSocket per client"** is kept for the first version, with presence as a priority class and paced
-  bulk data. My earlier proposal of a second socket is the fallback, with a measured trigger. The cost of keeping
-  one socket is a cursor wait of up to 80 KiB of link time during a bulk load (table under "Transport details").
+- **"One WebSocket per client"** is kept for the first version, with presence as a priority class and paced bulk
+  data. My earlier proposal of a second socket is the fallback, with a measured trigger. The cost of keeping one
+  socket is a cursor wait of up to 80 KiB of link time during a bulk load (table under "Transport details").
 - **"Delivered exactly when inside the view"** (the Presence section and the test table) becomes: delivered when
-  inside the view padded by 1/8, shown only when inside the exact view. Reason: the view and cursor messages
-  cross, so an exact server test makes cursors pop in late at the edge, and the receiver needs a sample or two to
-  smooth. The visible rule is unchanged.
+  inside the view padded by 1/8, shown only when inside the exact view. Reason: the view and cursor messages cross,
+  so an exact server test makes cursors pop in late at the edge, and the receiver needs a sample or two to smooth.
+  The visible rule is unchanged.
 - **"A remote cursor lags by no more than 100 ms on a good connection"** (Targets) cannot hold with smoothing: lag
   is about RTT + 17 ms + D, about 150 ms at RTT 60 ms. Proposed target: under 200 ms at RTT 60 ms in rooms up to 25
   visible cursors; the delay added by smoothing itself under 100 ms.
@@ -1048,26 +1064,14 @@ come from crates.io on 2026-11-11; their health beyond the update date was not e
 
 ## Questions for the owner
 
-1. **Jump and follow privacy default.** Section 08 recommends `locatable` on by default with an opt-out; I agree.
-   Should the surface owner always be visible, and can the owner turn jump and follow off for guests? A followed
-   person is told who follows them (this design and 08 say yes).
-2. **Abandoned stroke.** If a drawer's client disappears mid-stroke, is losing the partial stroke acceptable (this
-   design), or should the server keep what it saw after a short wait?
-3. **Cursors in big rooms.** Is a cap of 200 visible cursors, 50 banners and a low update rate in rooms over 200
-   acceptable as the product behavior? Should people be able to switch off other people's cursors for themselves (as
-   in Miro)?
-4. **Guest and viewer cursors.** Do viewers and guests get cursors that others see by default? Should guests be
-   marked with the word "guest" on every banner (this design: yes)?
-5. **Choosing a color.** Should people be able to choose their color, which makes uniqueness weaker and shifts the
+1. **Cursors in big rooms.** For rooms over the planning figure of about 50 people: is a cap of 200 visible cursors,
+   50 banners and a low update rate acceptable as the product behavior? Should people be able to switch off other
+   people's cursors for themselves (as in Miro)?
+2. **Choosing a color.** Should people be able to choose their color, which makes uniqueness weaker and shifts the
    problem to who wins a clash? This design assigns colors only.
-6. **Presence cost.** The default budgets (32 KB/s per receiver, 100 Mbit/s per room) are operating costs for
-   whoever runs the server. Are they right as defaults for the first version?
-7. **CRDT library.** This section does not depend on it; presence is outside the document model. No recommendation
-   is needed from here.
-8. **First app.** Presence needs are the same for any first app, but a classroom or presentation app wants a
-   "present" mode (everyone follows one person). Follow is capped at 50 followers per person, so a larger audience
-   needs a separate broadcast of the presenter's view, which this design does not specify. If the first app is of
-   that kind, the owner should say so.
+3. **Presence cost.** The default budgets (32 KB/s per receiver, 100 Mbit/s per room) are operating costs for
+   whoever runs the server. Are they right as defaults for the first version? At 50 people the worst case needs 22
+   KB/s per receiver and 8.8 Mbit/s per room, far below both.
 
 ## Sources
 

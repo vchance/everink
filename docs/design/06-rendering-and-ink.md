@@ -199,7 +199,40 @@ Frame strategy, for 10,000 objects at 60 fps:
 
 The softness during fast zoom is the same trade map renderers make, and it is shown for a few frames only.
 
+The owner also asked (2026-11-12) that a project of theirs be considered where it makes sense. It is evaluated in
+the spike behind the `Backend` trait, with its details kept outside this repository, and it is used only if it
+makes sense. Nothing in this design depends on it until it has been measured.
+
 ## Design
+
+### Decisions that fix the first release (owner decisions, 2026-11-12)
+
+- **Browsers (owner decision, 2026-11-12).** The WebGPU and WebGL2 paths are supported and tested. The
+  processor-only path (`vello_cpu` into a canvas) is best effort: it must open a surface and work, slowly; it is not
+  tuned and is not tested as a full experience. CI runs the pixel suite on the wgpu and WebGL2 backends; the
+  processor-only backend runs a smoke test (open, draw one of each primitive, pan) and the tests that need it as the
+  picture builder.
+- **Eraser (owner decision, 2026-11-12).** The whole-object eraser is the default tool. The partial stroke eraser
+  (cuts) is a second tool in the toolbar.
+- **Text languages (owner decision, 2026-11-12).** Text on the surface supports Latin script only at the first
+  release. Other scripts and emoji draw as missing-glyph boxes until support is added. No CJK or emoji fonts are
+  shipped or fetched. Bidirectional text, CJK and emoji work is later; the sections below mark it so.
+- **First app (owner decision, 2026-11-12).** A whiteboard with about 50 active people on one surface. That puts
+  first: shapes and arrows, text boxes (Latin), images, the tile cache with its time-boxed re-render, and drawing
+  the cursors, selections and live strokes of 50 people in the overlay without a frame cost that grows with the
+  count (one batched pass for all cursors, one name-banner glyph cache). It defers extreme pen-latency tuning: the
+  live-ink canvas and the stroke modeler are built to the design below, but the per-device latency measurements and
+  prediction tuning wait. Overview pictures stay in build step 6.
+- **Controls toolkit (not yet chosen).** The spike builds the same toolbar twice, with Everink's own small toolkit
+  and with egui. Either draws through the scene API below, so the choice does not change this section.
+- **Merge model (owner decision, 2026-11-12).** Everink's own server-ordered object map, with a CRDT library only
+  for text. Nothing in this section depends on it.
+
+**Spike plan, rendering part.** Measure first: the tile raster rate of `vello_gpu` on 10,000 objects (see the
+performance budget); the cost of moving many lifted objects; and the stroke path from pen sample to GPU submit. The
+further candidate the owner asked to have considered is evaluated in the same spike behind the `Backend` trait,
+with its details kept outside this repository; nothing depends on it until it has been measured.
+
 
 ### Crate layout
 
@@ -377,7 +410,8 @@ At startup the shell asks for a backend in this order, and `Backend::capabilitie
 
 1. **`vello_gpu` on wgpu**, native (Vulkan, Metal, DX12) and in browsers with WebGPU.
 2. **`vello_gpu` WebGL2**, in browsers without WebGPU. Cargo feature `webgl`.
-3. **`vello_cpu`** into an RGBA buffer shown through a canvas, for browsers or machines with neither. It is
+3. **`vello_cpu`** into an RGBA buffer shown through a canvas, for browsers or machines with neither (best effort,
+   owner decision 2026-11-12: it must open and work, slowly; it is not tuned or tested as a full experience). It is
    single-threaded unless the page is cross-origin isolated (needed for shared-memory threads in wasm); expect a
    lower tile rate, shown as longer softness after zoom. This is a degraded mode, with a banner in the UI.
 
@@ -657,7 +691,8 @@ the whole stroke*, which avoids darker overlaps within one stroke by the non-zer
 #### Erasing
 
 Both erasers test the eraser path against stroke geometry with the deterministic code, so the results are the same
-on every client. Which is the default tool is a question for the owner (below); this section supplies both.
+on every client. The whole-object eraser is the default tool and the partial eraser is a second tool (owner
+decision, 2026-11-12); this section supplies both.
 
 - **Object eraser**: sets `alive = false` on every object whose outline the eraser path touches. Hit test: the
   eraser polyline inflated by its radius against each candidate's lattice outline (candidates from the index). One
@@ -720,21 +755,26 @@ How it is used:
   zooms. Positions are `f32` offsets from the text box origin (at most a few thousand units, so well within `f32`).
 - **Fonts come only from the document's font set**, never from the system: Fontique's system enumeration is
   disabled. Font files are bytes from section 05. A text run names a font by id; the fallback chain per script is
-  part of the document font set (Latin, Greek, Cyrillic, Arabic, Hebrew, CJK, emoji), also never the OS.
+  part of the document font set, also never the OS. At the first release the set holds Latin only (owner decision,
+  2026-11-12): a character the fonts do not cover is drawn as the font's missing-glyph box, and no CJK or emoji font
+  is shipped or fetched.
 - **Rich runs**: font, size, weight, italic, color, underline, strikethrough per run (from section 02's text model).
   Alignment per paragraph. Wrapping at the box width, or no wrap.
 - **Bidirectional text** and line breaking: UAX #9 and UAX #14 through ICU4X. Shaping through HarfRust, including
-  ligatures and emoji modifiers.
-- **Emoji**: a shipped color emoji font; vector color glyph tables where Glifo supports them. Whether Glifo handles
-  the chosen font's format (COLRv1) is unverified; the fallback is one bitmap-font emoji set, which is sharp only to
-  its bitmap size (an emoji can look soft at 100x zoom, accepted).
+  ligatures. Line breaking and Latin shaping are in the first release; bidirectional text and the other scripts are
+  **later**.
+- **Emoji (later; draws as missing-glyph boxes at the first release)**: a shipped color emoji font; vector color
+  glyph tables where Glifo supports them. Whether Glifo handles the chosen font's format (COLRv1) is unverified; the
+  fallback is one bitmap-font emoji set, which is sharp only to its bitmap size (an emoji can look soft at 100x
+  zoom, accepted).
 - **Determinism**: shaping and layout use `f32` arithmetic and ICU4X data compiled in. Whether Parley's results are
   bit-identical between native and wasm is *unverified*. The requirement is weaker than ink's: the cases that matter
   are line-break positions and cursor placement. Mitigations: golden tests that compare line breaks and glyph
-  positions (rounded to 1/64 unit) between native and wasm CI for a corpus covering Latin, Arabic, Hebrew,
-  Devanagari, CJK and emoji; layout widths compared after rounding to 1/64 unit before a break decision, so tiny
-  float differences cannot flip a break. If the golden test finds real differences, the fall-back plan is for the
-  authoring client to store explicit line-break offsets with each text block (a change to section 02).
+  positions (rounded to 1/64 unit) between native and wasm CI for a corpus of Latin text at first (Arabic, Hebrew,
+  Devanagari, CJK and emoji are added when those scripts are); layout widths compared after rounding to 1/64 unit
+  before a break decision, so tiny float differences cannot flip a break. If the golden test finds real differences,
+  the fall-back plan is for the authoring client to store explicit line-break offsets with each text block (a change
+  to section 02).
 - **Drawing**: each glyph is an outline (Skrifa) cached per `(font, glyph, variation)` in font units, emitted as a
   filled path with the layout transform. Because tiles are re-rendered only when dirty, the glyph cache needs only
   to avoid recomputing outlines; Glifo's atlas for small text is an optimization to adopt when it is released, not a
@@ -1057,7 +1097,7 @@ are carried in a third-party notices file). Versions are those on crates.io on 2
   draws the object in the same frame, and the tile that will hold the object is rendered before the preview is
   dropped so there is no gap (if the tile is not ready the preview stays one more frame).
 - **05 (media).** Delivers decoded images with mip levels and a maximum texture size; provides font bytes keyed by
-  id for the document font set, including a fallback per script and an emoji font; serves picture blobs.
+  id for the document font set (Latin only at the first release; no CJK or emoji font); serves picture blobs.
 - **07 (shell, controls).** Offers `request_frame()` and creates the web canvases: the main canvas, and the
   `desynchronized` live-ink canvas handed over by `SurfaceHost::live_ink_target()` (this section draws into it and
   creates nothing). The accessibility mirror and hidden text area stay *below* both. Also the pen sample stream
@@ -1069,25 +1109,15 @@ are carried in a third-party notices file). Versions are those on crates.io on 2
 
 ## Questions for the owner
 
-1. **CRDT library.** Reserved for the owner. Nothing here depends on the answer, except that the Stroke payload
-   (points, a few hundred bytes) must travel efficiently in whichever library is chosen.
-2. **The first app.** If the first app is pen-first (note taking, annotation), latency work comes first and the
-   live-ink canvas, the prediction tuning and per-device measurements become the main task. If it is a whiteboard of
-   shapes and text, the text engine and the picture builder come earlier. This changes the order of work in this
-   section.
-3. **Minimum environment.** Should the CPU fallback (no WebGPU, no WebGL2) be supported at all, and which browsers
-   count? It is engineering cost for a degraded experience. I recommend supporting WebGPU and WebGL2 in the first
-   release, with the CPU renderer used for tests and the picture builder only, and offering it to users later.
-4. **Eraser default.** Both erasers exist (object eraser; partial eraser by cuts). I recommend the object eraser by
-   default with the partial eraser as a toolbar option. This is a product decision (what people expect).
-5. **Quality versus speed after zoom.** The tile cache trades a few soft frames after fast zoom for 60 fps. If the
+Answered on 2026-11-12 and stated in the Design: browsers and the processor-only path, the eraser default,
+languages, the first app, the merge model, the controls toolkit and the further candidate for the spike. Still open:
+
+1. **Quality versus speed after zoom.** The tile cache trades a few soft frames after fast zoom for 60 fps. If the
    owner would rather have exact sharpness at some frame cost, say so, and the design moves to option 2.
-6. **Fonts and scripts.** Which scripts must be supported in the first release? CJK fonts are tens of megabytes and
-   an emoji font is large; which are bundled and which are fetched on first use is a cost-and-licensing decision.
-7. **Overview pictures: who pays.** Building pictures costs server CPU. Should it be on by default for every room,
+2. **Overview pictures: who pays.** Building pictures costs server CPU. Should it be on by default for every room,
    or an operator setting? I recommend an operator setting, on by default for rooms above 50,000 objects.
-8. **Color.** Display P3 (wide gamut) is left out. Say if designers are a target audience.
-9. **Highlighter and blend modes.** Multiply-style highlighters and blend modes are not offered in the first version
+3. **Color.** Display P3 (wide gamut) is left out. Say if designers are a target audience.
+4. **Highlighter and blend modes.** Multiply-style highlighters and blend modes are not offered in the first version
    because the renderer lacks some blend modes. Is that acceptable?
 
 ## Sources
