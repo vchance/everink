@@ -9,16 +9,27 @@ during a bulk load on one connection?
 
 ## Answer
 
-No, with the design's 20 ms rule, down to about 1 Mbit/s; and yes, badly, without it.
+No, with the design's 20 ms rule, from about 2 Mbit/s up; and yes, badly, without it.
 
-- **With the rule,** another person's cursor is delayed by 23 to 30 ms (median) and at most 39 ms (95th
-  percentile) at 2 Mbit/s and above while bulk data is sent without a pause, and by 50 to 64 ms at 1 Mbit/s.
-  That fits the 47 ms the design leaves for queueing at 2 Mbit/s and above, and is within the 200 ms target for
-  the whole path at 1 Mbit/s. The model reproduces the design's own table to within 6 ms at every speed.
-- **Without it,** a cursor message waits for the whole send buffer: 420 ms at 20 Mbit/s, 1.7 s at 5 Mbit/s and
-  8.4 s at 1 Mbit/s behind one megabyte. Measured over real sockets as well as in the model.
-- **The second connection for presence is not needed** on this evidence. Section 04 keeps it as a fallback if
-  cursor lag still passes 200 ms above about 1.6 Mbit/s with the rule; it does not.
+The design leaves 47 ms for queueing inside its 200 ms target for a cursor's whole path (section 04).
+
+| | 1 Mbit/s | 5 Mbit/s | 20 Mbit/s |
+|---|---|---|---|
+| With the rule, in the model (95th percentile) | 64 ms: over | 39 ms: within | 26 ms: within |
+| With the rule, over real sockets on Linux (95th percentile) | 125 ms: over | 52 ms: just over | 29 ms: within |
+| Without it (a megabyte unsent), model and sockets | 8.4 s; over sockets no cursor arrived | 1.7 s | 0.42 s |
+
+- **With the rule** the model gives 23 to 30 ms (median) and at most 39 ms (95th percentile) at 2 Mbit/s and
+  above while bulk data is sent without a pause. It reproduces the design's own table to within 6 ms at every
+  speed.
+- **Over real sockets** the figures are the model's plus what the two socket buffers of the test hold, about
+  10 KiB: 4 ms at 20 Mbit/s, 16 ms at 5, 82 ms at 1.
+- **At 1 Mbit/s the target is missed,** by a little in the model (about 217 ms for the whole path) and by more
+  over sockets. The design expected the target to hold above about 1.4 Mbit/s, which the model bears out.
+  Counting every unsent byte in one place would bring 1 Mbit/s inside it (Finding 4).
+- **Without the rule** a cursor message waits for the whole send buffer.
+- **The second connection for presence is not called for** on this evidence. Section 04 keeps it as a fallback
+  if cursor lag still passes 200 ms above about 1.6 Mbit/s with the rule; at 2 Mbit/s and above it does not.
 - **Two corrections to the design** came out of it: the limit must start small, and the rule only works if the
   operating system is also kept from holding unsent bytes. See [Findings](#findings).
 
@@ -101,7 +112,26 @@ server writer has 30,000 strokes (30.6 MB) to send to a client that has just joi
 times a second; the relay reads from it at the link's speed; the client decodes every object and times every
 cursor message. Cursor delay in milliseconds after the first second: median / 95th percentile / maximum.
 
-LINUX_SECTION
+### Linux (x86-64, a GitHub-hosted runner), 4 seconds per run
+
+From the `test` job of CI run [43192425662](https://github.com/vchance/everink/actions/runs/43192425662), revision
+43343df. The repository does not otherwise take timings from a CI runner; these are delays set by the relay's
+speed and not by the machine, and Linux is where the system's unsent bytes can be bounded
+(`TCP_NOTSENT_LOWAT`), so this is the run that answers the question.
+
+| Mbit/s | 20 ms rule | Fixed 64 KiB | Fixed 1 MiB | Worst in the first second, with the rule | Most bytes ever held by the system |
+|---|---|---|---|---|---|
+| 1 | 114 / 125 / 135 | 659 / 725 / 736 | none arrived | 243 | 10 KiB |
+| 5 | 43 / 52 / 55 | 130 / 142 / 145 | 1,703 / 1,715 / 1,717 | 55 | 11 KiB |
+| 20 | 26 / 29 / 30 | 32 / 36 / 36 | 425 / 429 / 429 | 32 | 11 KiB |
+
+- The system held 10 to 11 KiB between the writer and the relay in every run: Linux gave socket buffers of
+  8,192 bytes where 4,096 were asked for. At the link's speed that is 82 ms at 1 Mbit/s, 16 ms at 5 and 4 ms at
+  20, and the figures are the model's two-queue column plus that. Part of it is the relay's receive buffer,
+  which a real path does not have in that form.
+- The pacer's estimate of the link was right in every run (0.98, 4.96 and 20.04 Mbit/s).
+- The first second at 1 Mbit/s, 243 ms, is the slow start the model shows (230 ms).
+- With a megabyte unsent at 1 Mbit/s, one cursor message arrived in four seconds.
 
 ### macOS (Apple M4), 6 seconds per run
 
@@ -158,12 +188,15 @@ with every presence message kept instead of the newest, two failed.
    checked against something that cannot be fooled by a buffer (the acknowledged bytes the system reports).
 3. **The safe wrapper for that option is Linux and Android only** (`socket2` 0.6.5). The server is Linux, so
    that is enough for the product; a development machine on macOS cannot reproduce the server's behaviour.
-4. **Counting all unsent bytes in one place would halve the delay on slow links** (the "one queue" column). It
-   needs the system's own count of unsent bytes. Not needed to meet the target; worth knowing it is there.
+4. **Counting all unsent bytes in one place would halve the delay on slow links** (the "one queue" column): 33 ms
+   in place of 64 at 1 Mbit/s, which is the difference between missing the 200 ms target there and meeting it.
+   It needs the system's own count of unsent bytes, which the design does not use.
 5. **A 40 ms rule buys nothing.** It doubles the delay between 2 and 10 Mbit/s and changes nothing elsewhere.
    Section 03 says 20 ms is "the first value the spike tries"; it can stay.
 6. **Below about 2 Mbit/s the floor, not the rule, sets the delay.** At 0.25 Mbit/s a 4 KiB floor is 131 ms of
    sending. A lower floor would help there and cost more, smaller frames; the design's range starts at 1 Mbit/s.
+7. **Socket buffers have their own floor.** Linux gave 8,192 bytes where 4,096 were asked for. On a slow link
+   that is tens of milliseconds the rule cannot remove.
 
 ## What the measurements do not show
 
@@ -191,8 +224,9 @@ with every presence message kept instead of the newest, two failed.
 2. Sections 03 and 04: say that bounding the system's unsent bytes is required for the rule to mean anything,
    name the platform limit, and add the check on the estimate (Findings 2 and 3).
 3. Section 03: say what a chunk cuts (departure 1).
-4. Section 04, "One connection": replace the table with the model's, note the one-queue figures, and record that
-   the second connection is not needed on this evidence (the decision to drop the fallback is the owner's).
+4. Section 04, "One connection": replace the table with the model's and the socket figures, say that the target
+   is met from about 2 Mbit/s and what would bring 1 Mbit/s inside it (Finding 4), and record that the fallback's
+   own trigger is not reached (whether to drop the fallback is the owner's decision).
 
 These are recorded here and made in a separate change, with the corrections from slices 1, 2a and 2b.
 
