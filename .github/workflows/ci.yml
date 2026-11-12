@@ -70,11 +70,21 @@ jobs:
         with: { persist-credentials: false }
       - name: Toolchain (pinned by rust-toolchain.toml)
         run: rustup toolchain install
-      - name: Tests (x86-64; includes the cross-platform golden file written on aarch64)
+      - name: Tests (x86-64; includes the cross-platform golden files written on aarch64)
         run: cargo test --workspace --locked
+      - name: Tests on wasm32 (under Node; the golden files written on aarch64 must pass here too)
+        run: |
+          node --version
+          cargo test -p everink-core --target wasm32-wasip1 --locked
+      - name: Golden files with fused multiply-add switched on (x86-64 does not have it on by default)
+        env:
+          RUSTFLAGS: -C target-feature=+fma
+          CARGO_TARGET_DIR: target/fma
+        run: cargo test -p everink-core --test outlines --test golden --locked
       - name: Timing examples build and run
         run: |
           cargo run --release --locked --example bench_positions
+          cargo run --release --locked --example bench_cut
           cargo run --release --locked --example bench_object_map
           cargo run --release --locked --example sim_paced_link
       - name: Paced link over real sockets (Linux; no thresholds, the figures are read from the log)

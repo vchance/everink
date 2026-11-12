@@ -179,6 +179,7 @@ impl Camera {
 
     /// Base-2 logarithm of the total scale: pixels per level-0 unit. For display only; it uses a library function
     /// and is not part of any shared result.
+    #[allow(clippy::disallowed_methods)] // a display value, never part of a shared result
     pub fn log2_scale(&self) -> f64 {
         self.zoom.log2() + f64::from(self.level.0) * f64::from(LEVEL_SHIFT)
     }

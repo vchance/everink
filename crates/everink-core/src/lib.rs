@@ -6,6 +6,8 @@
 
 pub mod axis;
 pub mod camera;
+pub mod cut;
+pub mod outline;
 pub mod position;
 pub mod wire;
 

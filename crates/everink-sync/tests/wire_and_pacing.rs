@@ -262,7 +262,11 @@ fn late_joiner(keep_writes_during_the_fill: bool) -> (Reader, Room) {
             if keep_writes_during_the_fill {
                 second.replica.begin_fill();
             }
-            for object in room.objects() {
+            // In the order the objects were made. The room's own order is that of a hash map, which differs
+            // from run to run, and the test must not: which writes overtake their object depends on it.
+            let mut objects: Vec<&Object> = room.objects().collect();
+            objects.sort_by_key(|o| o.ordinal());
+            for object in objects {
                 to_second.pacer.bulk(&record(&object.encode()));
             }
             to_second.pacer.bulk(&record(&[]));
