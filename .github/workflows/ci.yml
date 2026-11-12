@@ -156,6 +156,10 @@ jobs:
           done
       - name: The browser trial builds (it is run in a browser on a machine with a GPU, not here)
         run: cargo build --release --locked --manifest-path "$WEB" --target wasm32-unknown-unknown --features webgpu,webgl,cpu
+      - name: The browser trial builds with WebAssembly SIMD (the build most of its figures come from)
+        run: cargo build --release --locked --manifest-path "$WEB" --target wasm32-unknown-unknown --features webgpu,webgl,cpu --target-dir spike/render-web/target/simd
+        env:
+          RUSTFLAGS: -C target-feature=+simd128
 
   ci-result:
     name: ci-result

@@ -13,7 +13,8 @@
 <pre id="out"></pre>
 <script type="module">
   const q = new URLSearchParams(location.search);
-  const strokes = Number(q.get('strokes') ?? 10000);
+  const asked = Number(q.get('strokes') ?? 10000);
+  const strokes = Number.isInteger(asked) && asked > 0 ? asked : 10000;
   const runs = (q.get('run') ?? 'cpu,webgl,webgpu').split(',');
   const frames = Number(q.get('frames') ?? 300);
   const panning = q.get('pan') !== 'no';
@@ -60,7 +61,7 @@
     await m.default();
     window.trial = m;   // for looking at a run by hand, from the console
     say(`${navigator.userAgent}`);
-    say(`module ${pkg} loaded and compiled in ${(performance.now() - t0).toFixed(0)} ms; ${strokes} strokes; visibility ${document.visibilityState}; screen ${screen.width} x ${screen.height} at ${devicePixelRatio}`);
+    say(`module ${pkg} loaded and compiled in ${(performance.now() - t0).toFixed(0)} ms; ${strokes} strokes; visibility ${document.visibilityState}; clock ${crossOriginIsolated ? 'fine (the page is cross-origin isolated)' : 'rounded to 0.1 ms (the page is not cross-origin isolated)'}; screen ${screen.width} x ${screen.height} at ${devicePixelRatio}`);
     if (runs.includes('cpu') && m.run_cpu) say(m.run_cpu(strokes));
     if (runs.includes('webgl') && m.run_webgl) {
       say(m.run_webgl(document.getElementById('webgl'), strokes));

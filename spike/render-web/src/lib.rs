@@ -89,13 +89,14 @@ fn lines(
     ));
 }
 
-/// The share of a tile's pixels that are drawn on.
-fn drawn_share(alpha: &[u8]) -> f64 {
-    alpha.iter().filter(|a| **a != 0).count() as f64 / alpha.len() as f64
+/// The share of a tile's pixels (four bytes each, alpha last) that are drawn on.
+fn drawn_share(pixels: &[u8]) -> f64 {
+    pixels.chunks_exact(4).filter(|p| p[3] != 0).count() as f64 / (pixels.len() / 4) as f64
 }
 
 thread_local! {
-    /// The coverage of the busiest tile as each renderer drew it, by renderer and outline form, for `compare`.
+    /// The pixels of the busiest tile as each renderer drew it (red, green, blue and alpha, with the colour
+    /// multiplied by the alpha), by renderer and outline form, for `compare`.
     static ALPHA: RefCell<Vec<(&'static str, &'static str, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -107,8 +108,9 @@ fn keep_alpha(renderer: &'static str, kind: &'static str, alpha: Vec<u8>) {
 }
 
 /// Compares, pixel by pixel, the busiest tile as each pair of renderers that has run drew it: the pixels where
-/// their coverage differs by more than an eighth of full, among the pixels either drew. Returns the lines, and
-/// fails if any pair differs on two in a hundred or more.
+/// any of red, green, blue or alpha differs by more than an eighth of full, among the pixels either drew. So a
+/// missing shape, a wrong colour and a wrong drawing order all show. Returns the lines, and fails if any pair
+/// differs on two in a hundred or more.
 #[wasm_bindgen]
 pub fn compare() -> Result<String, JsValue> {
     let mut out = String::new();
@@ -119,8 +121,11 @@ pub fn compare() -> Result<String, JsValue> {
                 if ka != kb || a.len() != b.len() {
                     continue;
                 }
-                let either = a.iter().zip(b).filter(|(x, y)| **x != 0 || **y != 0).count();
-                let differ = a.iter().zip(b).filter(|(x, y)| x.abs_diff(**y) > 32).count();
+                let pairs = || a.chunks_exact(4).zip(b.chunks_exact(4));
+                let either = pairs().filter(|(x, y)| x[3] != 0 || y[3] != 0).count();
+                let differ = pairs()
+                    .filter(|(x, y)| x.iter().zip(*y).any(|(p, q)| p.abs_diff(*q) > 32))
+                    .count();
                 let share = differ as f64 * 100.0 / either.max(1) as f64;
                 worst = worst.max(share);
                 out.push_str(&format!(
@@ -201,11 +206,7 @@ mod cpu {
                     ctx.render(&mut pixmap, &mut resources);
                     ms[1] += now() - t;
                     if run + 1 == RUNS && index == check {
-                        alpha = pixmap
-                            .data_as_u8_slice()
-                            .chunks_exact(4)
-                            .map(|p| p[3])
-                            .collect();
+                        alpha = pixmap.data_as_u8_slice().to_vec();
                     }
                 }
                 runs.push(ms);
@@ -254,7 +255,7 @@ mod webgl {
         JsValue::from_str(&format!("{e:?}"))
     }
 
-    /// Reads a tile texture back: the alpha of each pixel, row by row from the top.
+    /// Reads a tile texture back: the four bytes of each pixel, row by row from the top.
     fn read_alpha(
         gl: &Gl,
         frame: &WebGlFramebuffer,
@@ -284,7 +285,8 @@ mod webgl {
         Ok(data
             .chunks_exact(usize::from(TILE) * 4)
             .rev()
-            .flat_map(|row| row.chunks_exact(4).map(|p| p[3]))
+            .flatten()
+            .copied()
             .collect())
     }
 
@@ -444,7 +446,7 @@ mod webgl {
         })
     }
 
-    /// The alpha of the composed canvas over tile number `index` at no offset, row by row from the top, kept for
+    /// The pixels of the composed canvas over the busiest tile at no offset, row by row from the top, kept for
     /// `compare` under the name of the outline form given. Call it straight after `webgl_frame(0, 0)`.
     #[wasm_bindgen]
     pub fn webgl_composed_check() -> Result<String, JsValue> {
@@ -469,7 +471,8 @@ mod webgl {
             let alpha: Vec<u8> = data
                 .chunks_exact(usize::from(TILE) * 4)
                 .rev()
-                .flat_map(|row| row.chunks_exact(4).map(|p| p[3]))
+                .flatten()
+                .copied()
                 .collect();
             let drawn = drawn_share(&alpha);
             keep_alpha(
@@ -524,7 +527,7 @@ mod webgpu {
         let _ = rx.await;
     }
 
-    /// Reads a tile texture back: the alpha of each pixel, row by row.
+    /// Reads a tile texture back: the four bytes of each pixel, row by row.
     async fn read_alpha(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -569,8 +572,8 @@ mod webgpu {
         assert_eq!(rx.await, Ok(true), "the buffer maps");
         let data = buffer.slice(..).get_mapped_range().expect("a mapped range");
         data.chunks_exact(row as usize)
-            .flat_map(|r| r[..usize::from(TILE) * 4].chunks_exact(4))
-            .map(|p| p[3])
+            .flat_map(|r| &r[..usize::from(TILE) * 4])
+            .copied()
             .collect()
     }
 

@@ -38,7 +38,7 @@ cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml [stro
 cargo clippy --manifest-path spike/render-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/render-trial/Cargo.toml --check     # its format check
 sh spike/render-web/build.sh                                        # the browser trial: builds into www/, prints wasm sizes
-python3 -m http.server 8765 --bind 127.0.0.1 --directory spike/render-web/www   # then open it in a browser (question 10)
+python3 spike/render-web/serve.py                                   # serves it on 127.0.0.1:8765; open that in a browser (question 10)
 cargo clippy --manifest-path spike/render-web/Cargo.toml --target wasm32-unknown-unknown --features webgpu,webgl,cpu --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/render-web/Cargo.toml --check       # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table

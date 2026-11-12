@@ -13,19 +13,19 @@ builds, Rust 1.97.1. Safari, Firefox, a phone and a slower machine are not measu
 - **A view that is not being redrawn holds 60 frames a second.** With the view's 40 tiles kept as textures and the
   3840 x 2160 canvas composed from them on every frame while it pans, Chrome gave a frame every 16.7 ms on both
   WebGPU and WebGL2: no late frame in seven runs of 300 frames on WebGPU, and one (the first) in three runs on
-  WebGL2. The page's thread spent 0.2 to 0.8 ms on a frame.
+  WebGL2. The page's thread spent a median of 0.2 to 0.8 ms on a frame (5.2 ms at most).
 - **Redrawing tiles is the shortfall, and it is processor time, as natively.** Redrawing the whole view of 10,000
   strokes from nothing takes, in WebAssembly with SIMD, **80 ms with the design's outline and 540 ms with the
   robust outline of slice 3a**; without SIMD, 185 to 210 ms and 1,240 to 1,340 ms. The same redraw natively takes
   61 and 394 ms. So WebAssembly costs **1.3 to 1.4 times native with SIMD and 3.0 to 3.4 times without**.
 - **WebGPU, WebGL2 and the processor renderer take the same time**, to within a few percent, because the time is
-  the preparation of paths, which all three do on the page's one thread. The GPU's part is under 3 ms for the
-  whole view on either backend.
-- **All three draw the same pixels.** On the busiest tile, every pair of renderers differs on 0 pixels of about
+  the preparation of paths, which all three do on the page's one thread. What was left to wait for once all 40 tiles had been
+  sent to the GPU was under 3 ms on either backend.
+- **All three draw the same pixels on the tile compared, in colour and coverage.** On the busiest tile, every pair of renderers differs on 0 pixels of about
   138,000 drawn, for every outline form; and the canvas composed from the cache on WebGL2 differs from the tile
   drawn directly on 0.
-- **The WebAssembly module is small.** Built for size with one renderer: 475 KB for WebGPU, 363 KB for WebGL2,
-  519 KB for the processor renderer; 152, 122 and 155 KB sent with Brotli. All three together: 913 KB, 261 KB
+- **The WebAssembly module is small.** Built for size with one renderer: 476 KB for WebGPU, 364 KB for WebGL2,
+  519 KB for the processor renderer; 152, 122 and 155 KB sent with Brotli. All three together: 914 KB, 262 KB
   sent. These builds draw paths and images only: no text and none of the renderer's optional shaders.
 
 ## What was built
@@ -122,8 +122,10 @@ there when the wait is once for the view: 10.8 and 11.6 ms against `vello_cpu`'s
 
 ### Do they draw the same thing?
 
-On the busiest tile (half of it drawn on, about 138,000 pixels), the pixels whose coverage differs by more than
-an eighth of full, among those either renderer drew:
+On the busiest tile (half of it drawn on, about 138,000 pixels), the pixels where any of red, green, blue or
+coverage differs by more than an eighth of full, among those either renderer drew. The sessions the tables above
+come from compared coverage only; the comparison of colour was added in review and run in one more session
+(below), with the same result:
 
 | Pair | Discs and bands | Octagons and bands | Single path |
 |---|---|---|---|
@@ -136,6 +138,24 @@ The same in every session, at 10,000 and at 1,000 strokes. The page fails if any
 or more. The canvas composed on WebGPU is not read back, so it is not in this check. It was looked at: it shows the same
 strokes as the WebGL2 canvas, on black, because its surface is opaque.
 
+### A run on the final code, with a fine clock
+
+After review the page compares colour as well as coverage and is served so that its clock is fine (0.005 ms).
+One more session with SIMD at 10,000 strokes, in a fresh Chrome 157 window with an empty profile:
+
+| Outline | `vello_cpu` | WebGL2 | WebGPU | `vello_gpu`'s own work (WebGL2, WebGPU) | `vello_cpu` rasterising |
+|---|---|---|---|---|---|
+| Discs and bands | 549 ms | 555 ms | 544 ms | 3.2 and 4.9 ms | 8.1 ms |
+| Octagons and bands | 366 ms | 361 ms | 365 ms | 2.5 and 4.5 ms | 7.4 ms |
+| Single path | 82 ms | 78 ms | 81 ms | 2.1 and 4.2 ms | 7.5 ms |
+
+The pan: no late frame of 300 on either backend; the page's thread took a median of 0.12 ms a frame on WebGL2
+(0.24 at the 95th, 1.2 at most) and 0.30 ms on WebGPU (0.58, 1.8). All twelve pairs differed on 0 pixels. So the
+figures above stand, and the small ones were not an effect of the rounded clock.
+
+A first attempt at this run is not used: another job was compiling on every core of the machine (load average
+72), and the redraw took 1,416 ms where it takes 549. The native trial was slowed the same way at that moment.
+
 ### Size and start-up
 
 `sh spike/render-web/build.sh`; sizes of the `.wasm` after `wasm-bindgen` 0.2.130, with no further size tool
@@ -143,12 +163,12 @@ strokes as the WebGL2 canvas, on black, because its surface is opaque.
 
 | Build | Bytes | gzip -9 | Brotli |
 |---|---|---|---|
-| WebGPU only, for size | 475,121 | 184,328 | 152,206 |
-| WebGL2 only, for size | 363,363 | 145,780 | 122,062 |
-| `vello_cpu` only, for size | 519,135 | 196,256 | 155,214 |
-| All three, for size | 913,092 | 333,789 | 261,349 |
-| All three, for speed (the build measured above, without SIMD) | 1,455,681 | 417,554 | 307,325 |
-| All three, for speed, with SIMD | 1,344,614 | 389,936 | 290,318 |
+| WebGPU only, for size | 475,782 | 184,677 | 152,289 |
+| WebGL2 only, for size | 363,939 | 146,066 | 122,452 |
+| `vello_cpu` only, for size | 519,215 | 196,304 | 155,066 |
+| All three, for size | 913,903 | 334,247 | 261,878 |
+| All three, for speed (the build measured above, without SIMD) | 1,456,827 | 417,175 | 306,475 |
+| All three, for speed, with SIMD | 1,345,711 | 389,534 | 289,922 |
 
 - "For size" is `opt-level = "s"`, link-time optimisation, one codegen unit, `panic = "abort"`. Its speed is not
   measured.
@@ -184,7 +204,8 @@ outline and SIMD, and 68 ms with the robust one.
 3. **WebAssembly SIMD is worth 2.3 to 2.6 times here** and is the difference between 1.4 and 3.3 times native. It
    is a build flag, and a module built with it does not load in a browser without it. Section 06 should require
    it or plan two builds.
-4. **The backend does not matter for strokes.** WebGPU, WebGL2 and the processor renderer are within a few
+4. **The backend does not matter for strokes, in Chrome on this machine** (where WebGL2 runs through ANGLE on
+   Metal). WebGPU, WebGL2 and the processor renderer are within a few
    percent, and WebGL2 is not a second-class fallback for this content. `vello_gpu`'s WebGL2 backend worked as
    documented, including texture targets and textures it does not own.
 5. **Wait for the GPU once for a batch of tiles, not after each.** Part 3b's native GPU figures were dominated
@@ -202,6 +223,11 @@ outline and SIMD, and 68 ms with the robust one.
   design's "soft for four frames") is not shown.
 - **Redrawing off the page's thread.** WebAssembly here has one thread. The design keeps the core single-threaded
   on the web (section 08: threads need cross-origin isolation). A worker that prepares tiles is not tried.
+- **A fine clock for the small figures.** The sessions in the tables were served by a plain static server, so
+  Chrome rounded the page's clock to 0.1 ms. The parts are sums of 40 per-tile readings, so the figures of a few
+  milliseconds a view (`vello_gpu`'s own work, `vello_cpu` rasterising) and the pan's fraction of a millisecond a
+  frame carry about that much noise each. The totals of 80 ms and more do not. `serve.py` now gives the page a
+  clock of 0.005 ms, and the page prints which it has.
 - **Other content.** Strokes only: no text, images, large fills or clips.
 - **GPU time for a composed frame**, apart from the fact that no frame was late; and a canvas shown at 4K.
 - **The speed of the size builds.**
