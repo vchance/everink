@@ -13,7 +13,7 @@ clients and a server, native and web. Code written for it is kept only where a s
 - **Each slice is one reviewed change** with its own results file in this folder. Slice 2 answers four
   questions that do not depend on each other, so it is three changes: 2a the object map, 2b the text libraries,
   2c the server, the clients and the paced connection. Slice 3 is three: 3a the wasm32 target, stroke
-  outlines and the cut; 3b the renderer natively; 3c the renderer in a browser. Slice 4 is three: 4a the two controls toolkits without a
+  outlines and the cut; 3b the renderer natively; 3c the renderer in a browser; 3d, added on 2026-11-13, lighter outline forms that leave no holes. Slice 4 is three: 4a the two controls toolkits without a
   window; 4b the same in a window, natively and in a browser, for the checks a person makes; 4c the owner's
   further candidate. Pen latency (question 11) is the owner's to run.
 - **Results change the design.** Where a measurement contradicts a section of [`../design/`](../design/README.md),
@@ -59,6 +59,15 @@ Owner decisions of 2026-11-12, recorded in `AGENTS.md` › Owner decisions:
 - The fallback of a second connection for presence, and what to do about the 1 Mbit/s case, are decided after a
   real-network test (question 8). That test is not one of this spike's slices; it needs the product's server.
 - `spike/text-trial` is kept until the yrs adapter exists.
+
+Owner decisions of 2026-11-13, after slices 3 to 5:
+
+- The web build **requires WebAssembly SIMD** (question 10).
+- The **outline form** is chosen after a further slice, 3d, has built and measured the lighter hole-free forms
+  that slice 3 named and did not try (questions 3 and 10).
+- The **backend order** stays as designed and is looked at again after further measurements (question 10).
+- The **controls toolkit** is chosen after the owner has run the screen-reader and keyboard checks (question 12).
+- Part 4c, the **further candidate**, is run with its results kept outside this repository (question 13).
 
 The corrections the results asked for were applied to `docs/design/` after slice 2, and those of slices 3, 4a, 4b
 and 5 are now applied too. Later slices record theirs in their results files in the same way.

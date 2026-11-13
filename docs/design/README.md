@@ -147,22 +147,26 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
   Kept here so the row can be found.
 - **The second connection for presence, and the 1 Mbit/s cursor target.** The owner will decide after a measurement
   on a real network (2026-11-12). The fallback stays in the design as written.
-- **The controls toolkit.** Chosen after the spike. The spike has built and measured both candidates (results
+- **The controls toolkit.** Chosen after the owner has run the screen-reader and keyboard checks (owner, 2026-11-13).
+  The spike has built and measured both candidates (results
   [4a](../spike/results-4a-controls.md), [4b native](../spike/results-4b-window.md), [4b web](../spike/results-4b-web.md));
-  the choice is the owner's, and the screen-reader and real-keyboard checks are the owner's to run.
-- **Which outline form.** Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
+  until then neither is preferred.
+- **Which outline form.** Not chosen: the owner asked on 2026-11-13 that the lighter hole-free forms be built and
+  measured first (spike slice 3d). Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
   discs and bands has none and takes the processor renderer 394 to 407 ms for 10,000 strokes against 61 to 64. Fewer and
   straighter corners, discs only at turns, or a true union were named and not tried
   ([3a](../spike/results-3a-wasm-outlines-cut.md), [3b](../spike/results-3b-renderer.md)).
-- **WebAssembly SIMD: require it, or ship two builds.** The tile budget holds in a browser only with it, and then only
-  for the single-path outline; a module built with it does not load without it ([3c](../spike/results-3c-browser.md)). To be decided; sections 06 and 07.
-- **The backend order.** Natively the processor renderer was faster than the GPU one for strokes, and in Chrome the
-  three took the same time. Whether the order of section 06 changes waits for other browsers and machines; putting
+- **WebAssembly SIMD.** Decided on 2026-11-13: **required**, one build ([results 3c](../spike/results-3c-browser.md);
+  sections 06 and 07). Kept here so the row can be found.
+- **The backend order.** Stays as designed for now (owner, 2026-11-13) and is looked at again after other content,
+  other browsers and a slower machine are measured. Natively the processor renderer was faster than the GPU one for
+  strokes, and in Chrome the three took the same time; putting
   the processor renderer first, like a SIMD-only module, would bear on owner decision 3 (WebGPU and WebGL2 supported,
   the processor-only path best effort)
   ([3b](../spike/results-3b-renderer.md), [3c](../spike/results-3c-browser.md)).
-- **The further candidate the owner named.** Evaluated in the spike and used only if it makes sense; any question
-  it raises about naming or licensing is the owner's.
+- **The further candidate the owner named.** Evaluated in the spike (part 4c) and used only if it makes sense; its
+  results are kept outside this repository (owner, 2026-11-13). Any question it raises about naming or licensing is
+  the owner's.
 - Each section's "Questions for the owner" lists what remains for that part, for example canvas rotation and how
   pasted objects are sized (01), undoing your own creation after others edited it (02), whether people may choose
   their cursor color (04), SVG import (05), blend modes (06), how far embedders may customize the controls (07).
