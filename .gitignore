@@ -14,6 +14,7 @@ CLAUDE.local.md
 /spike/text-trial/target
 /spike/render-trial/target
 /spike/render-web/target
+/spike/store-trial/target
 # What spike/render-web/build.sh writes
 /spike/render-web/www/pkg*
 /spike/render-web/www/size-*

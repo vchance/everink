@@ -97,6 +97,18 @@ impl Room {
         self.head
     }
 
+    /// The state of the room's random numbers, which it draws from when it makes an order key. A store saves it
+    /// with a snapshot and opens the room with it as the seed; without it, replaying the changes after the
+    /// snapshot would give other keys than the first time.
+    pub fn rng_state(&self) -> u64 {
+        self.rng.0
+    }
+
+    /// One more than the highest ordinal given out. A store saves it with the objects.
+    pub fn next_ordinal(&self) -> u32 {
+        self.next_ordinal
+    }
+
     pub fn len(&self) -> usize {
         self.objects.len()
     }
@@ -405,25 +417,55 @@ impl Room {
                 return Err(DecodeError::Invalid("objects out of order"));
             }
             last = Some(object.id);
-            if object.created.0 == 0 {
-                return Err(DecodeError::Invalid(
-                    "an object created before the first change",
-                ));
-            }
-            if !ordinals.insert(object.ordinal.0) {
-                return Err(DecodeError::Invalid("an ordinal used twice"));
-            }
-            if object.rev() > head || object.ordinal.0 >= next_ordinal {
-                return Err(DecodeError::Invalid(
-                    "an object newer than the state says it is",
-                ));
-            }
-            room.store(object.id, object);
+            room.admit(object, &mut ordinals)?;
         }
         r.finish()?;
         room.check_tree()
             .map_err(|_| DecodeError::Invalid("a tree that is not a tree"))?;
         Ok(room)
+    }
+
+    /// Opens a room from its objects in any order, as a store that keeps them in chunks by ordinal reads them
+    /// back. The same checks as `decode_all`, but for the order: an id used twice is refused instead.
+    pub fn from_objects(
+        head: Seq,
+        next_ordinal: u32,
+        objects: impl IntoIterator<Item = Object>,
+        cap: DepthCap,
+        seed: u64,
+    ) -> Result<Room, DecodeError> {
+        let mut room = Room::new(cap, seed);
+        room.head = head;
+        room.next_ordinal = next_ordinal;
+        let mut ordinals: HashSet<u32> = HashSet::new();
+        for object in objects {
+            if room.objects.contains_key(&object.id) {
+                return Err(DecodeError::Invalid("an id used twice"));
+            }
+            room.admit(object, &mut ordinals)?;
+        }
+        room.check_tree()
+            .map_err(|_| DecodeError::Invalid("a tree that is not a tree"))?;
+        Ok(room)
+    }
+
+    /// Takes one object of a stored state after checking it against the state's head and ordinals.
+    fn admit(&mut self, object: Object, ordinals: &mut HashSet<u32>) -> Result<(), DecodeError> {
+        if object.created.0 == 0 {
+            return Err(DecodeError::Invalid(
+                "an object created before the first change",
+            ));
+        }
+        if !ordinals.insert(object.ordinal.0) {
+            return Err(DecodeError::Invalid("an ordinal used twice"));
+        }
+        if object.rev() > self.head || object.ordinal.0 >= self.next_ordinal {
+            return Err(DecodeError::Invalid(
+                "an object newer than the state says it is",
+            ));
+        }
+        self.store(object.id, object);
+        Ok(())
     }
 
     /// Checks what must always hold: the children index matches the slots, every parent exists and is a group,

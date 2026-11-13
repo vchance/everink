@@ -27,6 +27,7 @@ jobs:
       rust: ${{ steps.select.outputs.rust }}
       text: ${{ steps.select.outputs.text }}
       render: ${{ steps.select.outputs.render }}
+      store: ${{ steps.select.outputs.store }}
       all: ${{ steps.select.outputs.all }}
       carry_failure: ${{ steps.select.outputs.carry_failure }}
     steps:
@@ -161,9 +162,35 @@ jobs:
         env:
           RUSTFLAGS: -C target-feature=+simd128
 
+  # The storage trial (spike slice 5): a package outside the workspace, with SQLite (built from source by
+  # rusqlite's `bundled` feature), LZ4, BLAKE3 and CRC32C. It builds the two workspace crates in, so it runs when
+  # the trial, either crate or the toolchain changes, and on the full runs. Its timing run asserts nothing about
+  # time; it fails only if the room it opens is not the room it wrote.
+  store-trial:
+    name: store-trial
+    needs: [changes]
+    if: ${{ needs.changes.outputs.all == 'true' || needs.changes.outputs.store == 'true' }}
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
+    timeout-minutes: 20
+    env:
+      MANIFEST: spike/store-trial/Cargo.toml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Format check
+        run: cargo fmt --manifest-path "$MANIFEST" --check
+      - name: Clippy, warnings are errors
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets --locked -- -D warnings
+      - name: Tests (the room comes back exactly; a damaged file is refused)
+        run: cargo test --manifest-path "$MANIFEST" --locked
+      - name: Timing run at 10,000 and 100,000 strokes (no thresholds; the room opened must be the room written)
+        run: cargo run --release --locked --manifest-path "$MANIFEST" 10000,100000
+
   ci-result:
     name: ci-result
-    needs: [changes, lint, test, text-trial, render-trial]
+    needs: [changes, lint, test, text-trial, render-trial, store-trial]
     if: ${{ always() }}
     runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
     timeout-minutes: 2
