@@ -1,6 +1,6 @@
 # The spike
 
-Status: started 2026-11-12. Slices 1, 2, 3 and 5 are done, but for pen latency, which is the owner's to run. Slice 4 is done but for the owner's further candidate (4c) and the checks that need a person.
+Status: started 2026-11-12. Slices 1, 2, 3 and 5 are done, but for pen latency, which is the owner's to run, and for part 3d of slice 3, added on 2026-11-13 and not started. Slice 4 is done but for the owner's further candidate (4c) and the checks that need a person.
 
 The spike is step 0 of the order of work in [`../design.md`](../design.md). Its purpose is to replace the largest
 guesses in the detailed design with measurements before anything is built on them. It is one stroke type, two
@@ -12,8 +12,8 @@ clients and a server, native and web. Code written for it is kept only where a s
   revision and the command that produced it.
 - **Each slice is one reviewed change** with its own results file in this folder. Slice 2 answers four
   questions that do not depend on each other, so it is three changes: 2a the object map, 2b the text libraries,
-  2c the server, the clients and the paced connection. Slice 3 is three: 3a the wasm32 target, stroke
-  outlines and the cut; 3b the renderer natively; 3c the renderer in a browser. Slice 4 is three: 4a the two controls toolkits without a
+  2c the server, the clients and the paced connection. Slice 3 is four: 3a the wasm32 target, stroke
+  outlines and the cut; 3b the renderer natively; 3c the renderer in a browser; 3d, added on 2026-11-13, lighter outline forms that leave no holes. Slice 4 is three: 4a the two controls toolkits without a
   window; 4b the same in a window, natively and in a browser, for the checks a person makes; 4c the owner's
   further candidate. Pen latency (question 11) is the owner's to run.
 - **Results change the design.** Where a measurement contradicts a section of [`../design/`](../design/README.md),
@@ -47,7 +47,7 @@ criterion for each.
 |---|---|---|---|
 | 1. Positions | The Cargo workspace, CI, and `everink-core` with the position type, its canonical bytes, the camera, tests and a timing run | 1, 2 (two of three targets) | Yes: `crates/everink-core` |
 | 2. Object map and sync | 2a: the server-ordered object map and its convergence tests (`crates/everink-sync`). 2b: the text-library trials (`spike/text-trial`, a package outside the workspace). 2c: the bytes of a change on the wire, a server and two clients that talk in them, and the paced connection (`crates/everink-sync`) | 5, 6, 7, 8 | Decided from the results, at the end of the slice |
-| 3. Rendering and ink | 3a: the wasm32 target, stroke outlines and the cut (`crates/everink-core`). 3b: Vello natively (`spike/render-trial`). 3c: Vello in the browser, and the tile cache (`spike/render-web`) | 2 (wasm32), 3, 4, 10, 11 | Decided from the results |
+| 3. Rendering and ink | 3a: the wasm32 target, stroke outlines and the cut (`crates/everink-core`). 3b: Vello natively (`spike/render-trial`). 3c: Vello in the browser, and the tile cache (`spike/render-web`). 3d (added 2026-11-13, not started): lighter outline forms that leave no holes, measured the same way | 2 (wasm32), 3, 4, 10, 11 | Decided from the results |
 | 4. Controls and the further candidate | 4a: the same toolbar and text field both ways, without a window (`spike/controls-trial`). 4b: both in a native window (`spike/controls-window`) and in a browser with the DOM mirror (`spike/controls-web`). 4c: the owner's candidate behind the renderer interface | 12, 13 | Decided from the results |
 | 5. Storage | One SQLite file per room: commit and load timings (`spike/store-trial`) | 9 | Decided from the results |
 
@@ -59,6 +59,16 @@ Owner decisions of 2026-11-12, recorded in `AGENTS.md` › Owner decisions:
 - The fallback of a second connection for presence, and what to do about the 1 Mbit/s case, are decided after a
   real-network test (question 8). That test is not one of this spike's slices; it needs the product's server.
 - `spike/text-trial` is kept until the yrs adapter exists.
+
+Owner decisions of 2026-11-13, after slices 3 to 5:
+
+- The web build **requires WebAssembly SIMD** (question 10).
+- The **outline form** is chosen after a further slice, 3d, has built and measured the lighter hole-free forms
+  that slice 3 named and did not try (questions 3 and 10).
+- The **backend order** stays as designed and is looked at again after further measurements (question 10).
+- The **controls toolkit** is chosen after the owner has run the screen-reader and keyboard checks (question 12).
+- Part 4c, the **further candidate**, is run with its code and results in a folder on the owner's machine, outside
+  both this repository and the candidate's, and nothing pushed (question 13).
 
 The corrections the results asked for were applied to `docs/design/` after slice 2, and those of slices 3, 4a, 4b
 and 5 are now applied too. Later slices record theirs in their results files in the same way.

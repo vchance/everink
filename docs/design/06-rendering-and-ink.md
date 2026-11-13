@@ -1109,8 +1109,7 @@ measurement to make.
   help. The budget values themselves are not changed here.
 - **WebAssembly costs 1.3 to 1.4 times native with SIMD and 3.0 to 3.4 times without** for this redraw. SIMD
   (`-C target-feature=+simd128`) is worth 2.3 to 2.6 times; a module built with it does not load in a browser
-  without it. **In a browser this budget is met only with WebAssembly SIMD** (and only by the single path). Whether to require it or ship two builds is not decided (see section 07, "Packaging", and [the
-  index](README.md#still-open)).
+  without it. **In a browser this budget is met only with WebAssembly SIMD** (and only by the single path). **The web build requires it** (owner decision, 2026-11-13; one build, see section 07, "Packaging").
 - **Scenes built tile by tile cost about 5% more** than one scene for the view, and several tiles could be prepared on
   several threads natively; a browser page that is not cross-origin isolated has one (section 07).
 - **Not measured:** other machines (the design asks for three reference machines and a mid-range laptop), large
@@ -1244,16 +1243,18 @@ languages, the first app, the merge model, the controls toolkit and the further 
 4. **Highlighter and blend modes.** Multiply-style highlighters and blend modes are not offered in the first version
    because the renderer lacks some blend modes. Is that acceptable?
 
-Open because of the spike (measured in slices 3a to 3c; the choices are the owner's and are not made here):
+Raised by the spike (measured in slices 3a to 3c) and put to the owner on 2026-11-13:
 
-5. **Which outline form.** The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
+5. **Which outline form.** No decision yet: the owner chose to have the lighter hole-free forms built and measured
+   first (spike slice 3d). The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
    and bands has none and costs the processor renderer far more for 10,000 strokes (394 to 407 ms
    against 61 to 64 ms natively). Fewer corners, discs only at turns, or a true union were named and not tried. See
    "The outline: variable width, deterministic".
-6. **WebAssembly SIMD.** The tile budget holds in a browser only with it, and then only for the single-path
-   outline; a module built with it does not load without it. Require it, or ship two builds?
+6. **WebAssembly SIMD.** Decided on 2026-11-13: required. (The tile budget holds in a browser only with it, and
+   then only for the single-path outline; a module built with it does not load without it.)
 7. **The backend order.** Natively the processor renderer was faster than the GPU one for strokes; in Chrome all
-   three took the same time. Whether the order changes waits for other browsers and machines.
+   three took the same time. Not re-decided yet (owner, 2026-11-13): the order stays as designed until other content,
+   other browsers and a slower machine are measured.
 
 ## Sources
 

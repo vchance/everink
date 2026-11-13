@@ -220,7 +220,30 @@ as offered and the answers are quoted in https://github.com/vchance/everink/pull
   16:54 UTC, every job passed on `6f28f05`) and not again that day. The owner's answer was to leave it for now: an
   agent does not investigate or change it until asked.
 
-Ask, do not decide: the controls toolkit (after the spike), dropping or keeping the presence fallback and the
+Owner Von Chance, 2026-11-13: five questions asked one at a time after slices 3 to 5 of the spike. The options as
+offered and the answers are quoted in https://github.com/vchance/everink/pull/23. In four of the five the owner
+chose the option the agent had marked as recommended; the recommendations were the agent's.
+
+Decided:
+- **The web build requires WebAssembly SIMD.** One build; a browser without it is told it is not supported. The
+  evidence is `docs/spike/results-3c-browser.md`. The core's golden files are therefore also to be run on a SIMD
+  build. This narrows the browser decision of 2026-11-11 (WebGPU and WebGL2 supported): a browser with WebGL2 and
+  without WebAssembly SIMD is not supported.
+- **Spike part 4c, the further candidate, is run with its code and results in a folder on the owner's machine
+  outside both this repository and the candidate's** (the owner names the folder; `~/development/everink-4c` if
+  not), and nothing is pushed anywhere. An agent does not put 4c material in either repository.
+
+Deferred by the owner, with what comes first:
+- **The outline form: no decision yet.** The owner chose to have the lighter hole-free forms that the spike named
+  and did not try built and measured first (a further spike slice, 3d); the choice follows those figures.
+- **The backend order: not re-decided yet.** It stays as designed (WebGPU, then WebGL2, then the processor
+  renderer, best effort) until other content, other browsers and a slower machine have been measured, and is
+  looked at again then.
+- **The controls toolkit: no decision yet.** The owner runs the screen-reader and keyboard checks first
+  (`spike/controls-window/README.md`, `spike/controls-web/README.md`).
+
+Ask, do not decide: the controls toolkit (after the owner's checks), the outline form (after slice 3d), the backend
+order (after further measurements), dropping or keeping the presence fallback and the
 1 Mbit/s target (after a real-network test), whether to use, name or
 describe that further candidate here, publishing or reserving package names, registering domains, and opening the
 repository to outside contributors.
