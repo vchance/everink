@@ -28,7 +28,8 @@ and reads the accessibility tree; it exits with 1 if a check fails. No person pr
 1. Does the screen reader find a toolbar named Tools, and read each tool and colour as a radio button with its
    name and whether it is checked?
 2. Does activating a tool from the screen reader (VoiceOver: Control-Option-Space) change the tool? The page
-   prints `SetTool(...)` under the toolbar.
+   prints `SetTool(...)` under the toolbar. Move the screen reader's cursor (not Tab) onto a control you have
+   not been on, and press Space: does that control act, and does the drawn focus ring go there?
 3. Is the hex field read as an edit field named "Hex colour" with its value, and are typed characters echoed?
    (It is a textarea, so a reader may call it multi-line.) Is the zoom figure read when you move to it, and
    not after every key?

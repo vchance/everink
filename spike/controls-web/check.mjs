@@ -124,6 +124,16 @@ try {
   check('a button Redo', !!named('button', 'Redo'));
   check('the zoom figure as text', ax.some((n) => n.name?.value === 'Zoom 100%'));
   check('which is not a live region', !ax.some((n) => n.role?.value === 'status'));
+  // Before any key has been pressed: every control that can take the focus is focusable, for a screen reader
+  // that moves the focus itself.
+  const unfocusable = await js(`window.trial.state.nodes.filter((n) => n.actions.includes('focus') && !document.querySelector('#mirror [data-node="' + n.id + '"]').hasAttribute('tabindex')).map((n) => n.label)`);
+  check('every control that can take the focus has a tabindex from the start', unfocusable.length === 0, unfocusable);
+  check('and the browser says so (Red, which no key has visited, is focusable)', prop(named('radio', 'Red'), 'focusable') === true, named('radio', 'Red'));
+  await js(`document.querySelector('#mirror [aria-label="Orange"]').focus()`);
+  await sleep(120);
+  check('focus moved onto a control no key has visited moves both focuses there', (await focusName()) === 'Orange' && (await domFocus()) === 'Orange', [await focusName(), await domFocus()]);
+  await js('document.activeElement.blur()');
+  await sleep(120);
   const field = ax.find((n) => n.role?.value === 'textbox' && n.name?.value === 'Hex colour');
   check('a text field named Hex colour holding 202020', field?.value?.value === '202020', field);
 
@@ -229,6 +239,18 @@ try {
   await sleep(120);
   check('pasted text goes in', (await state()).textInput?.value === '1a2b', [(await state()).textInput, await js('window.trial.events.slice(-3)')]);
   check('the textarea holds the same text, for a screen reader', await js('document.activeElement.value') === '1a2b');
+
+  // 7a. Another window takes the focus and gives it back: the field keeps its focus and what was typed.
+  await send('Emulation.setFocusEmulationEnabled', { enabled: false });
+  const other = await send('Target.createTarget', { url: 'about:blank', newWindow: true });
+  await sleep(700);
+  const away = await js('document.hasFocus()');
+  await send('Target.closeTarget', { targetId: other.targetId });
+  await send('Page.bringToFront');
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  await sleep(400);
+  console.log(`result: while another window was in front the page ${away ? 'still had' : 'did not have'} the focus`);
+  check('after another window had the focus, the field still has it and its text', (await focusName()) === 'Hex colour' && (await domFocus()) === 'Hex colour' && (await state()).textInput?.value === '1a2b', [await focusName(), await domFocus(), (await state()).textInput]);
 
   // 8. A dead key, as an input method's composition: the accent, then the letter.
   await send('Input.imeSetComposition', { text: '´', selectionStart: 1, selectionEnd: 1 });

@@ -13,7 +13,7 @@ Chrome 157 on an Apple M4 (macOS). Safari, Firefox and a phone are not tried, an
 
 ## Answer
 
-**One mirror and one textarea serve both candidates, and both pass every check**: 50 checks each, the same
+**One mirror and one textarea serve both candidates, and both pass every check**: 54 checks each, the same
 script (`node spike/controls-web/check.mjs own`, and `egui`), five runs of each without a failure. The first
 version of the script had 35 checks and both passed those too, but it missed three faults of the page that the
 reviews of this change found, two of which showed only with egui; see "Faults the first checks missed".
@@ -34,6 +34,7 @@ reviews of this change found, two of which showed only with egui; see "Faults th
 | Keys that change no text rewrite no text in the mirror | Yes | Yes |
 | Presses of Tab from the page to the field | 3 (Pen, Black, the field; Redo was disabled) | 12 (every radio button) |
 | Escape | Lets go of the focus; nothing has it until the next Tab | The same |
+| A pointer click on a control drawn on the canvas | Does the control's work and moves the keyboard focus to it | Does the control's work; egui takes no focus on a click, so the keyboard focus is dropped |
 | The right arrow on a focused tool | Focuses the next and chooses it | Focuses the next; chooses nothing |
 | Composing a seventh character into the full field | Shown while composing | Not shown: egui counts composed text against the limit |
 
@@ -121,14 +122,20 @@ of this change found them, by driving the page themselves:
 - **The element kept in the tab order when nothing had the focus caught Shift and Tab** on the way out; and,
   after that was fixed, Shift and Tab coming in from an element after the controls landed on it (the chosen
   tool) and not on the field, so the rest could not be reached backwards. The controls now choose the entry
-  whichever way and from wherever Tab comes, and let go of their focus when the DOM's focus leaves the mirror
-  by any other way (a click elsewhere, a script), which they did not before.
+  whichever way and from wherever Tab comes, and let go of their focus when the DOM's focus goes to something else in the page
+  (a click there, a script), which they did not before; they keep it when it is only the window that loses
+  the focus.
 - **The zoom figure was a live region rewritten on every frame**, so a screen reader might have read it after
   every key.
 - **Pasted text was cancelled and dropped.**
 - **The script itself could measure nothing and pass**: Chrome does not deliver keys to a window that is not in
   front, and one result line was printed from a page that had received none. It now turns on Chrome's focus
   emulation and checks that the keys arrived.
+
+- **Two more came from fixing those**, and the third review round caught them: writing `tabindex` "only when
+  it changes" never wrote it at all, so no control could take the focus until the keyboard had been there (a
+  screen reader moving the focus itself would have moved nothing); and letting go of the focus on `focusout`
+  also let go when the user merely switched windows, losing the place and any text typed in the field.
 
 Each now has a check. The lesson for section 07's tests is that boxes and trees are not enough: hit-testing,
 both directions of Tab, and mutation of the mirror need checks of their own.

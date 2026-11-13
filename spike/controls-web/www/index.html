@@ -109,8 +109,10 @@ The toolbar below is drawn on a canvas; over it lies a mirror of real elements, 
           width: `${x1 - x0}px`, height: `${y1 - y0}px` });
         at = [x0, y0];
         if (node.actions.includes('focus')) {
-          const want = node.id === state.focus ? 0 : -1;
-          if (el.tabIndex !== want) el.tabIndex = want;
+          // The attribute is compared, not the property: an element with no `tabindex` reports -1 and yet
+          // cannot take the focus at all, so the attribute must be written the first time.
+          const want = node.id === state.focus ? '0' : '-1';
+          if (el.getAttribute('tabindex') !== want) el.setAttribute('tabindex', want);
         }
         if (node.role === 'TextInput' && !composing) {
           // The field's text, for a screen reader. Never rewritten while text is being composed.
@@ -206,15 +208,19 @@ The toolbar below is drawn on a canvas; over it lies a mirror of real elements, 
       e.preventDefault();
     });
 
-    // The DOM's focus is the one focus: when it leaves the mirror by any way but the controls' own (a click on
-    // something else, a script), the controls let go of theirs.
+    // The DOM's focus is the one focus: when it goes to something else in the page (a click there, a script),
+    // the controls let go of theirs. The window losing the focus is not that: the element keeps it, the
+    // browser only stops showing it, and the controls must keep theirs for when the window comes back. Nor is
+    // anything done while text is being composed.
     mirror.addEventListener('focusout', (e) => {
       if (settingFocus || mirror.contains(e.relatedTarget)) return;
-      if (window.trial.state.focus === window.trial.state.root) return;
-      shell.key('Escape', false);
-      const state = step();
-      // After the focus has gone, so that the element left in the tab order is not the one being left.
-      setTimeout(() => sync(state), 0);
+      // Looked at after the event, when the browser has settled where the focus is.
+      setTimeout(() => {
+        if (composing || !document.hasFocus() || mirror.contains(document.activeElement)) return;
+        if (window.trial.state.focus === window.trial.state.root) return;
+        shell.key('Escape', false);
+        sync(step());
+      }, 0);
     });
 
     // The text field: the textarea's own events, as section 07 has them.
