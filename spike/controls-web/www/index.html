@@ -45,6 +45,8 @@ The toolbar below is drawn on a canvas; over it lies a mirror of real elements, 
   let composing = false;
   let shell;
   let settingFocus = false;
+  // Set while the browser is carrying a Tab into the mirror from an element outside it.
+  let arriving = null;
 
   function elementFor(node) {
     let el = elements.get(node.id);
@@ -55,11 +57,18 @@ The toolbar below is drawn on a canvas; over it lies a mirror of real elements, 
       if (node.role === 'TextInput') { el.rows = 1; el.spellcheck = false; el.autocapitalize = 'off'; }
       if (ARIA[node.role]) el.setAttribute('role', ARIA[node.role]);
       el.addEventListener('focus', () => {
-        // Focus that came from outside (a screen reader, a script, the browser's own Tab): tell the controls.
-        if (!settingFocus && window.trial.state.focus !== node.id) {
+        if (settingFocus || window.trial.state.focus === node.id) return;
+        if (arriving && window.trial.state.focus === window.trial.state.root) {
+          // The browser's Tab came in from an element outside and landed on the one element in the tab order.
+          // Where the focus starts is the controls' to say (the first stop, or the last going backwards), the
+          // same as when Tab comes from the page's body.
+          shell.key('Tab', arriving.shift);
+          arriving = null;
+        } else {
+          // Focus that came from elsewhere (a screen reader, a script): tell the controls.
           shell.action(node.id, 'focus');
-          draw();
         }
+        draw();
       });
       el.addEventListener('click', (e) => {
         // A click that reaches a mirror element is assistive technology's: the pointer goes to the canvas.
@@ -99,7 +108,10 @@ The toolbar below is drawn on a canvas; over it lies a mirror of real elements, 
         Object.assign(el.style, { left: `${x0 - origin[0]}px`, top: `${y0 - origin[1]}px`,
           width: `${x1 - x0}px`, height: `${y1 - y0}px` });
         at = [x0, y0];
-        if (node.actions.includes('focus')) el.tabIndex = node.id === state.focus ? 0 : -1;
+        if (node.actions.includes('focus')) {
+          const want = node.id === state.focus ? 0 : -1;
+          if (el.tabIndex !== want) el.tabIndex = want;
+        }
         if (node.role === 'TextInput' && !composing) {
           // The field's text, for a screen reader. Never rewritten while text is being composed.
           const text = state.textInput && node.id === state.focus ? state.textInput.value : (node.value ?? '');
@@ -161,7 +173,12 @@ The toolbar below is drawn on a canvas; over it lies a mirror of real elements, 
       // Tab from the page's body (nothing has the focus) goes to the controls, which say where their focus starts (the chosen tool, for
       // one that follows the radio group's pattern). From anywhere else the keys are not theirs.
       const entering = !inMirror && e.key === 'Tab' && document.activeElement === document.body;
-      if (!inMirror && !entering) return;
+      if (!inMirror && !entering) {
+        // Tab on an element outside: the browser moves the focus. If it moves it into the mirror, the element's
+        // focus handler hands the entry to the controls; this says which way the Tab was going.
+        if (e.key === 'Tab') { arriving = { shift: e.shiftKey }; setTimeout(() => { arriving = null; }, 0); }
+        return;
+      }
       // In the field, a key that makes a character is left to `beforeinput`.
       if (inField && e.key.length === 1 && e.key !== ' ') return;
       const before = window.trial.state.focus;
@@ -187,6 +204,17 @@ The toolbar below is drawn on a canvas; over it lies a mirror of real elements, 
       }
       sync(state);
       e.preventDefault();
+    });
+
+    // The DOM's focus is the one focus: when it leaves the mirror by any way but the controls' own (a click on
+    // something else, a script), the controls let go of theirs.
+    mirror.addEventListener('focusout', (e) => {
+      if (settingFocus || mirror.contains(e.relatedTarget)) return;
+      if (window.trial.state.focus === window.trial.state.root) return;
+      shell.key('Escape', false);
+      const state = step();
+      // After the focus has gone, so that the element left in the tab order is not the one being left.
+      setTimeout(() => sync(state), 0);
     });
 
     // The text field: the textarea's own events, as section 07 has them.

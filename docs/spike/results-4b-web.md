@@ -13,7 +13,7 @@ Chrome 157 on an Apple M4 (macOS). Safari, Firefox and a phone are not tried, an
 
 ## Answer
 
-**One mirror and one textarea serve both candidates, and both pass every check**: 45 checks each, the same
+**One mirror and one textarea serve both candidates, and both pass every check**: 50 checks each, the same
 script (`node spike/controls-web/check.mjs own`, and `egui`), five runs of each without a failure. The first
 version of the script had 35 checks and both passed those too, but it missed three faults of the page that the
 reviews of this change found, two of which showed only with egui; see "Faults the first checks missed".
@@ -24,7 +24,7 @@ reviews of this change found, two of which showed only with egui; see "Faults th
 | A pointer click reaches the control through the mirror over it | Yes | Yes |
 | Every mirror element is found where its control is drawn (hit-tested at the control's middle) | Yes | Yes |
 | A click on a mirror element (`element.click()`, standing in for a screen reader's activation) gives the command, and the tree follows; on a disabled button it gives nothing | Yes | Yes |
-| Tab from outside enters the controls, and at every stop, forwards and backwards, the DOM's focus and the controls' focus are on the same control | Yes | Yes |
+| Tab enters the controls from nothing and from the buttons before and after them, at the controls' first stop going forwards and their last going backwards; at every stop the DOM's focus and the controls' focus are on the same control | Yes | Yes |
 | Tab past the last control, and Shift and Tab past the first, leave the controls | Yes | Yes, because the shell steps in: egui cycles its focus and never lets go |
 | Typed characters go into the field once each, pasted text goes in, and the textarea holds the same text | Yes | Yes |
 | A dead key: the accent is composed and is not in the value; the letter completes it, once | Yes | Yes |
@@ -118,7 +118,11 @@ of this change found them, by driving the page themselves:
   have found nothing for egui and everything for the own toolkit: the trial's fault, counted against a
   candidate. The script checked the elements' boxes, which were right, and not whether they could be hit.
 - **With egui, Shift and Tab showed its result one key late** (Finding 5).
-- **The element kept in the tab order when nothing had the focus caught Shift and Tab** on the way out.
+- **The element kept in the tab order when nothing had the focus caught Shift and Tab** on the way out; and,
+  after that was fixed, Shift and Tab coming in from an element after the controls landed on it (the chosen
+  tool) and not on the field, so the rest could not be reached backwards. The controls now choose the entry
+  whichever way and from wherever Tab comes, and let go of their focus when the DOM's focus leaves the mirror
+  by any other way (a click elsewhere, a script), which they did not before.
 - **The zoom figure was a live region rewritten on every frame**, so a screen reader might have read it after
   every key.
 - **Pasted text was cancelled and dropped.**
@@ -144,7 +148,8 @@ both directions of Tab, and mutation of the mirror need checks of their own.
 - **"Multi-line".** The field is a textarea, as section 07 has it, so the browser calls it multi-line; a
   screen reader may say so of a one-line field.
 - **Scroll, zoom of the page, a narrow screen, right-to-left.**
-- **The cost of keeping the mirror.** The page rebuilds its attributes every frame; not measured.
+- **The cost of keeping the mirror.** The page compares the mirror with the tree every frame and writes what
+  changed; not measured.
 
 ## Where the code departs from the design
 

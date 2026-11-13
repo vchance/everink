@@ -34,7 +34,9 @@ and reads the accessibility tree; it exits with 1 if a check fails. No person pr
    not after every key?
 4. With a touch screen reader (VoiceOver on iOS, TalkBack): can the controls be found by touch? The mirror's
    elements lie over the canvas and take no pointer; whether explore-by-touch reaches them is not known.
-5. Press Escape in the controls: the focus goes to nothing until the next Tab. Is that what you expect?
+5. The page has a button before the controls and one after. Tab in from the first and Shift-Tab in from the
+   second: do you arrive at the first stop and at the hex field, and can you Tab out past either end?
+   Press Escape in the controls: the focus goes to nothing until the next Tab. Is that what you expect?
 6. In Safari and Firefox: does the page come up at all (it draws with WebGPU), and do a dead key (Option-E then
    E on a Mac) and a Japanese or Chinese input method work in the field?
 

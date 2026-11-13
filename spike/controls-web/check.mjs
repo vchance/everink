@@ -11,7 +11,7 @@
 // candidates differ there.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +26,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'applic
 const server = createServer((req, res) => {
   const name = new URL(req.url, 'http://x').pathname;
   const file = resolve(www, `.${name === '/' ? '/index.html' : name}`);
-  if (!file.startsWith(www + sep) || !existsSync(file)) return res.writeHead(404).end();
+  if (!file.startsWith(www + sep) || !existsSync(file) || !statSync(file).isFile()) return res.writeHead(404).end();
   res.writeHead(200, { 'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store' });
   res.end(readFileSync(file));
 });
@@ -203,6 +203,18 @@ try {
   }
   check('Shift and Tab comes in at the field', back[0] === 'Hex colour', back);
   check("going back, the DOM's focus and the controls' focus agree at every stop", agree, back);
+  check('Shift and Tab past the first control leaves the controls', back.at(-1) === null, back);
+  check('and puts the focus on the button before them', (await js('document.activeElement.id')) === 'before', await js('document.activeElement.id'));
+
+  // 6a. In from the page's own buttons, where it is the browser that moves the focus: the same stops as from
+  // nothing, in both directions.
+  await tab();
+  check('Tab from the button before comes in where Tab from nothing does', (await focusName()) === stops[0] && (await domFocus()) === stops[0], [await focusName(), await domFocus()]);
+  await js("document.getElementById('after').focus()");
+  await sleep(80);
+  check('focus on the button after leaves the controls with none', (await focusName()) === null, await focusName());
+  await tab(true);
+  check('Shift and Tab from the button after comes in at the field', (await focusName()) === 'Hex colour' && (await domFocus()) === 'Hex colour', [await focusName(), await domFocus()]);
   console.log(`result: Shift and Tab from outside: ${back.map((b) => b ?? '(leaves the controls)').join(', ')}`);
 
   // 7. Typing in the field, with key events.
