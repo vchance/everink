@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Decides which CI jobs run (core D2). One output per component in PROFILE.md › Components, plus `all`, plus
-# `carry_failure` for the scheduled lane. The cases below are in the order of the PROFILE › Check selection rows.
+# `carry_failure` for the scheduled lane. The cases below follow the PROFILE › Check selection rows; the trial
+# packages' rows are disjoint, so their order does not matter.
 # Selection fails closed: an empty or unreadable file list, or a path that matches no pattern, selects everything.
 #
 # Usage: ci-changes.sh <event> <before-sha-or-empty> <after-sha-or-empty>
-# Writes `rust=<bool>`, `text=<bool>`, `render=<bool>`, `store=<bool>`, `all=<bool>` and `carry_failure=<bool>` to $GITHUB_OUTPUT
+# Writes `rust=<bool>`, `text=<bool>`, `render=<bool>`, `store=<bool>`, `controls=<bool>`, `all=<bool>` and `carry_failure=<bool>` to $GITHUB_OUTPUT
 # (or stdout when it is unset).
 set -euo pipefail
 
@@ -17,9 +18,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 text=false
 render=false
 store=false
+controls=false
 emit() {
-  printf 'rust=%s\ntext=%s\nrender=%s\nstore=%s\nall=%s\ncarry_failure=%s\n' "$1" "$text" "$render" "$store" "$2" "${4:-false}" >>"$out"
-  printf 'selection: rust=%s text=%s render=%s store=%s all=%s carry_failure=%s (%s)\n' "$1" "$text" "$render" "$store" "$2" "${4:-false}" "$3"
+  printf 'rust=%s\ntext=%s\nrender=%s\nstore=%s\ncontrols=%s\nall=%s\ncarry_failure=%s\n' "$1" "$text" "$render" "$store" "$controls" "$2" "${4:-false}" >>"$out"
+  printf 'selection: rust=%s text=%s render=%s store=%s controls=%s all=%s carry_failure=%s (%s)\n' "$1" "$text" "$render" "$store" "$controls" "$2" "${4:-false}" "$3"
 }
 
 list=$(mktemp)
@@ -74,9 +76,11 @@ while IFS= read -r -d '' f; do
     spike/render-trial/*|spike/render-web/*) render=true ;;
     # Row 6a. The storage trial: another package of its own.
     spike/store-trial/*) store=true ;;
+    # Row 6b. The controls trial: another package of its own. It builds nothing of the workspace in.
+    spike/controls-trial/*) controls=true ;;
     # Row 7. The pinned toolchain builds all of them, and the format, lint and cargo settings at the root are
     # read by all of them (the tools look in parent directories, and cargo reads `.cargo/` from where it is run).
-    rust-toolchain.toml|rustfmt.toml|clippy.toml|.cargo/*) rust=true; text=true; render=true; store=true ;;
+    rust-toolchain.toml|rustfmt.toml|clippy.toml|.cargo/*) rust=true; text=true; render=true; store=true; controls=true ;;
     # Row 8. Anything else is unknown, and unknown paths escalate.
     *) all=true ;;
   esac
