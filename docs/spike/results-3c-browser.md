@@ -253,3 +253,5 @@ These go into `docs/design/` in a separate change, with part 3b's four.
 ## Kept afterwards
 
 `spike/render-web` stays, with `spike/render-trial`, until the renderer and the outline form are chosen.
+(Later: the owner chose runs on 2026-11-13, after slice 3d. The page now draws that form and octagons and
+bands; the forms measured in this file are at commit `4b84a65`.)

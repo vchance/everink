@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use everink_core::Axis;
 use everink_core::cut::{BigPt, cut_quad};
-use everink_core::outline::{InkPoint, build, build_runs, build_single_path};
+use everink_core::outline::{InkPoint, build};
 
 const CURVES: usize = 200;
 const REPEATS: usize = 5;
@@ -151,23 +151,18 @@ fn main() {
             }
         })
         .collect();
-    for (name, f) in [
-        ("discs and bands (used)", build as fn(&[InkPoint], i32) -> _),
-        ("single path (the design's)", build_single_path),
-        ("runs (slice 3d)", build_runs),
-    ] {
-        let mut times = Vec::with_capacity(2000);
-        let mut segs = 0;
-        for _ in 0..2000 {
-            let t = Instant::now();
-            let outline = f(black_box(&points), 3 << 16).expect("a stroke");
-            times.push(t.elapsed().as_secs_f64() * 1e6);
-            segs = outline.segs.len();
-            black_box(outline);
-        }
-        let (med, p95, max) = spread(times);
-        println!(
-            "{name:<28} {med:>8.1} us median (p95 {p95:.1}, slowest {max:.1}); {segs} segments"
-        );
+    let mut times = Vec::with_capacity(2000);
+    let mut segs = 0;
+    for _ in 0..2000 {
+        let t = Instant::now();
+        let outline = build(black_box(&points), 3 << 16).expect("a stroke");
+        times.push(t.elapsed().as_secs_f64() * 1e6);
+        segs = outline.segs.len();
+        black_box(outline);
     }
+    let (med, p95, max) = spread(times);
+    println!(
+        "{:<28} {med:>8.1} us median (p95 {p95:.1}, slowest {max:.1}); {segs} segments",
+        "runs, smoothed sides"
+    );
 }

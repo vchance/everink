@@ -1,6 +1,9 @@
 # Spike slice 3, part d: lighter outline forms that leave no holes
 
-Date: 2026-11-13. Code: `crates/everink-core/src/outline.rs` (`build_runs`, `build_runs_within`), its tests in
+Date: 2026-11-13. (Later: the owner chose runs with smoothed sides that day, and the builder was then made the
+only one, as `everink_core::outline::build`. The other builders, `build_runs_within` and its arguments, and the
+trial's `coverage`, `union` and `picture` runs named below were removed in that change. They are at commit
+`4b84a65`: check it out to run the commands in this file.) Code: `crates/everink-core/src/outline.rs` (`build_runs`, `build_runs_within`), its tests in
 `crates/everink-core/tests/outlines.rs`, and `spike/render-trial` and `spike/render-web`, which draw the new forms.
 Design: [`../design/06-rendering-and-ink.md`](../design/06-rendering-and-ink.md), "The outline: variable width,
 deterministic".
@@ -326,6 +329,12 @@ library gives the same bytes on every machine was not looked at.
   entry point is not written.
 - **Other browsers and a slower machine**, as in part 3c.
 - **Sub-pixel and very large strokes**, and strokes cut by the eraser.
+- **How far smoothing pulls the edge in at a turn.** Found in review after the owner's choice, and not in the
+  tables above: the 7.6% is for straight sides. With smoothed sides the curve at an outer corner passes halfway
+  between the corner and the chord of its two neighbouring edge midpoints, so on a thin stroke with long steps
+  the edge at a turn can come in much further: 44% of the radius at a 40 degree turn between steps of five
+  radii, and up to about half the radius before the guard stops it. The single path does the same. On the
+  trial's strokes, whose steps are about as long as the stroke is wide, the area figures above include it.
 - **A proof for the smoothed variant.** The argument is given above with its limit; the test covers the centre
   line of 1,000 rough strokes at every eighth point, not every point of every stroke.
 
@@ -359,6 +368,6 @@ same time and twice as long to refill the view, where the redraw times alone say
 
 ## Kept afterwards
 
-`build_runs` and `build_runs_within` stay in `everink-core` beside `build` and `build_single_path` until the
+(Done since: see the note at the top of this file.) `build_runs` and `build_runs_within` stay in `everink-core` beside `build` and `build_single_path` until the
 outline form is chosen; the builders not chosen go then, with their golden files. `spike/render-trial` stays as
 part 3b left it.

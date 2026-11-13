@@ -214,5 +214,8 @@ These are recorded here and made in a separate change.
 
 ## Kept afterwards
 
+(Later: the owner chose a third form, runs, on 2026-11-13, after slice 3d; `build` is now that form, and both
+builders of this slice and the test of the single path's holes are gone. They are at commit `4b84a65`.)
+
 `outline` and `cut` are part of `everink-core` and stay with it. `build_single_path` and its test go when section
 06 is corrected.

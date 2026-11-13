@@ -13,7 +13,9 @@
 //! The result is put on a lattice of 2^-40 of an object unit as the last step, and it is the lattice outline,
 //! not the floats on the way, that is promised to be identical.
 //!
-//! What this version leaves out is listed in `docs/spike/results-3a-wasm-outlines-cut.md`.
+//! What this version leaves out is listed in `docs/spike/results-3a-wasm-outlines-cut.md`. The form of the
+//! outline, runs, is from `docs/spike/results-3d-outline-forms.md`; the two forms tried before it are in the
+//! repository's history (last at commit `4b84a65`).
 
 use std::f64::consts::FRAC_1_SQRT_2;
 
@@ -128,10 +130,6 @@ impl V {
         self.x * o.x + self.y * o.y
     }
 
-    fn cross(self, o: V) -> f64 {
-        self.x * o.y - self.y * o.x
-    }
-
     /// Turned a quarter of a turn to the left.
     fn left(self) -> V {
         V {
@@ -186,7 +184,7 @@ fn lattice(v: V) -> LPt {
     }
 }
 
-/// Step 1, shared by both builders: the points in object units with their radius. A point equal to the one
+/// Step 1: the points in object units with their radius. A point equal to the one
 /// before it carries no direction and is left out; its pressure is kept if it is the greater, so a pause that
 /// presses harder still widens the stroke.
 fn centre_line(points: &[InkPoint], base_width: i32) -> Result<Vec<(V, f64)>, OutlineError> {
@@ -262,125 +260,6 @@ fn smooth_closed(corners: &[V], segs: &mut Vec<Seg>) {
     }
 }
 
-/// Builds the outline of a stroke. `base_width` is the brush's full width in 16.16 fixed point object units.
-///
-/// The outline is the union of simple pieces, each a closed path of its own, all going the same way round: a
-/// disc at every point, and a band along every piece of the centre line from one disc to the next. Filled with
-/// the non-zero rule, pieces that overlap add up and never cancel, so the stroke has no holes however tightly
-/// it curls or doubles back. (The single path of the design does have them; see `build_single_path`.)
-pub fn build(points: &[InkPoint], base_width: i32) -> Result<Outline, OutlineError> {
-    let centre = centre_line(points, base_width)?;
-    let mut segs = Vec::with_capacity(centre.len() * 20);
-    let mut corners: Vec<V> = Vec::with_capacity(16);
-    for (i, &(p, r)) in centre.iter().enumerate() {
-        corners.clear();
-        disc(p, r, &mut corners);
-        smooth_closed(&corners, &mut segs);
-        let Some(&(q, s)) = centre.get(i + 1) else {
-            break;
-        };
-        // The band: the right-hand edge forward, the left-hand edge back. That is anticlockwise, like the discs,
-        // whichever way the piece points. Its four corners are on the lattice, and its edges are straight.
-        let n = q.sub(p).unit().expect("two different points").left();
-        let band = [
-            lattice(p.sub(n.scale(r))),
-            lattice(q.sub(n.scale(s))),
-            lattice(q.add(n.scale(s))),
-            lattice(p.add(n.scale(r))),
-        ];
-        for k in 0..4 {
-            let (a, b) = (band[k], band[(k + 1) % 4]);
-            if a != b {
-                segs.push(Seg::Line(a, b));
-            }
-        }
-    }
-    Ok(Outline { segs })
-}
-
-/// The outline as section 06 first specified it: one closed path, up the left side of the stroke, round the far
-/// end, down the right side and round the near end, with a round join on the outside of a sharp turn.
-///
-/// Kept to record what the spike found: where a stroke doubles back, or curls tightly under a wide brush, the
-/// two sides cross and the non-zero rule leaves a hole over the stroke's own centre line
-/// (`tests/outlines.rs`). Everink uses `build`.
-pub fn build_single_path(points: &[InkPoint], base_width: i32) -> Result<Outline, OutlineError> {
-    let centre = centre_line(points, base_width)?;
-
-    // The polygon, as corners in order.
-    let mut corners: Vec<V> = Vec::with_capacity(centre.len() * 2 + 16);
-    if centre.len() == 1 {
-        let (p, r) = centre[0];
-        disc(p, r, &mut corners);
-    } else {
-        // Step 3: the direction of each piece of the centre line. No piece is empty, because equal neighbours
-        // were left out.
-        let dirs: Vec<V> = centre
-            .windows(2)
-            .map(|w| w[1].0.sub(w[0].0).unit().expect("two different points"))
-            .collect();
-        let n = centre.len();
-        // Steps 4 and 5: one side, with a round join where the path turns away from that side by more than a
-        // quarter turn, then the round cap at its end. `side` is 1 for the left side going forward and -1 for
-        // the right side coming back.
-        let side = |side: f64, corners: &mut Vec<V>| {
-            for step in 0..n {
-                let i = if side > 0.0 { step } else { n - 1 - step };
-                let (p, r) = centre[i];
-                // The directions into and out of this point, in the order this side is walked.
-                let (into, out) = if side > 0.0 {
-                    (i.checked_sub(1).map(|j| dirs[j]), dirs.get(i).copied())
-                } else {
-                    (
-                        dirs.get(i).map(|d| d.scale(-1.0)),
-                        i.checked_sub(1).map(|j| dirs[j].scale(-1.0)),
-                    )
-                };
-                match (into, out) {
-                    (Some(a), Some(b)) => {
-                        let (na, nb) = (a.left(), b.left());
-                        let turn = a.cross(b);
-                        if a.dot(b) < 0.0 && turn < 0.0 {
-                            // A sharp turn to the right: this (left-hand) side is the outside of the bend.
-                            // Round it, from the normal of the piece before to the normal of the piece after.
-                            corners.push(p.add(na.scale(r)));
-                            for t in TURN {
-                                let v = na.turned(t, -1.0);
-                                if na.cross(v) < 0.0 && v.cross(nb) < 0.0 {
-                                    corners.push(p.add(v.scale(r)));
-                                }
-                            }
-                            corners.push(p.add(nb.scale(r)));
-                        } else {
-                            // Otherwise one corner, on the normal of the two pieces taken together. The sum
-                            // is zero only when the path doubles straight back, and then either normal does.
-                            let m = na.add(nb).unit().unwrap_or(na);
-                            corners.push(p.add(m.scale(r)));
-                        }
-                    }
-                    (None, Some(b)) => corners.push(p.add(b.left().scale(r))),
-                    (Some(a), None) => {
-                        // The end of this side: the corner, then the cap, half a turn to the right.
-                        let na = a.left();
-                        corners.push(p.add(na.scale(r)));
-                        for t in TURN {
-                            corners.push(p.add(na.turned(t, -1.0).scale(r)));
-                        }
-                    }
-                    (None, None) => unreachable!("two or more points"),
-                }
-            }
-        };
-        side(1.0, &mut corners);
-        side(-1.0, &mut corners);
-    }
-
-    // Step 6: smooth. Step 7: onto the lattice.
-    let mut segs = Vec::with_capacity(corners.len());
-    smooth_closed(&corners, &mut segs);
-    Ok(Outline { segs })
-}
-
 /// One cross-cut of a run: the corner on the left of the centre line and the corner on the right.
 #[derive(Clone, Copy)]
 struct Cross {
@@ -419,29 +298,6 @@ fn wedge(p: V, before: Cross, after: Cross, segs: &mut Vec<Seg>) {
     }
 }
 
-/// Builds the outline of a stroke as runs: a lighter form of `build` that also has no holes.
-///
-/// A run is a stretch of the stroke outlined as one closed path with straight edges: one corner on each side at
-/// every point, on the normal of the two pieces that meet there, as in the single path of the design. Between
-/// two points the path encloses one four-cornered piece. A run goes on only while every piece is sound
-/// (`piece_is_sound`) and the stroke turns by less than the limit; where it would not be, the run ends flat and
-/// a new one begins, square to its first piece. Where the turn between the two is under the limit, a `wedge`
-/// fills the gap on its outside; at any other turn, and on the stroke's two ends, there is a disc as in `build`.
-///
-/// A run's path is the sum of the edges of its pieces (the cross-cuts between them cancel), so it winds once
-/// round every point of every piece, and never the other way. The wedges and the discs go the same way round.
-/// So the non-zero rule leaves no hole, for the reason it leaves none in `build`. A gentle stretch costs two
-/// straight segments a point, and seven where the brush is so wide that the inner side folds at every point;
-/// `build` costs twenty, sixteen of them curves.
-///
-/// What it gives up: at a turn inside a run, and at a wedge, the outer edge is a chord of the round join
-/// `build` draws there. The edge is short of the true one by at most the radius times one minus the cosine of
-/// half the turn: 29% at the quarter turn this function allows. And where the pressure changes, the width
-/// between two points is a straight taper; the disc `build` puts on the heavier point is not there.
-pub fn build_runs(points: &[InkPoint], base_width: i32) -> Result<Outline, OutlineError> {
-    build_runs_within(points, base_width, 0.0, false)
-}
-
 /// Twice the area of the triangle `a`, `b`, `c`: above zero where they go anticlockwise. Whole numbers.
 fn turn(a: LPt, b: LPt, c: LPt) -> i128 {
     let (ux, uy) = (i128::from(b.x - a.x), i128::from(b.y - a.y));
@@ -449,21 +305,37 @@ fn turn(a: LPt, b: LPt, c: LPt) -> i128 {
     ux * vy - uy * vx
 }
 
-/// `build_runs` with the limit on a turn given as its cosine: a turn is gentle while the directions of the two
-/// pieces have a dot product above `min_cos`. Zero is a quarter turn; `FRAC_1_SQRT_2` is an eighth, where the
-/// edge is short by at most 7.6% of the radius.
+/// A turn is gentle while the directions of the two pieces that meet have a dot product above this: the cosine
+/// of an eighth of a turn. At a gentle turn the outer corner is on the round join and the straight edges to it
+/// are chords, short of it by at most the radius times one minus the cosine of half the turn: 7.6% of the
+/// radius. (That is before the sides are smoothed; see `build` for what the smoothing takes off.)
+const GENTLE_COS: f64 = FRAC_1_SQRT_2;
+
+/// Builds the outline of a stroke. `base_width` is the brush's full width in 16.16 fixed point object units.
 ///
-/// With `smooth`, the two sides of a run are curves, as the single path's are: at each corner inside a run the
-/// path goes from the middle of one edge to the middle of the next with the corner as control point. That takes
-/// a sliver off the outside of each turn and adds one on the inside, so a run no longer covers its pieces
-/// exactly; a corner on the outside is left sharp where the sliver would reach the stroke's own point, so the
-/// centre line stays covered. The ends of a run, the wedges and the discs are as without it.
-pub fn build_runs_within(
-    points: &[InkPoint],
-    base_width: i32,
-    min_cos: f64,
-    smooth: bool,
-) -> Result<Outline, OutlineError> {
+/// The outline is made of runs (the owner's choice of 2026-11-13; `docs/spike/results-3d-outline-forms.md`).
+/// A run is a stretch of the stroke outlined as one closed path: one corner on each side at every point, on
+/// the normal of the two pieces that meet there. Between two points the path encloses one four-cornered piece.
+/// A run goes on only while every piece is sound (`piece_is_sound`) and the turn is gentle (`GENTLE_COS`);
+/// where it would not be, the run ends flat and a new one begins, square to its first piece. Where the turn
+/// between the two is gentle, a `wedge` fills the gap on its outside; at any other turn, and on the stroke's
+/// two ends, there is a disc.
+///
+/// With straight sides a run's path would be the sum of the edges of its pieces (the cross-cuts between them
+/// cancel), so it would wind once round every point of every piece and never the other way; the wedges and the
+/// discs go the same way round, and the non-zero rule would leave no hole. The sides are then smoothed: at each
+/// corner inside a run the path goes from the middle of one edge to the middle of the next with the corner as
+/// control point. On the inside of a turn that adds a sliver, which winds the same way and can make no hole. On
+/// the outside it takes a sliver off, so a run covers its pieces only up to those slivers; a corner there is
+/// left sharp where the sliver would reach the stroke's own point, so the centre line stays covered. That is
+/// the only limit on it: where the steps are long against the width, the smoothed edge at a turn can be as
+/// little as about half a radius from the point. The four corners at a run's ends and the wedges are not
+/// smoothed (the discs are curves anyway), so a small notch is left in the edge where one run ends and the next
+/// begins.
+///
+/// The shape: where the pressure changes, the width between two points is a straight taper. A gentle stretch
+/// costs two segments a point, and seven where the brush is so wide that the inner side folds at every point.
+pub fn build(points: &[InkPoint], base_width: i32) -> Result<Outline, OutlineError> {
     let centre = centre_line(points, base_width)?;
     let n = centre.len();
     let mut segs = Vec::with_capacity(n * 3 + 32);
@@ -511,10 +383,7 @@ pub fn build_runs_within(
         let corner = |t: usize| {
             let i = if t < m { t } else { 2 * m - 1 - t };
             let at = if t < m { run[i].right } else { run[i].left };
-            (
-                at,
-                (smooth && i > 0 && i + 1 < m).then(|| centre[first + i].0),
-            )
+            (at, (i > 0 && i + 1 < m).then(|| centre[first + i].0))
         };
         let mid = |a: V, b: V| V {
             x: (a.x + b.x) / 2.0,
@@ -556,7 +425,7 @@ pub fn build_runs_within(
     let mut run: Vec<Cross> = vec![plain(0, dirs[0])];
     for j in 0..n - 1 {
         let k = j + 1;
-        let gentle = k < n - 1 && dirs[j].dot(dirs[k]) > min_cos;
+        let gentle = k < n - 1 && dirs[j].dot(dirs[k]) > GENTLE_COS;
         let square = plain(k, dirs[j]);
         let mut from = *run.last().expect("a run has a cross-cut");
         // The leaning cross-cut at `k`, where the turn there is gentle; and it again, if the piece up to it

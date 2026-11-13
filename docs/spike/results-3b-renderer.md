@@ -175,3 +175,5 @@ These are recorded here and made in a separate change.
 ## Kept afterwards
 
 `spike/render-trial` stays until the renderer question is settled by part 3c and the outline form is chosen.
+(Later: the owner chose runs on 2026-11-13, after slice 3d. The trial now draws that form and octagons and
+bands; the forms measured in this file are at commit `4b84a65`, where its commands give its tables.)

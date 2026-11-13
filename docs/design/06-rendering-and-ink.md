@@ -612,44 +612,81 @@ Algorithm (version 1, named by `style_ver` so later changes never alter old stro
 
 0. Decode the points and cuts. Cuts (section 02) are an add/remove set of `Cut { from, to }` over sample parameters
    `StrokeParam { index, t }`, `t` a 16-bit fraction toward the next sample. Sort them, merge overlapping ones with
-   integer comparisons, and take the complement: the *runs* of the stroke that remain. A stroke with no cuts has one
-   run. A cut end inside a segment adds a synthetic point `p_i + (p_{i+1} - p_i) * t / 65536` computed in `i64` with
-   ties to even, and the same for pressure. Each run is built separately by steps 1 to 7.
-1. Convert lattice points to `f64` (an exact conversion).
+   integer comparisons, and take the complement: the *kept parts* of the stroke. A stroke with no cuts has one
+   kept part. A cut end inside a segment adds a synthetic point `p_i + (p_{i+1} - p_i) * t / 65536` computed in
+   `i64` with ties to even, and the same for pressure. Each kept part is built separately by steps 1 to 8.
+1. Convert lattice points to `f64` (an exact conversion). A point equal to the one before it is left out; its
+   pressure is kept if it is the greater.
 2. Width at each point: `r_i = base_width * w(pressure_i, speed_i) / 2`, where `w` is a 256-entry table of constants
    written into the source (not computed) and linearly interpolated with `+ - * /` only. Speed is used only when
    pressure is unavailable (flag in the brush), taken from point spacing with fixed `t`. (The spike's table has 17
    entries, each a multiple of 1/64, interpolated: the lightest touch is a quarter of the width, and no pressure from
    the device is the full width. The 256-entry table, a taper at the ends and width from speed were not built;
    `../spike/results-3a-wasm-outlines-cut.md`.)
-3. Unit tangent and normal at each point from the neighbors with `+ - * /` and `sqrt` (the correctly rounded square
-   root; both native and wasm give identical results).
-4. Left side forward, right side backward: `p_i +- r_i * n_i`. Where the turn is sharper than a fixed limit, add a
-   round join using a fixed table of eight precomputed unit vectors (written as literals) rotated into place with
-   multiplications, never `sin` or `cos`.
-5. Caps: at the true ends of the stroke, round (same table) or a taper over the first and last `k` points
-   (perfect-freehand's idea). At a **cut end** the run ends with a flat (butt) cap perpendicular to the tangent at
-   the cut, with no taper, so an erased stroke looks cut, not capped with a pen end. Every run is its own closed
-   sub-path.
-6. Smoothing: the polyline of offset points is turned into quadratic Béziers through successive midpoints (control
-   point = the vertex), which is the standard way to get a C1 curve and the same trick perfect-freehand uses.
-   Midpoints are exact in binary arithmetic.
-7. **Round onto section 01's lattice.** Every point and Bézier control point of the result is converted with
+3. The unit direction of each *piece* of the centre line, from one point to the next, and its normal, with
+   `+ - * /` and `sqrt` (the correctly rounded square root; both native and wasm give identical results).
+4. **Cross-cuts.** A *cross-cut* at a point is a pair of corners, one on each side: `p_i + r_i * n` and
+   `p_i - r_i * n` for a unit normal `n`. Between two neighbouring cross-cuts lies a piece with four corners. A
+   piece is *sound* if its four corners, put on the lattice of step 8, are a convex four-cornered shape going
+   anticlockwise; that is decided with whole-number cross products (in `i128`), so every machine decides alike.
+5. **Runs.** A *run* is a chain of sound pieces drawn as one closed path: the right-hand corners forward, the
+   left-hand corners back. The builder walks the kept part. A turn at a point is *gentle* if the unit directions
+   of the two pieces that meet there have a dot product above the cosine of an eighth of a turn (a literal). At a
+   gentle turn the cross-cut is on the normal of the two pieces taken together (their two normals added and made
+   unit length), and the run goes on to it if the piece up to it is sound. Otherwise the run ends with a
+   cross-cut square to its last piece, and a new run begins at the same point with a cross-cut square to its
+   first piece. If a run's last cross-cut leans with a gentle turn and nothing sound follows it (under a brush much
+   wider than the step, the inner corner is already past the next piece), the run ends there and the next begins
+   square, in the same way. A piece between two square cross-cuts is sound unless the brush or the step is
+   smaller than the lattice can hold; such a piece is left out and a disc is put on each of its ends.
+6. **Joints and ends.** Where one run ends and the next begins at a gentle turn, a *wedge* fills the gap the two
+   flat ends leave on the outside of the turn: the triangle of the point and the two outer corners, anticlockwise.
+   At any other turn there is a *disc* on the point: sixteen corners from a fixed table of unit vectors written
+   as literals and turned into place with multiplications, never `sin` or `cos`. Each true end of the stroke
+   has a disc. At a **cut end** the run ends flat, square to the tangent at the cut, with no disc and no taper, so
+   an erased stroke looks cut, not capped with a pen end. (The prototype's builder does not take cuts yet, and
+   has no taper.)
+7. **Smoothing.** A disc's sixteen corners become quadratic Béziers through successive midpoints (control point =
+   the corner; a midpoint is exact in binary arithmetic). The two sides of a run are smoothed the same way at
+   each corner inside the run. On the inside of a turn that adds a sliver to the run. On the outside it takes one
+   off, and there the corner stays sharp unless the stroke's own point is on the far side of the chord the curve
+   replaces (a whole-number test on the lattice), so the smoothing never uncovers the centre line. The four
+   corners at a run's two ends and the wedges stay straight; that leaves a small notch in the edge where one run
+   ends and the next begins.
+8. **Round onto section 01's lattice.** Every point and Bézier control point of the result is converted with
    `(v * 2^40).round_ties_even() as i64` (`v` in units of the object's level), after the range check, into section
-   01's `Outline { segs, closed, fill }` of `Seg::Line` and `Seg::Quad` over `LPt`. A stroke with several runs has
-   one `Outline` with several closed sub-paths. This lattice outline, not the `f64` intermediate, is what section
-   01's cut consumes, what the index derives bounds from, and what the bit-identical test compares.
-8. The path is filled with the **non-zero** rule, so self-overlaps in tight turns were expected to need no clipping
-   step (the perfect-freehand README suggests a separate polygon-clipping crate; the renderer's non-zero fill was
-   expected to make that unnecessary). **The spike found this is not so for one path: it leaves holes** (next
-   paragraphs).
+   01's `Outline { segs, closed, fill }` of `Seg::Line` and `Seg::Quad` over `LPt`. A stroke has one `Outline`
+   with a closed sub-path for each run, wedge and disc. This lattice outline, not the `f64` intermediate, is what
+   section 01's cut consumes, what the index derives bounds from, and what the bit-identical test compares.
+9. The path is filled with the **non-zero** rule, and no clipping step is needed. With straight sides a run's
+   path is exactly the sum of the edges of its pieces, each of which goes anticlockwise, and so do the wedges and
+   the discs; so no sub-path takes away what another covers, and the outline covers every piece, wedge and disc:
+   no holes, proved. With the smoothed sides of step 7 that holds up to the slivers taken off the outside of
+   turns, which step 7 keeps off the centre line. That is tested, not proved: on 1,000 rough strokes, at every
+   eighth point and the middle of the piece after it, with the curves followed, no sub-path wound the wrong way
+   and none of the sampled points was uncovered (`../spike/results-3d-outline-forms.md`).
+
+The stroke's shape: between two points the width is a straight taper from one radius to the other. At a gentle
+turn the outer corner is on the round join, and the straight edges to it are chords, short of the round join by at
+most 7.6% of the radius. The smoothing of step 7 then rounds that corner off, as it did in the single path: the
+curve passes halfway between the corner and the chord from the middle of one outer edge to the middle of the
+next. Where the steps between points are short against the width that is little. Where they are long against
+it (a thin stroke drawn fast) it is a lot: measured on the prototype, a turn of 40 degrees between steps of five
+radii leaves the outer edge 0.56 of a radius from the point, 44% short. The guard of step 7 is the limit: it
+stops the rounding before the chord reaches the stroke's point, so the edge is never less than about half a
+radius from it. The cut (section 01), the hit test and the eraser work on this outline, so they follow that
+shape.
+
+**How this form was reached.** This section first specified one closed path: up the left side of the stroke,
+round the end, down the right side, smoothed, with round joins at sharp turns. The spike measured it and two
+alternatives, and the owner chose runs with smoothed sides on 2026-11-13. The measurements are kept below.
 
 **Measured in the spike** (`../spike/results-3a-wasm-outlines-cut.md`, `../spike/results-3b-renderer.md`,
 `../spike/results-3c-browser.md`; Apple M4; the corpus is 1,000 random-walk strokes with sharp turns, doubling back,
 pauses, single dots and strokes at the edge of the lattice, and its pressure changes at random from point to point,
 which is rougher than a real pen).
 
-- **The single path described above leaves holes over the stroke.** It goes up the left side, round the end and
+- **The single path first specified leaves holes over the stroke.** It goes up the left side, round the end and
   down the right side. Where a stroke doubles back, or curls tightly under a wide brush, the two sides cross, and
   the non-zero rule leaves the crossed part empty. On the corpus 10,012 of 140,838 stroke points (7.1%) are outside
   the outline of their own stroke, in 560 of the 1,000 strokes; with the turns taken out of the corpus it is still
@@ -676,20 +713,17 @@ which is rougher than a real pen).
 
 Spike slice 3d built the second of these as *runs*: one path for each stretch that turns gently, ended where the
 path would fold or the stroke turns an eighth of a turn or more, with a three-cornered wedge or a disc at the
-joint, and optionally with its sides smoothed as in step 6. It leaves no holes (proved for straight sides; argued up to slivers at the
+joint, and optionally with its sides smoothed through midpoints as the single path's were. It leaves no holes (proved for straight sides; argued up to slivers at the
 outside of turns, and tested, for smoothed ones) and costs the renderer about 1.2 times what the single path
 does (the union: about 6.5 times); its shape tapers where the pressure changes, where the union bulges. A true union made by
 a clipping library was heavier to draw and about two hundred times slower to make
 ([results 3d](../spike/results-3d-outline-forms.md)).
 
 **The outline form is runs with smoothed sides, a run ended at an eighth of a turn** (owner decision,
-2026-11-13). Steps 4 to 8 above still describe the single path; they are rewritten for runs in the change that
-makes `build_runs_within` the only builder, and until that change the version-1 algorithm is not fixed. With
-runs a stroke tapers where the pressure changes, so the cut, the hit test and the eraser follow that shape. The
-prototype still keeps three builders in `everink-core`: `build` (the union), `build_single_path` (this section's
-first form, kept to record its flaw) and `build_runs_within` (runs, with the limit on a turn and the smoothing as
-arguments; `build_runs` is its loosest variant, a quarter turn with straight sides); those not chosen go in that
-change.
+2026-11-13). Steps 4 to 9 above describe it, and `everink_core::outline::build` is it: the only builder in the
+prototype. The two forms tried before it (the single path and the union of discs and bands) and the other
+settings of runs were removed when it was made the builder; they are in the repository's history, last at commit
+`4b84a65`, where the commands in the spike's results files still run.
 
 The same function, with an *incremental* entry point, builds the live preview and the final stroke (section 04 needs
 both to match):
@@ -703,8 +737,12 @@ impl OutlineBuilder {
 }
 ```
 
-`push` never changes segments it has already returned except for the last two, which are returned again; a test
-checks that incremental and one-shot builds of the same points give byte-identical `Outline`s.
+**This contract was written for the single path and has to be redesigned for runs.** It says `push` never changes
+segments it has already returned except for the last two, which are returned again. With runs, the run still
+being drawn is one closed path that is not finished until the run ends, and its last corner changes when the
+next point arrives; so what `push` can leave alone is the runs, wedges and discs already closed, and the open
+run is given again each time. That is not designed or built. What stays: a test checks that incremental and
+one-shot builds of the same points give byte-identical `Outline`s.
 
 **Why this is bit-identical.** The rules for outline code are section 01's float rules, and **section 01's list is
 the reference**: if the two ever differ, 01's wins and this section changes. Restated here only so the module is
@@ -805,15 +843,18 @@ decision, 2026-11-12); this section supplies both.
   as a sliver), and emits one `CutAdd` per range. Two users erasing different parts of one stroke both take effect,
   because cuts are a set. Undo removes the cuts that gesture added, by tag. A range that covers the whole stroke
   becomes `alive = false` instead. At 64 cuts, section 02 replaces the stroke by pieces; the tool supplies the
-  pieces as the runs from step 0 of the outline (their points and the synthetic end points, brush and order key
+  pieces as the kept parts from step 0 of the outline (their points and the synthetic end points, brush and order key
   kept).
-- **Drawing a stroke with cuts.** The outline of the *remaining runs*, one closed sub-path per run, with flat caps
-  at cut ends and the brush's caps at true ends (outline steps 0 and 5). Cuts are not drawn as shapes; the erased
-  parts are simply absent from the outline, so the exact cut, hit testing and the tiles all see the remaining runs.
+- **Drawing a stroke with cuts.** The outline of the *kept parts* (outline step 0), each built by itself, with flat
+  ends at cut ends and a disc at true ends (outline step 6). Cuts are not drawn as shapes; the erased
+  parts are simply absent from the outline, so the exact cut, hit testing and the tiles all see the kept parts.
   When a cut is added or removed the stroke's outline is rebuilt and the tiles under its old and new bounds are
   stale.
-- **Hit-testing a stroke with cuts** (pointer, selection, eraser): against the centerline polyline of each remaining
-  run, with the radius of the local half width plus the tolerance of 0.5 px, in the prepared space of section 01. A
+- **Hit-testing a stroke with cuts** (pointer, selection, eraser): against the centerline polyline of each kept
+  part, with the radius of the local half width plus the tolerance of 0.5 px, in the prepared space of section 01.
+  (The half width between two points is the straight taper the outline has. At a turn the ink is rounded off
+  inside that, by up to about half a radius on a thin fast stroke, so there the test can hit a little outside
+  the ink.) A
   pointer over an erased gap does not hit the stroke; it can still hit an object beneath. The box the index holds
   comes from `ExtentOracle` (below), which ignores cuts and so still covers the whole stroke; a gap therefore never
   makes the box too small.
@@ -1158,11 +1199,11 @@ measurement to make.
 |---|---|
 | Stored ink outline is identical on all targets | One corpus of 1,000 random and 100 recorded strokes; outline path bytes hashed on native Linux, macOS, Windows, arm64 and wasm in CI; hashes must match. In the spike: 1,000 random-walk strokes (no recorded ones), a segment count and a hash of every coordinate, written on aarch64 macOS and passing on x86-64 Linux (with and without fused multiply-add) and on wasm32 under Node; Windows was not run. |
 | Outline code uses only allowed operations | The same `clippy.toml` `disallowed-methods` list as section 01 (it is the reference), applied to the outline module, plus a CI check that `relaxed-simd` is not enabled. |
-| The outline lies on section 01's lattice | A property test: every coordinate of the built `Outline` is an `i64` produced by the rounding in step 7, and equals the value from an independent big-rational reference to within one lattice step. |
+| The outline lies on section 01's lattice | A property test: every coordinate of the built `Outline` is an `i64` produced by the rounding in step 8, and equals the value from an independent big-rational reference to within one lattice step. |
 | Incremental and one-shot outlines agree | Random point streams; `OutlineBuilder::push` then `finish` against a one-shot build; byte-identical `Outline`. Section 04's preview test reuses it. |
-| Partial erase results are identical on every client | The same corpus; eraser paths applied to strokes with random cut sets; the remaining runs, synthetic end points and outlines compared across targets. |
+| Partial erase results are identical on every client | The same corpus; eraser paths applied to strokes with random cut sets; the kept parts, synthetic end points and outlines compared across targets. |
 | Two concurrent partial erases both show | Two clients add different cuts to one stroke; both orders give the same outline, with both gaps. Undo of one gesture restores only its gap. |
-| Hit test ignores gaps | A pointer over a gap does not hit the stroke and hits the object beneath; a pointer over a remaining run does. |
+| Hit test ignores gaps | A pointer over a gap does not hit the stroke and hits the object beneath; a pointer over a kept part does. |
 | Group move invalidates by region | Move a group of 10,000 members; only tiles touching its old and new world box re-render, and the members are not visited individually. |
 | Each object is drawn once under `eff_min_px` | Generated scenes at several `eff_min_px` values (0.5, 1, 2, 6); for every view octave, every object and every tile it touches, count sources: at most one of {live, picture}, and exactly one when its extent is at least `eff_min_px` (live or sparse tile) or at least 0.25 px (dense tile). Counted per object and tile, not per view, so an object spanning two tiles of different density is checked in each. |
 | Home octave and picture tiles are pure | Random `ExactBox`es at levels -1000 to 1000: `home_octave` and `picture_tiles` equal an independent big-rational reference; the same box gives the same tiles whatever level it is expressed at; every object has five octaves and at most 20 tiles. |

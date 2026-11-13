@@ -25,7 +25,7 @@ cargo run --release --example bench_positions                       # timing run
 cargo test -p everink-core --target wasm32-wasip1 --locked          # the core's tests on wasm32, under Node
 cargo run --release --example bench_cut                             # timing run for the cut and the outline (question 4)
 cargo run --release --example bench_cut --target wasm32-wasip1      # the same on wasm32, under Node
-UPDATE_GOLDEN=1 cargo test -p everink-core --test outlines          # rewrite the two outlines golden files
+UPDATE_GOLDEN=1 cargo test -p everink-core --test outlines          # rewrite the outlines golden file
 cargo test -p everink-sync --test object_map <name>                 # one test of the object map
 cargo run --release --example bench_object_map [objects] [depth]    # size and timing run (spike question 7)
 cargo test -p everink-sync --test wire_and_pacing <name>            # one test of the wire bytes and the pacing rule
@@ -36,9 +36,6 @@ cargo run --release --locked --manifest-path spike/text-trial/Cargo.toml   # its
 cargo clippy --manifest-path spike/text-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/text-trial/Cargo.toml --check       # its format check
 cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml [strokes]   # the renderer trial (question 10)
-cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml coverage [strokes]   # what each outline form covers (slice 3d)
-cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml union [strokes]   # a true union, made by a library, drawn (slice 3d)
-cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml picture <file.png> single|runs   # the forms side by side (slice 3d)
 cargo clippy --manifest-path spike/render-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/render-trial/Cargo.toml --check     # its format check
 sh spike/render-web/build.sh                                        # the browser trial: builds into www/, prints wasm sizes
@@ -81,9 +78,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `docs/naming.md`: why the name, and the availability check.
 - `docs/spike/`: the spike. `README.md` is the plan: the questions, what settles each, the slices. One results
   file per slice.
-- `crates/everink-core`: positions and the camera (spike slice 1), stroke outlines and the cut (slice 3a).
-  `tests/golden/positions.txt`, `tests/golden/outlines.txt` and `tests/golden/outlines_runs.txt` (the runs of
-  slice 3d, a trial form) are the cross-platform golden files. Its
+- `crates/everink-core`: positions and the camera (spike slice 1), stroke outlines and the cut (slice 3a; the
+  outline is the runs of slice 3d, the owner's choice, and `outline::build` is the only builder).
+  `tests/golden/positions.txt` and `tests/golden/outlines.txt` are the cross-platform golden files. Its
   `clippy.toml` holds the float rules for geometry every client must compute identically.
 - `tools/wasi-run.mjs`, `.cargo/config.toml`: how a wasm32 test binary is run (under Node's WASI).
 - `crates/everink-sync`: the server-ordered object map (spike slice 2a): objects and their registers, the
@@ -96,9 +93,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `spike/render-trial`: the trial of `vello_gpu` and `vello_cpu` on a scene of stroke outlines (spike slice 3b).
   A package of its own with its own `Cargo.lock`, for the same reason. It builds `crates/everink-core` in, so a
   change there runs its CI job (`render-trial`) too. It has no tests; its run checks itself. Its scene is
-  `src/scene.rs`, which the browser trial builds in as well. Its `coverage`, `union` and `picture` runs (slice
-  3d) compare the outline forms; `union` alone uses the polygon-clipping library `i_overlay`, and `picture`
-  writes the two pictures `docs/spike/images/3d-forms*.png` (`single` and `runs`).
+  `src/scene.rs`, which the browser trial builds in as well. It draws the core's outline and one heavier form
+  of its own; the other forms of slices 3b to 3d, and the runs that compared them and wrote
+  `docs/spike/images/3d-forms*.png`, are at commit `4b84a65`.
 - `spike/render-web`: the same scene in a browser (spike slice 3c): `vello_gpu` on WebGPU and on WebGL2 and
   `vello_cpu`, built to `wasm32-unknown-unknown`, with the tiles kept as textures and the view composed from
   them. Another package of its own with its own `Cargo.lock`. `build.sh` needs `wasm-bindgen` 0.2.130;
@@ -128,7 +125,7 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - The package names in `README.md` are intentions only. Nothing is published on crates.io or npm; publishing is an
   owner decision.
 - `LICENSE-APACHE` is the unmodified text from apache.org; never reflow or edit it.
-- `tests/golden/positions.txt`, `tests/golden/outlines.txt` and `tests/golden/outlines_runs.txt` were written on
+- `tests/golden/positions.txt` and `tests/golden/outlines.txt` were written on
   aarch64 and are checked on x86-64 and wasm32 by CI. Rewrite one only when the arithmetic it records is meant to change, and say so in the PR: a
   difference between machines is a bug, not a reason to regenerate.
 - In `crates/everink-core`, `clippy` refuses every float method outside the allowed arithmetic (`mul_add`, the
@@ -254,13 +251,14 @@ both the owner chose the option the agent had marked as recommended; the recomme
 
 Decided:
 - **The stroke outline form is runs with smoothed sides**: the third of the three variants slice 3d measured, a
-  run ended at an eighth of a turn (`build_runs_within` with `FRAC_1_SQRT_2` and `smooth`). The evidence is
+  run ended at an eighth of a turn (then `build_runs_within` with `FRAC_1_SQRT_2` and `smooth`; now
+  `outline::build`). The evidence is
   `docs/spike/results-3d-outline-forms.md`. What the owner was told when asked: a stroke tapers where the pressure
   changes, so the eraser's cut and the hit test have to follow that shape; small notches remain where one run
   ends and the next begins; and for this variant "no holes" is argued up to thin slivers at the outside of turns
-  and tested on 1,000 rough strokes, not fully proved. To follow (the agent's plan, not part of the decision): a
-  change that makes this the only builder, removes `tests/golden/outlines.txt`, keeps only the chosen variant in
-  `tests/golden/outlines_runs.txt`, and rewrites section 06's steps for it.
+  and tested on 1,000 rough strokes, not fully proved. Done since (the agent's follow-up, not part of the decision;
+  https://github.com/vchance/everink/pull/27): this is the only builder, `tests/golden/outlines.txt` records
+  it, and section 06's steps describe it.
 - **The further candidate is not used as a renderer backend; the renderer stays as designed, and the question is
   closed.** The candidate stays unnamed and undescribed in this repository. The 4c folder on the owner's machine
   is the owner's to keep or delete.

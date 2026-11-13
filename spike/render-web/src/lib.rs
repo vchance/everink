@@ -174,7 +174,7 @@ mod cpu {
     use super::*;
     use vello_common::pixmap::Pixmap;
 
-    /// Draws the view in tiles with `vello_cpu`, into a pixel buffer, for the three outline forms.
+    /// Draws the view in tiles with `vello_cpu`, into a pixel buffer, for each outline form of `KINDS`.
     #[wasm_bindgen]
     pub fn run_cpu(strokes: u32) -> String {
         let count = strokes as usize;
@@ -290,8 +290,8 @@ mod webgl {
             .collect())
     }
 
-    /// Draws the view in tiles with `vello_gpu` on WebGL2, each tile into a texture of its own, for the three
-    /// outline forms. The textures of the last form are kept as the tile cache for `webgl_frame`.
+    /// Draws the view in tiles with `vello_gpu` on WebGL2, each tile into a texture of its own, for each
+    /// outline form of `KINDS`. The textures of the last form are kept as the tile cache for `webgl_frame`.
     #[wasm_bindgen]
     pub fn run_webgl(canvas: HtmlCanvasElement, strokes: u32) -> Result<String, JsValue> {
         let count = strokes as usize;
@@ -404,7 +404,7 @@ mod webgl {
             kept = Some(tiles);
         }
 
-        let tiles = kept.expect("three forms were drawn");
+        let tiles = kept.expect("the forms were drawn");
         let mut bindings = WebGlTextureBindings::new();
         for (i, (texture, _)) in cache.iter().enumerate().take(tiles.len()) {
             bindings.insert(
@@ -578,8 +578,8 @@ mod webgpu {
             .collect()
     }
 
-    /// Draws the view in tiles with `vello_gpu` on WebGPU, each tile into a texture of its own, for the three
-    /// outline forms. The textures of the last form are kept as the tile cache for `webgpu_frame`.
+    /// Draws the view in tiles with `vello_gpu` on WebGPU, each tile into a texture of its own, for each
+    /// outline form of `KINDS`. The textures of the last form are kept as the tile cache for `webgpu_frame`.
     #[wasm_bindgen]
     pub async fn run_webgpu(canvas: HtmlCanvasElement, strokes: u32) -> Result<String, JsValue> {
         let count = strokes as usize;
@@ -715,7 +715,7 @@ mod webgpu {
         }
 
         // The view has a renderer of its own: a renderer is made for one target format and size.
-        let tiles = kept.expect("three forms were drawn");
+        let tiles = kept.expect("the forms were drawn");
         let (renderer, resources) = Renderer::new(
             &device,
             &queue,
