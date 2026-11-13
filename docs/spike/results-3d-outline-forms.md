@@ -338,7 +338,7 @@ library gives the same bytes on every machine was not looked at.
 
 ## What the design should change
 
-Nothing until the owner chooses. If runs are chosen, section 06's steps 4 to 8 describe them in place of the
+Nothing until the owner chooses. (Chosen on 2026-11-13: runs with smoothed sides.) If runs are chosen, section 06's steps 4 to 8 describe them in place of the
 single path, with the taper stated as the stroke's shape, and the performance budget takes the figures above.
 
 ## For the owner's choice

@@ -394,7 +394,9 @@ moved the same 40 tiles (a real pan brings new ones, which have to be drawn: see
 - **The wait for the GPU is once for a batch of tiles, not after each.** Natively the trial waited after every tile and
   saw 23 to 63 ms a view of waiting; in the browser it waited once after all 40 tiles were sent and found 0.5 to 3.0
   ms left (WebGPU 0.5 to 1.0, WebGL2 1.5 to 3.0), because the GPU works while the page prepares the next tile.
-- **A tile of about 330 strokes does not fit the 4 ms box for any outline but the single path.** One tile with the
+- **A tile of about 330 strokes fits the 4 ms box with the single path and with runs, and not with discs and
+  bands.** (One tile of runs takes 1.8 to 1.9 ms natively and 2.5 ms in WebAssembly with SIMD:
+  [results 3d](../spike/results-3d-outline-forms.md).) One tile with the
   design's single-path outline takes 1.5 ms natively and 2.0 ms in WebAssembly with SIMD (2 tiles in the box); with
   the union of discs and bands 10 ms and 13.5 ms (no whole tile fits); without SIMD 4.6 to 5.3 ms for the single path
   and 31 to 34 ms for the union. Redrawing the whole view at 4 ms a frame takes 20 frames (0.33 s) for the single path
@@ -1262,11 +1264,12 @@ Raised by the spike (measured in slices 3a to 3c) and put to the owner on 2026-1
 5. **Which outline form.** Decided on 2026-11-13: runs with smoothed sides. The owner first chose to have the
    lighter hole-free forms built and measured (spike slice 3d). The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
    and bands has none and costs the processor renderer far more for 10,000 strokes (394 to 407 ms
-   against 61 to 64 ms natively). Slice 3d has built a third form, runs, with no holes at about 1.2 times the single
-   path's cost, and tried a true union ([results 3d](../spike/results-3d-outline-forms.md)). See "The outline: variable width,
+   against 61 to 64 ms natively). Slice 3d has built a third form, runs, which leaves no holes on any stroke tested (proved for
+   straight sides; argued and tested for the smoothed sides chosen) at about 1.2 times the single path's cost, and tried a true union ([results 3d](../spike/results-3d-outline-forms.md)). See "The outline: variable width,
    deterministic".
 6. **WebAssembly SIMD.** Decided on 2026-11-13: required. (The tile budget holds in a browser only with it, and
-   then only for the single-path outline; a module built with it does not load without it.)
+   then for the single-path outline and for runs, not for discs and bands; a module built with it does not load
+   without it.)
 7. **The backend order.** Natively the processor renderer was faster than the GPU one for strokes; in Chrome all
    three took the same time. Not re-decided yet (owner, 2026-11-13): the order stays as designed until other content,
    other browsers and a slower machine are measured.
