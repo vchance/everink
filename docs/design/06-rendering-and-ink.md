@@ -671,10 +671,17 @@ which is rougher than a real pen).
   path for the stroke's outside found by a true union of the pieces (the polygon clipping this section chose to
   avoid, which would have to give the same result on every machine).
 
+Spike slice 3d built the second of these as *runs*: one path for each stretch that turns gently, ended where the
+path would fold or the stroke turns an eighth of a turn or more, with a three-cornered wedge or a disc at the
+joint, and optionally with its sides smoothed as in step 6. It leaves no holes and costs the renderer 1.2 to 1.4 times what
+the single path does (the union: 6.5 times); its shape tapers where the pressure changes, where the union bulges. A true union made by
+a clipping library was heavier to draw and about two hundred times slower to make
+([results 3d](../spike/results-3d-outline-forms.md)).
+
 **Which outline form to use is not decided** (to be decided; see [the index](README.md#still-open)). Until it is,
-steps 4 to 8 above describe the single path, and the version-1 algorithm is not fixed. The prototype keeps both
-builders in `everink-core`, `build` (the union) and `build_single_path` (this section's first form, kept to record
-its flaw); `build_single_path` goes when the choice is made.
+steps 4 to 8 above describe the single path, and the version-1 algorithm is not fixed. The prototype keeps three
+builders in `everink-core`: `build` (the union), `build_single_path` (this section's first form, kept to record
+its flaw) and `build_runs`; those not chosen go when the choice is made.
 
 The same function, with an *incremental* entry point, builds the live preview and the final stroke (section 04 needs
 both to match):
@@ -1248,8 +1255,9 @@ Raised by the spike (measured in slices 3a to 3c) and put to the owner on 2026-1
 5. **Which outline form.** No decision yet: the owner chose to have the lighter hole-free forms built and measured
    first (spike slice 3d). The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
    and bands has none and costs the processor renderer far more for 10,000 strokes (394 to 407 ms
-   against 61 to 64 ms natively). Fewer corners, discs only at turns, or a true union were named and not tried. See
-   "The outline: variable width, deterministic".
+   against 61 to 64 ms natively). Slice 3d has built a third form, runs, with no holes at 1.2 to 1.4 times the single
+   path's cost, and tried a true union ([results 3d](../spike/results-3d-outline-forms.md)); the choice is now the
+   owner's to make. See "The outline: variable width, deterministic".
 6. **WebAssembly SIMD.** Decided on 2026-11-13: required. (The tile budget holds in a browser only with it, and
    then only for the single-path outline; a module built with it does not load without it.)
 7. **The backend order.** Natively the processor renderer was faster than the GPU one for strokes; in Chrome all
