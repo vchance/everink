@@ -236,6 +236,7 @@ impl Controls for EguiControls {
                 Some(TextInputState {
                     value,
                     preedit: self.preedit.clone(),
+                    shown: self.hex.clone(),
                     caret_rect: [r.min.x, r.min.y, r.max.x, r.max.y],
                 })
             }

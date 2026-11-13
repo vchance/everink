@@ -13,7 +13,7 @@ owner's further candidate, whose details are kept outside this repository.
 
 ## Answer so far
 
-Both candidates do everything the trial asks of them: the same ten tests pass for both. They differ in what
+Both candidates do everything the trial asks of them: the same twelve tests pass for both. They differ in what
 they cost and in what they leave to be written.
 
 | | Everink's own (`taffy`, `parley`, AccessKit by hand) | egui 0.37.0 |
@@ -23,13 +23,14 @@ they cost and in what they leave to be written.
 | A frame with nothing changed | 1 µs | 18 µs |
 | A frame with something changed | 7 to 9 µs | 19 to 21 µs |
 | Added to a WebAssembly module (raw; Brotli), no font | 1.24 MB; 366 KB | 2.42 MB; 616 KB |
-| The same with a font | 1.64 MB; 512 KB (one font) | 3.09 MB; 886 KB (the four it ships) |
-| Lines of code for this toolbar and field | 668 | 231 |
+| The same with a font | 1.64 MB; 513 KB (one font) | 3.09 MB; 886 KB (the three it ships) |
+| Lines of code for this toolbar and field | 669 | 232 |
+| Smallest control, in pixels | 24 by 24 | 24 wide, 20 high (its default button height) |
 | Presses of Tab from the start to the field | 4 (one stop a group) | 13 (every button) |
 | Commands come out | With the event | One frame later |
-| Text stack | Parley, the canvas's own | Its own (not Parley) |
+| Text stack | Parley, the canvas's own | Its own layout and line breaking, over the same shaper and font reader Parley uses (`harfrust`, `skrifa`) |
 
-- **Either is far inside the design's planning figure of 1 ms a frame**, by 50 times or more. Frame cost does
+- **Either is far inside the design's planning figure of 1 ms a frame**, by about 45 times or more. Frame cost does
   not separate them.
 - **egui costs about twice the bytes**, with or without fonts; the design's whole budget for the first version
   is 2.5 MB with Brotli, fonts excluded.
@@ -82,8 +83,18 @@ Nothing is drawn on a screen. Neither candidate is seen, only checked.
    and a colour changed under it (another person's edit) do not rewrite it; the letter completes it; a
    composition given up leaves nothing; an input method that composes in steps (a Japanese smoke test) ends with
    its text in the field; the caret reported for the input method's window is inside the field.
-5. **The keyboard.** Tab reaches the field and never stops on a disabled button. The stops are printed: they
-   differ, and the difference is a result and not a failure.
+5. **Tab.** Tab reaches the field, stops at Redo and never stops on a disabled button. The stops are printed:
+   they differ, and the difference is a result and not a failure.
+6. **The keyboard.** Space presses the button that has the focus; Shift and Tab go back. What the arrow keys do
+   in the tool group is printed for each, and so is the smallest control.
+
+A thirteenth test is the own toolkit's alone and holds it to what section 07 asks: one stop a group, the arrows,
+Home and End moving the check inside it and wrapping, Escape letting go of the focus, and every control at
+least 24 by 24. egui is not held to it: in egui the right arrow moves the focus to the next radio button and
+gives no command, and Tab stops at each.
+
+In the composition test the text on show is read from each toolkit itself (egui's string, Parley's editor), so
+a toolkit that ignored the preedit would fail.
 
 ## Measurements
 
@@ -104,7 +115,9 @@ the system's fonts, gave the same figures to within a microsecond.
 | a key was typed in the field | 7.3 to 7.6 µs (7.6 to 8.0) | 19.4 to 19.6 µs (20 to 21) |
 
 - egui builds its interface again every frame, so its frames cost the same whatever happened; that includes
-  tessellating its shapes into triangles. The own toolkit's unchanged frame is the cost of writing the
+  laying its text out to glyphs and tessellating its shapes into triangles. The own toolkit's paint list
+  carries its text as strings: shaping them to glyphs for drawing is the renderer's and is not in its figure
+  (measuring them for layout is, the first time each is seen). The own toolkit's unchanged frame is the cost of writing the
   accessibility tree, and its changed frame adds a `taffy` layout and the paint list.
 - Neither figure includes drawing. The own toolkit's list would go to the canvas's renderer; egui's triangles
   to `egui-wgpu`. Section 06 budgets 0.5 ms of processor and 0.3 ms of GPU a frame for the controls; the
@@ -121,20 +134,25 @@ further size tool was run.
 
 | Probe | Bytes | gzip -9 | Brotli | Added over the baseline (raw; Brotli) |
 |---|---|---|---|---|
-| No candidate | 21,926 | 9,350 | 7,909 | |
-| Own, no font | 1,265,676 | 472,830 | 374,121 | 1.24 MB; 366 KB |
-| Own with one font (Ubuntu Light, 0.36 MB) | 1,659,079 | 652,951 | 520,195 | 1.64 MB; 512 KB |
-| egui, no fonts | 2,439,684 | 842,385 | 623,958 | 2.42 MB; 616 KB |
-| egui with its four fonts (0.68 MB) | 3,116,406 | 1,164,081 | 893,464 | 3.09 MB; 886 KB |
-| Both, with fonts | 3,823,031 | 1,424,040 | 1,088,629 | |
+| No candidate | 21,940 | 9,356 | 7,903 | |
+| Own, no font | 1,265,889 | 472,895 | 374,075 | 1.24 MB; 366 KB |
+| Own with one font (Ubuntu Light, 0.36 MB) | 1,659,289 | 653,035 | 520,646 | 1.64 MB; 513 KB |
+| egui, no fonts | 2,439,814 | 842,430 | 623,452 | 2.42 MB; 616 KB |
+| egui with its three fonts (0.68 MB) | 3,116,536 | 1,164,122 | 894,165 | 3.09 MB; 886 KB |
+| Both, with fonts | 3,823,281 | 1,424,163 | 1,089,576 | |
 
-- The two are not the same kind of thing. The own toolkit's bytes are mostly `parley` and the Unicode data it
+- The two are not the same kind of thing. The own toolkit's bytes include `parley` and the Unicode data it
   brings, which the canvas needs for text objects whichever toolkit wins, and it draws nothing itself. egui's
-  bytes are its own text stack, layout, widgets and tessellator, none of which the canvas shares; drawing it
-  needs `egui-wgpu` as well, which is not in the figure.
-- So the honest reading is: with the own toolkit the controls add `taffy` and their own code to a module that
-  already has Parley; with egui they add all of egui. How much of the 1.24 MB is Parley was not measured apart.
-- egui draws no text without fonts. Its own are 0.68 MB raw (two text fonts, an emoji font and its icons). It
+  bytes are its own layout, widgets, text layout and tessellator; drawing it needs `egui-wgpu` as well, which
+  is not in the figure. How much of the 1.24 MB is Parley was not measured apart.
+- **They share more than the design supposed.** egui 0.37 shapes text with `harfrust` 0.12.0 and reads fonts
+  with `skrifa` 0.44.0, the same libraries at the same versions as Parley. The last row shows it: the two
+  together are 0.93 MB smaller than their sum. 0.36 MB of that is the one font both hold; the other 0.57 MB is
+  code they share. So in a module that already has Parley, egui adds about 1.85 MB without fonts and not 2.42.
+  egui also brings `vello_cpu` 0.2.0, another version than the renderer's 0.4.0.
+- So the reading is: with the own toolkit the controls add `taffy` and their own code to a module that already
+  has Parley; with egui they add egui less what it shares with Parley.
+- egui draws no text without fonts. Its own are 0.68 MB raw (three files: two text fonts, Hack and Ubuntu Light, and a 3.5 KB set of icons). It
   can be given the document's fonts instead; that was not tried. The rows without a font are there to show
   the code alone: without one the own toolkit's field cannot be edited either.
 - Section 07's budget for the whole first version is 8 MB raw and 2.5 MB with Brotli, fonts excluded; the
@@ -144,13 +162,14 @@ further size tool was run.
 
 | | Own | egui |
 |---|---|---|
-| Lines of code (not blank, not comments) | 668 | 231 |
-| Shared by both: the trait and model, the contract | 122, 128 | |
+| Lines of code (not blank, not comments) | 669 | 232 |
+| Shared by both: the trait and model, the contract | 123, 154 | |
 | Time to first passing all tests | one sitting, after egui | one sitting, first |
 
 Both were written by an agent in one session, egui first and the tests with it, so "effort" in person-days is
-not a figure this trial can give. What it can say: egui passed four of five tests on its first build and the
-fifth after a change to the test; the own toolkit passed all five on its first build, with the tests already
+not a figure this trial can give. What it can say: egui passed four of the first five tests on its first build and the
+fifth after a change to the test (the test had asked assistive technology to set the value of a field that did
+not have the focus, which the field then overwrote from the model; it now focuses the field first, for both); the own toolkit passed all five on its first build, with the tests already
 there to write against, and then failed two of them on a machine without system fonts until it was given a
 font of its own.
 
@@ -164,15 +183,16 @@ Section 07's criteria ask for "the widget behaviors still missing". For this too
 | Selecting text in the field with the pointer or with Shift | No | Yes |
 | Copy, cut and paste | No | Yes (through its platform output) |
 | The caret and selection in the accessibility tree (text runs) | No: `parley` 0.12 has no AccessKit support, so they must be written | No: its `TextEdit` gives the value only |
-| One focus stop a group, arrows inside | Yes | No: would need writing against egui's focus handling |
+| One focus stop a group, arrows inside | Yes (tested) | No: Tab stops at every button, and an arrow moves the focus without checking; would need writing against egui's focus handling |
+| Controls at least 24 by 24 | Yes | Not at its default style (20 high) |
 | A focus ring of its own | Yes | Yes |
 | Scroll, popovers, menus, sliders, tooltips, a modal with a focus trap | None written | All there |
 | A container's role and name (toolbar, radio group) | By hand | Yes, through `UiBuilder` |
-| The same text shaping as the canvas | Yes (Parley) | No |
+| The same text layout as the canvas | Yes (Parley) | No (the same shaper underneath; its own layout and line breaking) |
 | A name for a text field | By hand | Needed a low-level call (`accesskit_node_builder`) |
 
 The own toolkit has what the trial needed and nothing else; every further widget is to be written. egui has
-the widgets and lacks the two things the design asks for by name: the canvas's text stack and the radio group's
+the widgets and lacks two things the design asks for by name: the canvas's text layout and the radio group's
 keyboard pattern.
 
 ## Findings
@@ -184,12 +204,13 @@ keyboard pattern.
    part does not touch. What did show: egui inserts the preedit into the application's `String`. The
    application sees composed text as value unless it remembers what it sent, as the trial's adapter does, and
    that adapter's way of taking it out again is not exact.
-3. **egui answers a frame late.** An event is queued and its command comes out of the next frame. At 60 frames
-   a second that is up to 17 ms more before a tool changes; the own toolkit answers in the call.
-4. **Frame cost is not a reason to choose.** Size is: egui is two to three times the bytes and shares nothing
-   with the canvas.
+3. **egui answers in its next frame.** An event is queued and its command comes out of the next `frame` call;
+   the own toolkit answers in the call that takes the event. Whether that costs a frame on screen depends on
+   whether the application runs the controls before the canvas in the same tick; it was not measured.
+4. **Frame cost is not a reason to choose.** Size may be: egui is about twice the bytes (1.7 to 1.95 times,
+   measured each alone), and about 1.85 MB more in a module that already has Parley.
 5. **The own toolkit's cost is everything not yet written**, and the text field shows it: three of the
-   behaviours a person expects of a field are missing after 668 lines.
+   behaviours a person expects of a field are missing after 669 lines.
 6. **Parley's editor does nothing without a font.** With no font registered, the caret cannot move and typed
    text does not go in. The trial met this on CI, where there are no system fonts to fall back on. The controls
    must have their font before the first text field is shown; section 07 should say so.
@@ -203,8 +224,10 @@ keyboard pattern.
   owner's to run, and need a window: part 4b.
 - **A real keyboard and input method.** The events are made by hand in the form section 07 gives them. Whether
   winit and a browser's textarea produce them so, and whether egui's web text agent copes, is part 4b.
-- **Pixels.** Neither candidate is drawn. Contrast, target size (24 by 24 CSS pixels) and the focus ring are not
-  checked by eye or by measure, though both lay their controls out at 24 pixels or more.
+- **Pixels.** Neither candidate is drawn. Contrast and the focus ring are not checked by eye or by measure.
+  Target size is measured from the bounds in the accessibility tree: the own toolkit's smallest control is 24
+  by 24; egui's radio buttons and buttons are 20 high at its default style, under the 24 of WCAG 2.5.8. egui's
+  style can be changed (`interact_size`); that was not tried.
 - **The web at all**, beyond that both compile for it. The DOM mirror is not written.
 - **Scale, themes, right-to-left, a narrow screen.**
 - **Other machines.** One Apple M4.

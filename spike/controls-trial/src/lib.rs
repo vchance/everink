@@ -145,6 +145,8 @@ pub struct TextInputState {
     pub value: String,
     /// The text being composed, if any, as the field shows it.
     pub preedit: Option<String>,
+    /// Everything the field shows, the text being composed included, read from the toolkit itself.
+    pub shown: String,
     /// Where the caret is, in surface pixels: left, top, right, bottom. An input method puts its window here.
     pub caret_rect: [f32; 4],
 }

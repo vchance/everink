@@ -125,6 +125,12 @@ pub fn faults(update: &TreeUpdate, model: &crate::UiModel) -> Vec<String> {
         match tree.find(Role::Button, name) {
             None => out.push(format!("no button named {name}")),
             Some(id) => {
+                if tree.node(id).bounds().is_none() {
+                    out.push(format!("{name} has no bounds"));
+                }
+                if enabled && !tree.node(id).supports_action(accesskit::Action::Click) {
+                    out.push(format!("{name} cannot be clicked"));
+                }
                 if tree.node(id).is_disabled() == enabled {
                     out.push(format!(
                         "{name} is {}",
@@ -147,4 +153,28 @@ pub fn faults(update: &TreeUpdate, model: &crate::UiModel) -> Vec<String> {
         }
     }
     out
+}
+
+/// The smallest width and the smallest height among the controls that can be clicked, in surface pixels, with
+/// the name of the control that has each. WCAG 2.5.8 asks for 24 by 24 CSS pixels.
+pub fn smallest_target(update: &TreeUpdate) -> ((f64, String), (f64, String)) {
+    let tree = Tree::new(update);
+    let mut width = (f64::MAX, String::new());
+    let mut height = (f64::MAX, String::new());
+    for (id, node) in &update.nodes {
+        // A label is not a control, though egui lets a click reach one.
+        let clickable = node.role() != Role::Label
+            && (node.supports_action(accesskit::Action::Click)
+                || (node.role() == Role::TextInput
+                    && node.supports_action(accesskit::Action::Focus)));
+        if let (true, Some(b)) = (clickable, node.bounds()) {
+            if b.x1 - b.x0 < width.0 {
+                width = (b.x1 - b.x0, tree.text(*id));
+            }
+            if b.y1 - b.y0 < height.0 {
+                height = (b.y1 - b.y0, tree.text(*id));
+            }
+        }
+    }
+    (width, height)
 }

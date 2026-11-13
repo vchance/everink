@@ -55,7 +55,7 @@ fn run(mut controls: Box<dyn Controls>, model: &UiModel) -> usize {
 
 fn main() {
     // The model comes from outside the program, so that nothing here can be worked out when it is built.
-    let n = std::env::args().count() as u32;
+    let n = std::hint::black_box(std::env::args().count() as u32);
     let model = UiModel {
         tool: Tool::ALL[n as usize % 5],
         colour: [n as u8, 0x20, 0x20],

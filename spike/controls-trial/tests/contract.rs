@@ -213,33 +213,41 @@ fn composition_goes_through_the_field_unharmed(controls: Box<dyn Controls>) {
     rig.text(TextEvent::Preedit("´".to_string()));
     assert_eq!(rig.field().preedit.as_deref(), Some("´"));
     assert_eq!(rig.field().value, "ab");
+    // What the toolkit itself holds: the accent is on show after the text.
+    assert_eq!(rig.field().shown, "ab´");
     // While it is being composed nothing rewrites the field: not a new frame, and not a colour that changed
     // under it (another person's edit, say).
     rig.model.colour = [0xd0, 0x30, 0x30];
     rig.settle();
     assert_eq!(rig.field().preedit.as_deref(), Some("´"));
     assert_eq!(rig.field().value, "ab");
+    assert_eq!(rig.field().shown, "ab´");
     // The letter completes it.
     rig.text(TextEvent::Commit("é".to_string()));
     assert_eq!(rig.field().preedit, None);
     assert_eq!(rig.field().value, "abé");
+    assert_eq!(rig.field().shown, "abé");
 
     // A composition given up leaves nothing behind.
     rig.text(TextEvent::Preedit("`".to_string()));
     assert_eq!(rig.field().preedit.as_deref(), Some("`"));
+    assert_eq!(rig.field().shown, "abé`");
     rig.text(TextEvent::CompositionCancelled);
     assert_eq!(rig.field().preedit, None);
     assert_eq!(rig.field().value, "abé");
+    assert_eq!(rig.field().shown, "abé");
 
     // An input method that composes in steps (a smoke test; the first version is Latin only).
     rig.text(TextEvent::Preedit("に".to_string()));
     rig.text(TextEvent::Preedit("にほ".to_string()));
     assert_eq!(rig.field().preedit.as_deref(), Some("にほ"));
     assert_eq!(rig.field().value, "abé");
+    assert_eq!(rig.field().shown, "abéにほ");
     rig.text(TextEvent::Preedit("日本".to_string()));
     rig.text(TextEvent::Commit("日本".to_string()));
     assert_eq!(rig.field().preedit, None);
     assert_eq!(rig.field().value, "abé日本");
+    assert_eq!(rig.field().shown, "abé日本");
 
     // The caret is where an input method should put its window: inside the field.
     let tree = Tree::new(&rig.last.tree);
@@ -280,7 +288,7 @@ fn tab_stops(controls: Box<dyn Controls>) -> Vec<String> {
     panic!("Tab never reached the field: {stops:?}");
 }
 
-fn the_keyboard_reaches_everything(controls: Box<dyn Controls>) {
+fn tab_reaches_the_field_and_space_presses_a_button(controls: Box<dyn Controls>) {
     let name = controls.name();
     let stops = tab_stops(controls);
     println!(
@@ -291,6 +299,86 @@ fn the_keyboard_reaches_everything(controls: Box<dyn Controls>) {
         !stops.iter().any(|s| s.contains("Undo")),
         "a disabled button is not a stop"
     );
+    assert!(stops.iter().any(|s| s == "Button Redo"));
+}
+
+/// What the arrow keys do inside the tool group, as a sentence. The two candidates differ, and for egui the
+/// difference is a result; the own toolkit is held to the radio group's pattern in its own test below.
+fn arrows_in_the_tool_group(rig: &mut Rig) -> (String, Vec<Command>) {
+    rig.key(Key::Tab);
+    let before = {
+        let tree = Tree::new(&rig.last.tree);
+        tree.text(tree.focus())
+    };
+    rig.take();
+    rig.key(Key::Right);
+    let tree = Tree::new(&rig.last.tree);
+    let after = tree.text(tree.focus());
+    let commands = rig.take();
+    (
+        format!("Tab focuses {before}; Right then focuses {after}"),
+        commands,
+    )
+}
+
+fn the_keyboard_works_the_controls(controls: Box<dyn Controls>) {
+    let name = controls.name();
+    let mut rig = Rig::new(controls);
+    let (said, commands) = arrows_in_the_tool_group(&mut rig);
+    println!("{name}: {said} and gives {commands:?}");
+    // Space presses the button that has the focus.
+    for _ in 0..40 {
+        let tree = Tree::new(&rig.last.tree);
+        if tree.text(tree.focus()) == "Redo" {
+            break;
+        }
+        rig.key(Key::Tab);
+    }
+    rig.take();
+    rig.key(Key::Space);
+    assert_eq!(rig.take(), [Command::Redo]);
+    // Shift and Tab go back the way Tab came.
+    let here = Tree::new(&rig.last.tree).focus();
+    rig.key(Key::Tab);
+    rig.send(InputEvent::Key {
+        key: Key::Tab,
+        shift: true,
+    });
+    assert_eq!(Tree::new(&rig.last.tree).focus(), here);
+    let (w, h) = controls_trial::contract::smallest_target(&rig.last.tree);
+    println!(
+        "{name}: smallest target {:.0} wide ({}) and {:.0} high ({})",
+        w.0, w.1, h.0, h.1
+    );
+}
+
+/// The own toolkit alone: one stop a group, and the arrows move the check inside it, as section 07 asks.
+#[cfg(feature = "own")]
+#[test]
+fn the_own_toolkit_follows_the_radio_group_pattern() {
+    let mut rig = Rig::new(Box::new(controls_trial::own::OwnControls::default()));
+    let (said, commands) = arrows_in_the_tool_group(&mut rig);
+    assert_eq!(said, "Tab focuses Pen; Right then focuses Eraser");
+    assert_eq!(commands, [Command::SetTool(Tool::Eraser)]);
+    rig.key(Key::End);
+    assert_eq!(rig.take(), [Command::SetTool(Tool::Line)]);
+    rig.key(Key::Right);
+    assert_eq!(rig.take(), [Command::SetTool(Tool::Select)], "it wraps");
+    rig.key(Key::Left);
+    assert_eq!(rig.take(), [Command::SetTool(Tool::Line)]);
+    // The next stop is the colour group, at its checked swatch; the arrows work there too.
+    rig.key(Key::Tab);
+    let tree = Tree::new(&rig.last.tree);
+    assert_eq!(tree.text(tree.focus()), "Black");
+    rig.key(Key::Right);
+    assert_eq!(rig.take(), [Command::SetColour([0xd0, 0x30, 0x30])]);
+    // Escape lets go of the focus.
+    rig.key(Key::Escape);
+    let tree = Tree::new(&rig.last.tree);
+    assert_eq!(tree.node(tree.focus()).role(), Role::Window);
+    // Every control is at least 24 by 24.
+    let (w, h) = controls_trial::contract::smallest_target(&rig.last.tree);
+    assert!(w.0 >= 24.0 && h.0 >= 24.0, "{w:?} {h:?}");
 }
 
 macro_rules! for_candidate {
@@ -316,8 +404,12 @@ macro_rules! for_candidate {
                 super::composition_goes_through_the_field_unharmed(make());
             }
             #[test]
-            fn the_keyboard_reaches_everything() {
-                super::the_keyboard_reaches_everything(make());
+            fn tab_reaches_the_field_and_space_presses_a_button() {
+                super::tab_reaches_the_field_and_space_presses_a_button(make());
+            }
+            #[test]
+            fn the_keyboard_works_the_controls() {
+                super::the_keyboard_works_the_controls(make());
             }
         }
     };

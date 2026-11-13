@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Decides which CI jobs run (core D2). One output per component in PROFILE.md › Components, plus `all`, plus
-# `carry_failure` for the scheduled lane. The cases below are in the order of the PROFILE › Check selection rows.
+# `carry_failure` for the scheduled lane. The cases below follow the PROFILE › Check selection rows; the trial
+# packages' rows are disjoint, so their order does not matter.
 # Selection fails closed: an empty or unreadable file list, or a path that matches no pattern, selects everything.
 #
 # Usage: ci-changes.sh <event> <before-sha-or-empty> <after-sha-or-empty>

@@ -709,6 +709,7 @@ impl Controls for OwnControls {
             TextInputState {
                 value: self.editor.text().to_string(),
                 preedit: compose.map(|r| self.editor.raw_text()[r].to_string()),
+                shown: self.editor.raw_text().to_string(),
                 caret_rect: [
                     left,
                     field[1] + 4.0,

@@ -213,7 +213,7 @@ jobs:
           for features in "" own egui; do
             cargo clippy --manifest-path "$MANIFEST" --all-targets --locked --no-default-features --features "$features" -- -D warnings
           done
-      - name: Tests (the same ten for both candidates)
+      - name: Tests (the same twelve for both candidates, and one for the own toolkit alone)
         run: cargo test --manifest-path "$MANIFEST" --locked
       - name: Frame cost and lines of code (no thresholds)
         run: cargo run --release --locked --manifest-path "$MANIFEST" --example bench_controls
