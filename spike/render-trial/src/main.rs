@@ -560,7 +560,7 @@ const DIGITS: [[u8; 7]; 5] = [
 ];
 
 /// A picture of the forms side by side, as a PNG: parts of three rough strokes, a row each, drawn by `vello_cpu`
-/// at 8192 pixels a unit (thirty-two times the scene's zoom). The columns carry their numbers: 1 discs and
+/// at 8192 or 4096 pixels a unit (thirty-two or sixteen times the scene's zoom). The columns carry their numbers: 1 discs and
 /// bands, 2 the single path, 3 runs cut at a quarter turn, 4 runs cut at an eighth, 5 runs cut at an eighth
 /// with their sides smoothed.
 ///
@@ -569,16 +569,18 @@ const DIGITS: [[u8; 7]; 5] = [
 /// that stretch. `runs`: those where the smoothed runs cover the least of what discs and bands cover, each row
 /// centred on the longest stretch they miss.
 fn picture(out: &str, worst: &str) {
+    // Pixels a unit: thirty-two times the scene's zoom for `single`, whose flaws are small, and sixteen times
+    // for `runs`, so that both edges of a wide stroke are in the cell.
+    let zoom = if worst == "runs" { 4096.0 } else { 8192.0 };
     const CELL: usize = 300;
     const GAP: usize = 12;
     const ROWS: usize = 3;
-    const ZOOM: f64 = 8192.0;
     let rough = (true, false);
     let forms = [KINDS[0].1, KINDS[2].1, KINDS[3].1, KINDS[4].1, KINDS[5].1];
-    let paths = forms.map(|kind| scene::lone_strokes(300, kind, ZOOM, rough, 100));
+    let paths = forms.map(|kind| scene::lone_strokes(300, kind, zoom, rough, 100));
     let mut ranked: Vec<(f64, Point, usize)> = match worst {
         "single" => {
-            let inside = scene::lone_strokes(300, KINDS[0].1, ZOOM, rough, 70);
+            let inside = scene::lone_strokes(300, KINDS[0].1, zoom, rough, 70);
             (0..300)
                 .map(|i| {
                     let (gap, at) = worst_gap(&inside[i], &paths[1][i]);

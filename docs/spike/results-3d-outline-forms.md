@@ -169,7 +169,7 @@ core's, so their area is not comparable.
 
 ### The pictures
 
-Parts of rough strokes at 8192 pixels a unit, thirty-two times the scene's zoom, drawn by `vello_cpu`
+Parts of rough strokes, magnified, drawn by `vello_cpu`
 (`render-trial picture <file.png> single` and `... runs`). In both pictures a row is one stroke, the same part of
 it in every column, and each cell carries its column's number:
 
@@ -180,12 +180,13 @@ it in every column, and each cell carries its column's number:
 On this page the pictures are shown at about half their size; opened by themselves they are 1572 pixels wide.
 
 **Where the single path does worst.** The three strokes, of the first 300 rough ones, where the single path
-leaves the longest stretch of the stroke's inside uncovered; each row is centred there.
+leaves the longest stretch of the stroke's inside uncovered; each row is centred there. It is at 8192 pixels a
+unit, thirty-two times the scene's zoom.
 
-![Three rough strokes, a row each, in five outline forms, columns numbered 1 to 5: discs and bands, single path, runs cut at a quarter turn, runs cut at an eighth, the same smoothed. Column 2 has a white crescent-shaped hole in the middle of the second row and a white notch at the top of the round end in the third; the other columns are filled there. Column 3 has pointed corners where columns 1, 4 and 5 are round.](images/3d-forms.png)
+![Three rough strokes, a row each, in five outline forms, columns numbered 1 to 5: discs and bands, single path, runs cut at a quarter turn, runs cut at an eighth, the same smoothed. Column 2 has a white crescent-shaped hole in the middle of the second row and a thin white slit at the top of the round end in the third; the other columns are filled in the second row and have only a shallow dip in the third. Column 3 has pointed corners where columns 1, 4 and 5 are round.](images/3d-forms.png)
 
 - Column 2, the single path. Row 2: a crescent-shaped hole in the middle of the cell, where the stroke curls
-  back under itself. Row 3: a notch in the top of the round end at the left. In row 1 its outline is a different
+  back under itself. Row 3: a white slit in the top of the round end at the left, where the others have only a shallow dip. In row 1 its outline is a different
   shape from the others where the stroke turns back at the left.
 - Column 1, discs and bands: whole. Its edge is lumpy, because the disc of every point shows where the pressure
   changes.
@@ -199,13 +200,23 @@ leaves the longest stretch of the stroke's inside uncovered; each row is centred
 
 **Where runs do worst.** No stroke in the first picture was chosen against runs. In this one the three strokes
 are those where the smoothed runs (column 5) cover the least of what discs and bands (column 1) cover: 1.7%,
-1.7% and 1.6% less area. Each row is centred on the longest stretch they miss.
+1.7% and 1.6% less area. Each row is centred on the longest stretch they miss. This picture is at 4096 pixels a
+unit, half the zoom of the first, so that both edges of a stroke are in the cell.
 
-![Three more rough strokes in the same five columns. In the first and third rows column 1 has a rounded, bulging edge; columns 3, 4 and 5 follow it with flatter edges that stay inside it, with corners in columns 3 and 4 and curves in column 5. No column has a hole.](images/3d-forms-runs.png)
+![Three more rough strokes in the same five columns, at half the zoom. In the first and third rows each stroke is a wide band with both edges in view. Column 1 is the fullest and its edges are lumpy. Columns 3, 4 and 5 are a little narrower in places, with small V-shaped notches in their edges, cut from outside; column 5 has curves where columns 3 and 4 have corners. Column 2 has thin white slits inside the ink near the top of the first row and at the top left of the third. The second row is a thin stroke at its whole size and looks alike in all five.](images/3d-forms-runs.png)
 
-- Rows 1 and 3 show the taper. Discs and bands (column 1) bulge round each heavy point; runs go straight from
-  one width to the next and stay inside that bulge. The single path (column 2) tapers the same way.
-- Row 2 is a short stroke at its whole size: the forms differ at its turns, and none has a hole.
+- Rows 1 and 3 show the taper. Discs and bands (column 1) bulge round each heavy point; runs (columns 3 to 5) go
+  straight from one width to the next and stay inside that bulge, so they are a little narrower in places.
+- The small V-shaped notches in the edges of columns 3 to 5 (row 1, both edges; row 3, the upper edge and the
+  bottom) are where one run ends and the next begins: two flat ends meeting at a gentle turn, with a wedge or the
+  next run's first piece between them. They are cut into the edge from outside. None is a gap inside the ink.
+  Smoothing (column 5) rounds the sides between them and leaves them.
+- Column 2, the single path, tapers as runs do, and has slits inside the ink where it folds: near the top of
+  row 1 and at the top left of row 3.
+- Row 2 is a thin stroke at its whole size: the forms differ a little at its turns, and none has a hole.
+
+In both pictures the edge of column 1 has short white ticks along it. They are the places where the straight
+edge of a band meets a disc of another size, and they are part of that shape, not a fault of the drawing.
 
 At the scene's own zoom these strokes are 2 to 6 pixels wide and the forms cannot be told apart by eye, but for
 the holes. Everink zooms without limit, so the magnified look matters. The pressure in these strokes changes at
