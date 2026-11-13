@@ -4,8 +4,9 @@ Status: design, 2026-11-12, with the owner's fifteen decisions of 2026-11-11 and
 [Owner decisions](#owner-decisions)). Eight sections break down the high-level design in [`../design.md`](../design.md).
 Each was researched and written separately, against prior art and the current state of the libraries it would use,
 and then reconciled with the others. Nothing here is released. The first spike slices (positions, the object map,
-the text libraries and the paced connection, in [`../spike/`](../spike/README.md)) have measured some of the numbers,
-and the sections say which; every other number is a starting value. Each section ends with the claims it could not
+the text libraries, the paced connection, outlines and the cut on wasm32, the renderer natively and in a browser, the
+two controls toolkits natively and in a browser, and storage, in [`../spike/`](../spike/README.md)) have measured
+some of the numbers, and the sections say which; every other number is a starting value. Each section ends with the claims it could not
 verify and, where the spike settled one, a note saying so.
 
 ## Sections
@@ -37,10 +38,10 @@ These are the decisions that cross section boundaries. The section named first h
 | Merge | The object map is Everink's own and is ordered by the server: each field is last-writer-wins by the surface's sequence number. A CRDT library is used only for the text inside text objects, and that library is yrs (owner decisions; yrs chosen 2026-11-12). | 02, 03 |
 | What is sent | An object is sent when it crosses the padded view and covers at least one pixel, with a budget that raises the threshold on dense views. Size decides, not level. The client sends its exact view; the server adds the padding. | 03, 06 |
 | Connection | One WebSocket carries changes and presence. Presence has its own queue, served first; bulk data is paced to what the link drains in about 20 ms, so a cursor waits about 40 ms at most behind it on links faster than about 1.6 Mbit/s. Data already queued in the network is not counted. The spike measured at most 39 ms from 2 Mbit/s up in a model, and 52 ms at 5 Mbit/s and 29 ms at 20 over loopback sockets, of which about 16 and 4 ms are the test's own buffers; the 200 ms target is missed at 1 Mbit/s. A second socket is the fallback; the owner decides about it after a real-network test. | 03, 04, 07, 08 |
-| Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine. | 06, 01, 02 |
+| Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine (the spike's outlines were identical on aarch64, x86-64 and wasm32). Which outline form is used is not decided: the single path leaves holes, and the union of discs and bands that has none is too heavy for the renderer as it stands. | 06, 01, 02 |
 | Partial erase | A stroke carries a set of cuts, so two people erasing parts of one stroke both take effect. | 02, 06 |
-| Renderer | `vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind Everink's own interface. Frames come from a cache of 512-pixel tiles. | 06 |
-| Controls | Everink's own small toolkit on its own renderer, with AccessKit for accessibility. | 07, 06 |
+| Renderer | `vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind Everink's own interface. Frames come from a cache of 512-pixel tiles. The spike measured that a view composed from cached tiles holds 60 frames a second, that redrawing tiles is processor time that follows the outline's segments, and that in a browser the redraw needs WebAssembly SIMD to fit the tile budget; whether the order changes and whether SIMD is required are not decided. | 06, 07 |
+| Controls | Not chosen yet: the owner decides after the spike, which has built the same toolbar and text field with Everink's own small toolkit and with egui and measured both (sizes, frame cost, accessibility tree, composition, in a window and in a browser). Whichever is chosen sits behind the `Controls` trait, drawn through the renderer's scene API, with AccessKit's tree for accessibility. | 07, 06 |
 | Limits | One table holds every numeric limit. | 08 |
 | Blob access | One grant per blob, tied to the session, checked against revoked sessions on every request. | 08, 05 |
 | Clock | One offset from the server's clock, measured by ping, used by presence and video. | 03, 05, 04 |
@@ -104,14 +105,14 @@ documents with measurements, before anything is built on them.
 | Can any of Loro, yrs or Automerge sync part of a document? | 02, 03 | A code check and a small trial of each. Answered: no ([results 2b](../spike/results-2b-text-libraries.md)) |
 | Which library edits text best in one small document per text object? | 02 | Size and memory per document; whether the server can inspect an update before applying it. Answered: yrs is the smallest and fastest; chosen by the owner on 2026-11-12 ([results 2b](../spike/results-2b-text-libraries.md)) |
 | Does Everink's own object map hold up? | 02, 03 | 100,000 strokes: memory per object, open time, randomized convergence tests. Answered: yes, with counting order keys at the ends ([results 2a](../spike/results-2a-object-map.md)) |
-| What does exact position arithmetic cost? | 01 | Re-base and cut timings at levels 0, 100 and 1,000. Answered for arithmetic and re-base, and positions are identical on aarch64 and x86-64 ([results 1](../spike/results-1-positions.md)); the cut is slice 3 |
-| Are outlines bit-identical everywhere? | 01, 06 | The same strokes on x86-64, aarch64 and wasm32, compared byte for byte |
-| Does the renderer carry the load? | 06 | `vello_gpu` on WebGPU and on WebGL2: tile throughput, 10,000 objects, the size of the wasm build |
+| What does exact position arithmetic cost? | 01 | Re-base and cut timings at levels 0, 100 and 1,000. Answered ([results 1](../spike/results-1-positions.md) for arithmetic and re-base; [results 3a](../spike/results-3a-wasm-outlines-cut.md) for the cut): the cut costs 0.37 ms for one curve 100 levels above the view and 11 ms at 1,000, 6 to 12 times the estimate, so it must be able to stop part-way |
+| Are outlines bit-identical everywhere? | 01, 06 | The same strokes on x86-64, aarch64 and wasm32, compared byte for byte. Answered: yes, on those three, with wasm32 run under Node and not in a browser; and the single-path outline of section 06 leaves holes ([results 3a](../spike/results-3a-wasm-outlines-cut.md)) |
+| Does the renderer carry the load? | 06 | `vello_gpu` on WebGPU and on WebGL2: tile throughput, 10,000 objects, the size of the wasm build. Answered for strokes on one machine: a cached view holds 60 frames a second; a redraw of 10,000 strokes takes 61 ms natively and 80 ms in a browser with SIMD (single path) and 394 to 540 ms with the outline that has no holes; the three renderers took the same time in Chrome; the wasm build is 0.36 to 0.52 MB raw ([results 3b](../spike/results-3b-renderer.md), [3c](../spike/results-3c-browser.md)) |
 | What is pen latency really? | 06 | A 240 frames-per-second camera on named devices, with and without the low-latency canvas |
 | Do cursors stall during a bulk load on one connection? | 04, 03 | Cursor delay while a client loads a large surface over a slow link. Answered on a model and loopback sockets: no from about 2 Mbit/s up; a real-network test is still to come ([results 2c](../spike/results-2c-paced-connection.md)) |
-| Which controls toolkit? | 07 | The same toolbar and text field built twice, with Everink's own small toolkit and with egui: composition, a screen reader, wasm size and effort, native and web |
+| Which controls toolkit? | 07 | The same toolbar and text field built twice, with Everink's own small toolkit and with egui: composition, a screen reader, wasm size and effort, native and web. Built and measured; the owner's choice and the screen-reader and real-keyboard checks are still to come ([results 4a](../spike/results-4a-controls.md), [4b native](../spike/results-4b-window.md), [4b web](../spike/results-4b-web.md)) |
 | Does the owner's further candidate make sense here? | 06, 07 | A project the owner asked to have considered, evaluated behind the renderer interface next to the Vello path; its details are kept outside this repository |
-| How fast is storage? | 03 | Commit latency and load time for one SQLite file per room |
+| How fast is storage? | 03 | Commit latency and load time for one SQLite file per room. Answered for SQLite on one machine: a durable commit is about 4 ms (with `fullfsync=ON` on macOS), and a room opens in 0.29 s at 100,000 strokes and 4 to 6 s at 1,000,000 ([results 5](../spike/results-5-storage.md)) |
 
 ## Owner decisions
 
@@ -146,7 +147,20 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
   Kept here so the row can be found.
 - **The second connection for presence, and the 1 Mbit/s cursor target.** The owner will decide after a measurement
   on a real network (2026-11-12). The fallback stays in the design as written.
-- **The controls toolkit.** Chosen after the spike.
+- **The controls toolkit.** Chosen after the spike. The spike has built and measured both candidates (results
+  [4a](../spike/results-4a-controls.md), [4b native](../spike/results-4b-window.md), [4b web](../spike/results-4b-web.md));
+  the choice is the owner's, and the screen-reader and real-keyboard checks are the owner's to run.
+- **Which outline form.** Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
+  discs and bands has none and is about six times the processor renderer's time for 10,000 strokes. Fewer and
+  straighter corners, discs only at turns, or a true union were named and not tried
+  ([3a](../spike/results-3a-wasm-outlines-cut.md), [3b](../spike/results-3b-renderer.md)).
+- **WebAssembly SIMD: require it, or ship two builds.** The tile budget holds in a browser only with it, and a module
+  built with it does not load without it ([3c](../spike/results-3c-browser.md)). To be decided; sections 06 and 07.
+- **The backend order.** Natively the processor renderer was faster than the GPU one for strokes, and in Chrome the
+  three took the same time. Whether the order of section 06 changes waits for other browsers and machines
+  ([3b](../spike/results-3b-renderer.md), [3c](../spike/results-3c-browser.md)).
+- **The storage engine.** SQLite is the design's default and the only engine the spike measured; redb and the others
+  were not ([5](../spike/results-5-storage.md)). The default stands until a measurement or the owner says otherwise.
 - **The further candidate the owner named.** Evaluated in the spike and used only if it makes sense; any question
   it raises about naming or licensing is the owner's.
 - Each section's "Questions for the owner" lists what remains for that part, for example canvas rotation and how
@@ -156,8 +170,10 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
 ## What is not verified
 
 - **Every performance figure is an estimate** from operation counts or stated assumptions, except the ones a
-  section marks as measured in the spike (positions, the object map, the text libraries, the paced connection;
-  one machine, plus a CI runner for a few figures). The spike replaces the rest.
+  section marks as measured in the spike (positions and the cut, the object map, the text libraries, the paced
+  connection, the renderer, the controls toolkits, storage; one machine, an Apple M4, plus a CI runner for a few
+  figures, and Chrome 157 for the browser ones). The spike replaces the rest. Not measured at all: pen latency, other
+  browsers, a phone, a slower machine, a server's disk, a screen reader, a real input method.
 - **Claims about other products** (Figma, Miro, tldraw, Excalidraw, Liveblocks) often rest on secondary sources.
   Each section marks which.
 - **Library facts** (versions, licenses, behavior) were read on 2026-11-11 and are marked where a primary source
