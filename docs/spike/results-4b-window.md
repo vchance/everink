@@ -12,10 +12,10 @@ DOM mirror, is a further part and is not here. The choice is the owner's; nothin
 |---|---|---|
 | Both candidates draw the same toolbar on a GPU surface | Yes | A frame of each rendered to a picture by the same painters the window uses (below) |
 | Each window opens and runs | Yes | Opened for six seconds each on an Apple M4, macOS; neither failed |
-| The platform is handed the accessibility tree | Built, not observed | `accesskit_winit` 0.34.2 gets every frame's tree; nothing here reads it back from macOS |
+| The platform is handed the accessibility tree | Built, not exercised | `accesskit_winit` 0.34.2 is offered every frame's tree and takes it only while assistive technology is active, which it never was; nothing here reads the tree back from macOS, and no request ever came through the adapter |
 | A screen reader reads it rightly | No | The owner's, with the script in `spike/controls-window/README.md` |
 | A real keyboard and dead keys | No | The same: the shell maps winit's events as winit documents them, and no key was pressed |
-| An input method's window at the caret | No | The shell calls `set_ime_cursor_area` with the caret each frame; not seen |
+| An input method's window at the caret | No | The shell would call `set_ime_allowed` and `set_ime_cursor_area` while the field has the focus; in a window the field never had it, so the calls were never made |
 | Windows and Linux | No | Built on macOS only; CI builds it on Linux |
 
 So this part's result is a tool and its first pictures, not a verdict. The script has fourteen steps for each
@@ -37,7 +37,8 @@ egui 0.37 (`egui-wgpu`), light theme:
 What they show:
 
 - **Both are the toolbar the trial specifies**, with the chosen tool and swatch marked, Redo dimmed, and the
-  accent in the field.
+  accent in the field. Every swatch has a thin outline in both, so that one near the background's colour is
+  still seen.
 - **egui draws more of a text field**: the text being composed is underlined. The own toolkit's is not: its
   shell lays the field's text out again plainly, and the underline Parley's editor asks for is lost on the way.
   While composing it draws no caret.
@@ -47,11 +48,47 @@ What they show:
   the design's look; there is none yet.
 - **Same type in both**: Ubuntu Light, from the fonts egui ships, shaped by the same shaper.
 
-Three faults in the own toolkit were found by looking and fixed before these pictures: its row was wider than
-the surface, so the field ran off the right edge; its caret went to the field's edge while composing (Parley's
-editor hides its caret then, and the fallback was wrong); and egui came up in the machine's dark theme, in
-which the black swatch cannot be seen. None of the three was caught by part 4a's tests, which read the
-accessibility tree and not the pixels.
+With the focus on the Pen tool instead (Eraser still chosen):
+
+![The own toolkit with the focus on Pen](images/4b-own-focus.png)
+
+![egui with the focus on Pen](images/4b-egui-focus.png)
+
+- The own toolkit rings the focused tool in blue and outlines the chosen one in black. egui fills the focused
+  radio's circle grey and outlines it; it has no ring for a radio button, and a focused one can be taken for
+  a chosen one at a glance.
+
+### Measured from the pictures
+
+By the independent review of this change, from the pixels (logical pixels; contrast as WCAG computes it):
+
+| | Own toolkit | egui (its defaults, light theme) |
+|---|---|---|
+| Label text against its background | 14:1; 11.7:1 on the chosen tool | 10.4:1; 8.8:1 on Undo; 7.6:1 for the zoom figure |
+| Dimmed Redo | 2.75:1 | 2.64:1 |
+| The chosen tool's mark | A dark outline (added after review) on a pale blue face | A dot at 8.8:1 in its circle |
+| An unchosen tool's boundary against the toolbar | A face at 1.1:1 | A circle at 1.15:1 |
+| The chosen swatch's ring | 15.6:1 | high |
+| Focus on the field | A ring at 6.2:1 | Its border, clearly seen |
+| Smallest control | 24 by 24; buttons 28 high | 24 by 24 swatches; Undo, Redo and the field 20 high |
+| The mark under text being composed | none | A bar at 2.4:1 |
+
+- WCAG 1.4.11 asks 3:1 for the parts of a control needed to tell it and its state. **Neither candidate's
+  unchosen tools have a boundary at 3:1** against the toolbar: the own toolkit's by the trial's styling, egui's
+  by its default style, which can be changed. The disabled Redo is exempt.
+- Before review the own toolkit marked the chosen tool by its pale face alone, at 1.2:1 against the others:
+  colour only, failing 1.4.1 and 1.4.11. It now has the outline. That was the trial's styling and says nothing
+  of the approach.
+
+### Faults found by looking
+
+Five faults were found by looking at pictures and fixed, none of which part 4a's tests, which read the
+accessibility tree and not the pixels, could catch. Before the first pictures: the own toolkit's row was wider
+than the surface, so the field ran off the right edge; its caret went to the field's edge while composing
+(Parley's editor hides its caret then, and the fallback was wrong); and egui came up in the machine's dark
+theme, in which the black swatch could not be seen. In review: the own toolkit's focus ring lost its right
+side to the next button, which was painted over it; and the trial's egui adapter drew a focused swatch exactly
+as a chosen one.
 
 ## What was built
 
@@ -70,11 +107,13 @@ accessibility tree and not the pixels.
 ## Findings
 
 1. **One shell serves both candidates.** Neither `eframe` nor `egui-winit` is used: egui is driven through the
-   trial's own events, as section 07 intends for whichever toolkit wins. The shell is about 860 lines for both, a third of it the mode that writes a picture.
+   trial's own events, as section 07 intends for whichever toolkit wins. The shell is
+   about 880 lines for both, a sixth of it the mode that writes a picture.
 2. **The accessibility tree needs the display's scale from the shell for the own toolkit**; egui puts it on its
    root node itself. A detail for section 07's `AccessibilityHost`.
-3. **The surface must not be an sRGB format** for either painter as used here: neither converts on the way out.
-4. **Tests on the accessibility tree do not see layout faults.** Three were found only by rendering. A product
+3. **The surface must not be an sRGB format for `vello_gpu` as used here**: it does not convert on the way out.
+   `egui-wgpu` handles either kind and prefers a non-sRGB one.
+4. **Tests on the accessibility tree do not see what is drawn.** Five faults were found only by rendering. A product
    needs picture tests of the controls as well as tree tests; section 07's test list has the second and
    should have the first.
 5. **`accesskit_winit` is Apache-2.0 only**, as section 07 notes, and so are `winit` and a few others here: a
@@ -85,9 +124,11 @@ accessibility tree and not the pixels.
 Everything in the right-hand "No" rows above, and:
 
 - **The browser**: the DOM mirror, the hidden textarea, egui's web text agent. Not built.
-- **Contrast and target size by measure.** Part 4a measured sizes from the tree (egui's buttons are 20 high);
-  contrast is not measured.
+- **A design's look.** The contrast figures above are of a trial's styling and of egui's defaults; neither is
+  a theme made to meet WCAG 2.2 AA, which section 07 requires of the product.
 - **Resizing, a second display scale, dark theme, high contrast.** The window is one size and not resizable.
+- **egui's animations.** The shell runs a frame for each event and does not follow egui's requests to repaint,
+  so a hover or press animation can stop part-way. Only Shift is followed among the modifier keys.
 - **Frame cost with drawing.** Not measured; part 4a's figures are without it.
 
 ## Where the code departs from the design

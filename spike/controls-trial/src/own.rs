@@ -469,6 +469,14 @@ impl OwnControls {
                         radius: 6.0,
                         rgba: if on { ON } else { FACE },
                     });
+                    if on {
+                        // Not by colour alone: the chosen tool has a dark outline too.
+                        out.push(Paint::Outline {
+                            rect: [rect[0] + 1.0, rect[1] + 1.0, rect[2] - 1.0, rect[3] - 1.0],
+                            radius: 5.0,
+                            rgba: INK,
+                        });
+                    }
                     label(&mut out, rect, Tool::ALL[i].name(), INK);
                 }
                 Item::Swatch(i) => {
@@ -477,6 +485,12 @@ impl OwnControls {
                         rect: *rect,
                         radius: 4.0,
                         rgba: [c[0], c[1], c[2], 0xff],
+                    });
+                    // An outline, so that a swatch near the background's colour is still seen.
+                    out.push(Paint::Outline {
+                        rect: [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5],
+                        radius: 4.0,
+                        rgba: [0x60, 0x60, 0x60, 0xff],
                     });
                     if c == model.colour {
                         out.push(Paint::Outline {
@@ -529,14 +543,16 @@ impl OwnControls {
                     rgba: [0, 0, 0, 0x20],
                 });
             }
-            if self.focus == Some(*item) {
-                // The controls draw their own focus ring: on the web the browser's is hidden under the canvas.
-                out.push(Paint::Outline {
-                    rect: [rect[0] - 3.0, rect[1] - 3.0, rect[2] + 3.0, rect[3] + 3.0],
-                    radius: 8.0,
-                    rgba: RING,
-                });
-            }
+        }
+        if let Some(focus) = self.focus {
+            // The controls draw their own focus ring: on the web the browser's is hidden under the canvas. It is
+            // drawn after everything else, so that the control beside the focused one does not cover it.
+            let rect = self.placed.rect(focus);
+            out.push(Paint::Outline {
+                rect: [rect[0] - 3.0, rect[1] - 3.0, rect[2] + 3.0, rect[3] + 3.0],
+                radius: 8.0,
+                rgba: RING,
+            });
         }
         out.push(Paint::Text {
             at: [self.placed.zoom[0], self.placed.zoom[1]],
@@ -711,7 +727,9 @@ impl Controls for OwnControls {
                     ..area
                 })
             });
-            let (x0, x1) = caret.map_or((0.0, 1.5), |c| (c.x0 as f32, c.x1 as f32));
+            let (x0, x1) = caret.map_or((0.0, 1.5), |c: parley::BoundingBox| {
+                (c.x0 as f32, c.x1 as f32)
+            });
             let left = (field[0] + FIELD_PAD + x0).min(field[2] - 1.5);
             let compose = self.editor.raw_compose().clone();
             TextInputState {

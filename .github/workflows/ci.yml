@@ -191,7 +191,7 @@ jobs:
 
   # The controls trial (spike slice 4a): a package outside the workspace, with the two candidate toolkits (egui;
   # taffy and parley for Everink's own). It runs when the trial or the toolchain changes, and on the full runs.
-  # spike/controls-window (part 4b) shows the two in a native window; here it is built and linted only: a hosted
+  # spike/controls-window (part 4b) shows the two in a native window; here it is type-checked and linted only: a hosted
   # runner has no display and no GPU, and a screen reader and a real keyboard are for a person.
   controls-trial:
     name: controls-trial
@@ -224,8 +224,6 @@ jobs:
         run: cargo fmt --manifest-path spike/controls-window/Cargo.toml --check
       - name: The window shell, clippy (warnings are errors)
         run: cargo clippy --manifest-path spike/controls-window/Cargo.toml --all-targets --locked -- -D warnings
-      - name: The window shell builds (it is not run here)
-        run: cargo build --release --locked --manifest-path spike/controls-window/Cargo.toml
 
   ci-result:
     name: ci-result

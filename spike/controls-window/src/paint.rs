@@ -89,13 +89,14 @@ impl OwnPainter {
                     x: at[0] + g.x,
                     y: at[1] + g.y,
                 });
-                let _ = self
-                    .scene
+                // A label that cannot be drawn must not go missing quietly: the trial is judged by how it looks.
+                self.scene
                     .glyph_run(&mut self.resources, run.run().font())
                     .font_size(run.run().font_size())
                     .hint(true)
                     .normalized_coords(&coords)
-                    .fill_glyphs(glyphs);
+                    .fill_glyphs(glyphs)
+                    .expect("the glyphs draw");
             }
         }
     }

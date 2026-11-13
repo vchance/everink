@@ -51,7 +51,7 @@ sh spike/controls-trial/size.sh                                     # each candi
 cargo clippy --manifest-path spike/controls-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/controls-trial/Cargo.toml --check   # its format check
 cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own    # the own toolkit in a window (or `egui`)
-cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own --shot own.png   # a picture, no window (needs a GPU)
+cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own --shot /tmp/own.png   # a picture, no window (needs a GPU)
 cargo clippy --manifest-path spike/controls-window/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/controls-window/Cargo.toml --check  # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
@@ -102,7 +102,7 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `spike/controls-window`: the two candidates of `spike/controls-trial` in a native window (spike slice 4b):
   winit, `accesskit_winit`, and one `wgpu` surface drawn by `vello_gpu` or `egui-wgpu`. Its `README.md` is the
   script of checks for a person with a screen reader and a keyboard. Another package of its own with its own
-  `Cargo.lock`. The `controls-trial` CI job builds and lints it and does not run it.
+  `Cargo.lock`. The `controls-trial` CI job lints it and does not run it.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
@@ -146,7 +146,7 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   `docs/spike/results-4a-controls.md` is where to say so. Neither candidate uses the machine's fonts: the trial
   carries its own (`own-fonts`, `egui-fonts`), and without one the own toolkit's text field cannot be edited.
 - `spike/controls-window` opens a window on the machine it is run on, and its `--shot` mode needs a GPU; neither
-  works on a hosted runner. The pictures in `docs/spike/images/` come from `--shot`: write them again when the
+  works on a hosted runner. The four pictures in `docs/spike/images/` come from `--shot` (two with `--focus Pen`): write them again when the
   look of either candidate changes, and say so. An agent cannot press keys in the window or hear a screen
   reader: those checks are the owner's.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.

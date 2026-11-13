@@ -185,7 +185,7 @@ Section 07's criteria ask for "the widget behaviors still missing". For this too
 | The caret and selection in the accessibility tree (text runs) | No: `parley` 0.12 has no AccessKit support, so they must be written | No: its `TextEdit` gives the value only |
 | One focus stop a group, arrows inside | Yes (tested) | No: Tab stops at every button, and an arrow moves the focus without checking; would need writing against egui's focus handling |
 | Controls at least 24 by 24 | Yes | Not at its default style (20 high) |
-| A focus ring of its own | Yes | Yes |
+| A focus ring of its own | Yes | For its text field (a border). A focused radio button is filled and outlined, not ringed; the swatches' ring is the trial's own drawing |
 | Scroll, popovers, menus, sliders, tooltips, a modal with a focus trap | None written | All there |
 | A container's role and name (toolbar, radio group) | By hand | Yes, through `UiBuilder` |
 | The same text layout as the canvas | Yes (Parley) | No (the same shaper underneath; its own layout and line breaking) |

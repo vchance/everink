@@ -2,7 +2,8 @@
 //!
 //!   cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own
 //!   cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- egui
-//!   cargo run ... -- own --shot own.png        (no window: draws a few frames and writes the last as a picture)
+//!   cargo run ... -- own --shot /tmp/own.png   (no window: draws a few frames and writes the last as a picture)
+//!   cargo run ... -- own --shot /tmp/own.png --focus Pen   (the same, with the focus on a tool or a colour)
 //!
 //! The window is the toolbar and the hex field and nothing else. The shell turns the window's events into the
 //! trial's own (`InputEvent`), the same for both candidates, hands the accessibility tree each gives to the
@@ -185,7 +186,7 @@ fn tree_for_platform(
 // A picture without a window
 // ---------------------------------------------------------------------------------------------------------------
 
-fn shot(name: &str, path: &str) {
+fn shot(name: &str, path: &str, focus: Option<&str>) {
     const SCALE: f32 = 2.0;
     let instance = wgpu::Instance::default();
     let (_, gpu) = gpu(None, &instance);
@@ -247,6 +248,15 @@ fn shot(name: &str, path: &str) {
         let event = request(&frame, role, name, action);
         frame = step(&mut candidate, &mut document, event);
     }
+    if let Some(control) = focus {
+        // Another picture: the focus on a tool or a colour, to see its ring beside the chosen one's mark.
+        let event = request(&frame, Role::RadioButton, control, Action::Focus);
+        frame = step(&mut candidate, &mut document, event);
+        candidate.paint(&mut painter, &gpu, &view, SCALE, &frame);
+        write_picture(&gpu, &texture, w, h, path);
+        println!("{name}: wrote {path} ({w} x {h}) with the focus on {control}");
+        return;
+    }
     for event in [
         InputEvent::Key {
             key: Key::Backspace,
@@ -267,7 +277,19 @@ fn shot(name: &str, path: &str) {
     );
     candidate.paint(&mut painter, &gpu, &view, SCALE, &frame);
 
-    // Read it back and write it.
+    write_picture(&gpu, &texture, w, h, path);
+    let input = frame.text_input.expect("the field has the focus");
+    println!(
+        "{name}: wrote {path} ({w} x {h}); tool {:?}, colour {}; the field shows {:?}, composing {:?}",
+        document.model.tool,
+        controls_trial::hex(document.model.colour),
+        input.shown,
+        input.preedit
+    );
+}
+
+/// Reads the texture back and writes it as a PNG.
+fn write_picture(gpu: &Gpu, texture: &wgpu::Texture, w: u32, h: u32, path: &str) {
     let row = (w * 4).next_multiple_of(256);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("shot"),
@@ -282,7 +304,7 @@ fn shot(name: &str, path: &str) {
         });
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
-            texture: &texture,
+            texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
@@ -321,14 +343,6 @@ fn shot(name: &str, path: &str) {
         .write_header()
         .and_then(|mut writer| writer.write_image_data(&pixels))
         .expect("the picture is written");
-    let input = frame.text_input.expect("the field has the focus");
-    println!(
-        "{name}: wrote {path} ({w} x {h}); tool {:?}, colour {}; the field shows {:?}, composing {:?}",
-        document.model.tool,
-        controls_trial::hex(document.model.colour),
-        input.shown,
-        input.preedit
-    );
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -468,7 +482,8 @@ impl ApplicationHandler<UserEvent> for App {
         let mut config = surface
             .get_default_config(&gpu_adapter, w, h)
             .expect("the surface can be configured");
-        // Neither painter converts to sRGB on the way out, so the surface must not either.
+        // `vello_gpu` as used here does not convert to sRGB on the way out, so the surface must not be an sRGB
+        // format for it; `egui-wgpu` copes with either and prefers this.
         if let Some(format) = surface
             .get_capabilities(&gpu_adapter)
             .formats
@@ -574,6 +589,7 @@ impl ApplicationHandler<UserEvent> for App {
                     });
                 } else if let Some(text) = text.filter(|t| !t.chars().any(char::is_control)) {
                     // A plain key: its text goes in as a commit.
+                    println!("key text: {text:?}");
                     self.send(InputEvent::Text(TextEvent::Commit(text.to_string())));
                 }
             }
@@ -604,7 +620,15 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let name = args.first().map_or("own", String::as_str).to_string();
     if let Some(at) = args.iter().position(|a| a == "--shot") {
-        shot(&name, args.get(at + 1).expect("--shot takes a path"));
+        let focus = args
+            .iter()
+            .position(|a| a == "--focus")
+            .and_then(|i| args.get(i + 1));
+        shot(
+            &name,
+            args.get(at + 1).expect("--shot takes a path"),
+            focus.map(String::as_str),
+        );
         return;
     }
     let event_loop = EventLoop::<UserEvent>::with_user_event()

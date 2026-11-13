@@ -9,12 +9,14 @@ person can try each with a screen reader and a real keyboard. What an agent coul
 ```sh
 cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own
 cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- egui
-cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own --shot own.png   # a picture, no window
+cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own --shot /tmp/own.png   # a picture, no window
+cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own --shot /tmp/own.png --focus Pen   # with the focus on a tool or a colour
 ```
 
 The window is the toolbar and nothing else: five tools, six colours, Undo and Redo, the zoom figure, and a field
 that holds the colour as six hex digits. The terminal prints every command the controls give, every request from
-assistive technology, and what the platform's text input sends.
+assistive technology, the text of every plain key (`key text:`), and what the platform's text input sends
+(`text input:`).
 
 ## The checks, for each candidate
 
@@ -27,11 +29,14 @@ Write down what happens; a "no" is a result. The same script for `own` and for `
 3. With a tool focused, press the right and left arrows. Does the tool change (the terminal prints `SetTool`)?
 4. Tab to Redo after changing something and undoing it; press Space. Does it print `Redo`?
 5. In the field: clear it with Backspace, type `00FF00`, then Enter. Does it print `SetColour([0, 255, 0])`?
+   (Do not hold Command or Control while typing: the shell follows only Shift.)
 
 **Text composition** (macOS: the U.S. or ABC keyboard)
 
 6. In the field, clear it, then press Option-E and then E. An accent should appear while composing and become
-   `é`. The terminal should print `composing "´"` and then `commit "é"`. Is anything doubled or lost?
+   `é`. The terminal should print `text input: composing "´"` and then `text input: commit "é"`; winit also
+   sends an empty `composing ""` just before a commit, which is not a fault. Is the `é` in the field once? If
+   a `key text:` line appears as well as the commit, the character came twice: write that down.
 7. Press Option-E and then Escape or a click elsewhere. Is the accent gone, and the field as it was?
 8. If you have a Japanese or Chinese input source: switch to it and type a syllable. Does the candidate window
    appear at the field, and does the committed text go in?
@@ -56,4 +61,4 @@ Windows (NVDA or Narrator) and Linux (Orca) take the same script; the shell was 
 - `src/paint.rs`: drawing. The own toolkit's paint list goes through `vello_gpu`, its text shaped by `parley`;
   egui's triangles go through `egui-wgpu`. Both on one `wgpu` surface.
 
-It has no tests. CI builds and lints it; it cannot open a window or reach a GPU there.
+It has no tests. CI type-checks and lints it; it cannot open a window or reach a GPU there.

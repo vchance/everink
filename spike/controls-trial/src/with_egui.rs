@@ -205,11 +205,27 @@ impl Controls for EguiControls {
                                     4.0,
                                     Color32::from_rgb(colour[0], colour[1], colour[2]),
                                 );
-                                if on || response.has_focus() {
+                                // An outline, so that a swatch near the background's colour is still seen.
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    4.0,
+                                    egui::Stroke::new(1.0, Color32::from_gray(0x60)),
+                                    egui::StrokeKind::Inside,
+                                );
+                                if on {
                                     ui.painter().rect_stroke(
                                         rect.expand(2.0),
                                         5.0,
                                         ui.visuals().selection.stroke,
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
+                                if response.has_focus() {
+                                    // Focus is drawn apart from "chosen": further out, and thicker.
+                                    ui.painter().rect_stroke(
+                                        rect.expand(5.0),
+                                        7.0,
+                                        egui::Stroke::new(2.0, ui.visuals().strong_text_color()),
                                         egui::StrokeKind::Outside,
                                     );
                                 }
