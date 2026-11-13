@@ -1243,16 +1243,18 @@ languages, the first app, the merge model, the controls toolkit and the further 
 4. **Highlighter and blend modes.** Multiply-style highlighters and blend modes are not offered in the first version
    because the renderer lacks some blend modes. Is that acceptable?
 
-Open because of the spike (measured in slices 3a to 3c; the choices are the owner's and are not made here):
+Raised by the spike (measured in slices 3a to 3c) and put to the owner on 2026-11-13:
 
-5. **Which outline form.** The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
+5. **Which outline form.** No decision yet: the owner chose to have the lighter hole-free forms built and measured
+   first (spike slice 3d). The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
    and bands has none and costs the processor renderer far more for 10,000 strokes (394 to 407 ms
    against 61 to 64 ms natively). Fewer corners, discs only at turns, or a true union were named and not tried. See
    "The outline: variable width, deterministic".
 6. **WebAssembly SIMD.** Decided on 2026-11-13: required. (The tile budget holds in a browser only with it, and
    then only for the single-path outline; a module built with it does not load without it.)
 7. **The backend order.** Natively the processor renderer was faster than the GPU one for strokes; in Chrome all
-   three took the same time. Whether the order changes waits for other browsers and machines.
+   three took the same time. Not re-decided yet (owner, 2026-11-13): the order stays as designed until other content,
+   other browsers and a slower machine are measured.
 
 ## Sources
 

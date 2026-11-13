@@ -40,8 +40,8 @@ These are the decisions that cross section boundaries. The section named first h
 | Connection | One WebSocket carries changes and presence. Presence has its own queue, served first; bulk data is paced to what the link drains in about 20 ms, so a cursor waits about 40 ms at most behind it on links faster than about 1.6 Mbit/s. Data already queued in the network is not counted. The spike measured at most 39 ms from 2 Mbit/s up in a model, and 52 ms at 5 Mbit/s and 29 ms at 20 over loopback sockets, of which about 16 and 4 ms are the test's own buffers; the 200 ms target is missed at 1 Mbit/s. A second socket is the fallback; the owner decides about it after a real-network test. | 03, 04, 07, 08 |
 | Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine (the spike's outlines were identical on aarch64, x86-64 and wasm32). Which outline form is used is not decided: the single path leaves holes, and the union of discs and bands that has none is too heavy for the renderer as it stands. | 06, 01, 02 |
 | Partial erase | A stroke carries a set of cuts, so two people erasing parts of one stroke both take effect. | 02, 06 |
-| Renderer | `vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind Everink's own interface. Frames come from a cache of 512-pixel tiles. The spike measured that a view composed from cached tiles holds 60 frames a second, that redrawing tiles is processor time that follows the outline's segments, and that in a browser the redraw needs WebAssembly SIMD to fit the tile budget, and fits it then only with the single-path outline; whether the order changes and whether SIMD is required are not decided. | 06, 07 |
-| Controls | Not chosen yet: the owner decides after the spike, which has built the same toolbar and text field with Everink's own small toolkit and with egui and measured both (sizes, frame cost, accessibility tree, composition, in a window and in a browser). Whichever is chosen sits behind the `Controls` trait, with AccessKit's tree for accessibility. How it is drawn differs: Everink's own toolkit paints through the renderer's scene API; egui gives triangles that `egui-wgpu` draws into a host render pass. | 07, 06 |
+| Renderer | `vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind Everink's own interface. Frames come from a cache of 512-pixel tiles. The spike measured that a view composed from cached tiles holds 60 frames a second, that redrawing tiles is processor time that follows the outline's segments, and that in a browser the redraw needs WebAssembly SIMD to fit the tile budget, and fits it then only with the single-path outline; the web build requires SIMD (owner, 2026-11-13); whether the order changes is looked at again after further measurements. | 06, 07 |
+| Controls | Not chosen yet: the owner decides after running the screen-reader and keyboard checks (2026-11-13). The spike has built the same toolbar and text field with Everink's own small toolkit and with egui and measured both (sizes, frame cost, accessibility tree, composition, in a window and in a browser). Whichever is chosen sits behind the `Controls` trait, with AccessKit's tree for accessibility. How it is drawn differs: Everink's own toolkit paints through the renderer's scene API; egui gives triangles that `egui-wgpu` draws into a host render pass. | 07, 06 |
 | Limits | One table holds every numeric limit. | 08 |
 | Blob access | One grant per blob, tied to the session, checked against revoked sessions on every request. | 08, 05 |
 | Clock | One offset from the server's clock, measured by ping, used by presence and video. | 03, 05, 04 |
@@ -124,7 +124,7 @@ decision where it applies.
 |---|---|---|---|
 | 1 | Merge model | Everink's own object map, ordered by the server; a CRDT library only for text | 02, 03 |
 | 2 | First app | A whiteboard | all |
-| 3 | Browsers without WebGPU | WebGPU and WebGL2 supported; the processor-only path is best effort | 06, 07 |
+| 3 | Browsers without WebGPU | WebGPU and WebGL2 supported; the processor-only path is best effort. Narrowed on 2026-11-13: the web build requires WebAssembly SIMD, so a browser with WebGL2 and without SIMD is not supported | 06, 07 |
 | 4 | Controls toolkit | Decided after the spike, which builds the same toolbar both ways. The owner also asked that a project of theirs be considered in this architecture where it makes sense; it is used only if it does | 07, 06 |
 | 5 | Offline edits | The offline edit wins when it arrives | 02 |
 | 6 | Restoring a version | The owner and editors; everyone is told right after | 03, 08 |
@@ -150,22 +150,24 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
 - **The controls toolkit.** Chosen after the owner has run the screen-reader and keyboard checks (owner, 2026-11-13).
   The spike has built and measured both candidates (results
   [4a](../spike/results-4a-controls.md), [4b native](../spike/results-4b-window.md), [4b web](../spike/results-4b-web.md));
-  until then neither is preferred.
-- **Which outline form.** Not chosen: the owner asked on 2026-11-13 that the lighter hole-free forms be built and
+  no decision yet.
+- **Which outline form.** No decision yet: on 2026-11-13 the owner chose to have the lighter hole-free forms built and
   measured first (spike slice 3d). Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
   discs and bands has none and takes the processor renderer 394 to 407 ms for 10,000 strokes against 61 to 64. Fewer and
   straighter corners, discs only at turns, or a true union were named and not tried
   ([3a](../spike/results-3a-wasm-outlines-cut.md), [3b](../spike/results-3b-renderer.md)).
 - **WebAssembly SIMD.** Decided on 2026-11-13: **required**, one build ([results 3c](../spike/results-3c-browser.md);
-  sections 06 and 07). Kept here so the row can be found.
-- **The backend order.** Stays as designed for now (owner, 2026-11-13) and is looked at again after other content,
-  other browsers and a slower machine are measured. Natively the processor renderer was faster than the GPU one for
+  sections 06 and 07). It narrows owner decision 3: a browser with WebGL2 and without SIMD is not supported. Kept here
+  so the row can be found.
+- **The backend order.** Not re-decided yet (owner, 2026-11-13): it stays as designed until other content, other
+  browsers and a slower machine are measured, and is looked at again then. Natively the processor renderer was faster than the GPU one for
   strokes, and in Chrome the three took the same time; putting
-  the processor renderer first, like a SIMD-only module, would bear on owner decision 3 (WebGPU and WebGL2 supported,
+  the processor renderer first would bear on owner decision 3 (WebGPU and WebGL2 supported,
   the processor-only path best effort)
   ([3b](../spike/results-3b-renderer.md), [3c](../spike/results-3c-browser.md)).
 - **The further candidate the owner named.** Evaluated in the spike (part 4c) and used only if it makes sense; its
-  results are kept outside this repository (owner, 2026-11-13). Any question it raises about naming or licensing is
+  code and results are kept in a folder on the owner's machine, outside both this repository and the candidate's, and
+  nothing is pushed (owner, 2026-11-13). Any question it raises about naming or licensing is
   the owner's.
 - Each section's "Questions for the owner" lists what remains for that part, for example canvas rotation and how
   pasted objects are sized (01), undoing your own creation after others edited it (02), whether people may choose

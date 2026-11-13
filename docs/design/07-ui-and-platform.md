@@ -977,8 +977,9 @@ already includes. Loading and compiling the speed build took 45 to 68 ms from a 
 **SIMD.** The renderer's speed in a browser depends on WebAssembly SIMD (`-C target-feature=+simd128`, not the
 `relaxed-simd` feature that section 01 bans): 2.3 to 2.6 times faster, and a module built with it does not load in a
 browser without it. A speed build with SIMD is 1.35 MB (290 KB Brotli) for all three backends; without, 1.46 MB (306
-KB). **The web build requires SIMD** (owner decision, 2026-11-13): one module, built with `+simd128`; the shell
-checks for it before loading the module and tells a browser without it that it is not supported. The core's golden
+KB). **The web build requires SIMD** (owner decision, 2026-11-13): one module, built with `+simd128`. This narrows owner
+decision 3: WebGL2 is supported in browsers that also have WebAssembly SIMD, and not in one that lacks it. The shell
+checks for SIMD before loading the module and tells a browser without it that it is not supported. The core's golden
 files are to be run on a SIMD build as well; that check does not exist yet.
 
 | Need | Header or setting |
@@ -1140,8 +1141,8 @@ guests. Still open:
 
 Open because of the spike (the choices are the owner's and are not made here):
 
-5. **Which controls toolkit.** The spike has built both and measured them (see "Toolkit for the shared controls"); the
-   screen-reader and real-keyboard checks are the owner's to run.
+5. **Which controls toolkit.** No decision yet (owner, 2026-11-13): the owner runs the screen-reader and real-keyboard
+   checks first. The spike has built both and measured them (see "Toolkit for the shared controls").
 6. **WebAssembly SIMD.** Decided on 2026-11-13: required. See "Packaging" and section 06.
 
 ## Sources
