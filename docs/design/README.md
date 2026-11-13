@@ -167,9 +167,10 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
   the processor renderer first would bear on owner decision 3 (WebGPU and WebGL2 supported,
   the processor-only path best effort)
   ([3b](../spike/results-3b-renderer.md), [3c](../spike/results-3c-browser.md)).
-- **The further candidate the owner named.** Evaluated in the spike (part 4c) and used only if it makes sense; its
-  code and results are kept in a folder on the owner's machine, outside both this repository and the candidate's, and
-  nothing is pushed (owner, 2026-11-13). Any question it raises about naming or licensing is
+- **The further candidate the owner named.** Evaluated in the spike (part 4c, run on 2026-11-13) and used only if
+  it makes sense; its code and results are kept in a folder on the owner's machine, outside both this repository and
+  the candidate's, and nothing is pushed (owner, 2026-11-13). Whether to use it is the owner's to decide from those
+  results; until then the design's renderer stays as section 06 has it. Any question it raises about naming or licensing is
   the owner's.
 - Each section's "Questions for the owner" lists what remains for that part, for example canvas rotation and how
   pasted objects are sized (01), undoing your own creation after others edited it (02), whether people may choose
