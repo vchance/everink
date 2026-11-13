@@ -1148,3 +1148,37 @@ fn the_bytes_of_a_state_are_canonical_and_bad_bytes_are_refused() {
         ))
     );
 }
+
+#[test]
+fn a_room_opens_from_its_objects_in_any_order() {
+    // A store keeps objects in chunks by ordinal, not by id; the room must open the same from either.
+    let mut w = World::new(5, 3);
+    w.run(3_000);
+    let mut objects: Vec<Object> = w.room.objects().cloned().collect();
+    assert!(objects.len() > 500, "only {} objects", objects.len());
+    objects.sort_by_key(Object::ordinal);
+    let (head, next) = (w.room.head(), w.room.next_ordinal());
+    let opened = Room::from_objects(head, next, objects.clone(), CAP, 1).expect("it opens");
+    assert_eq!(opened.encode_all(), w.room.encode_all());
+    opened.check_tree().expect("a tree");
+
+    // The same object twice, an object newer than the head, and an ordinal beyond the count are refused.
+    let mut twice = objects.clone();
+    twice.push(objects[0].clone());
+    assert_eq!(
+        Room::from_objects(head, next, twice, CAP, 1).err(),
+        Some(DecodeError::Invalid("an id used twice"))
+    );
+    assert_eq!(
+        Room::from_objects(Seq(0), next, objects.clone(), CAP, 1).err(),
+        Some(DecodeError::Invalid(
+            "an object newer than the state says it is"
+        ))
+    );
+    assert_eq!(
+        Room::from_objects(head, next - 1, objects, CAP, 1).err(),
+        Some(DecodeError::Invalid(
+            "an object newer than the state says it is"
+        ))
+    );
+}

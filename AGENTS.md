@@ -8,8 +8,8 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
 spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with two crates
-(`crates/everink-core`, `crates/everink-sync`) and three trial packages outside it (`spike/text-trial`,
-`spike/render-trial`, `spike/render-web`). Nothing is released or published.
+(`crates/everink-core`, `crates/everink-sync`) and four trial packages outside it (`spike/text-trial`,
+`spike/render-trial`, `spike/render-web`, `spike/store-trial`). Nothing is released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
@@ -41,6 +41,10 @@ sh spike/render-web/build.sh                                        # the browse
 python3 spike/render-web/serve.py                                   # serves it on 127.0.0.1:8765; open that in a browser (question 10)
 cargo clippy --manifest-path spike/render-web/Cargo.toml --target wasm32-unknown-unknown --features webgpu,webgl,cpu --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/render-web/Cargo.toml --check       # its format check
+cargo test --locked --manifest-path spike/store-trial/Cargo.toml    # the storage trial (its own package)
+cargo run --release --locked --manifest-path spike/store-trial/Cargo.toml [sizes] [directory]   # its timing run (question 9)
+cargo clippy --manifest-path spike/store-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
+cargo fmt --manifest-path spike/store-trial/Cargo.toml --check      # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
@@ -79,6 +83,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   `vello_cpu`, built to `wasm32-unknown-unknown`, with the tiles kept as textures and the view composed from
   them. Another package of its own with its own `Cargo.lock`. `build.sh` needs `wasm-bindgen` 0.2.130;
   `www/index.html` is the page. The `render-trial` CI job builds and lints it and does not run it.
+- `spike/store-trial`: one SQLite file per room (spike slice 5): a log of changes, snapshots in chunks, and the
+  room opened from them. Another package of its own with its own `Cargo.lock`. It builds `crates/everink-core`
+  and `crates/everink-sync` in, so a change to either runs its CI job (`store-trial`) too.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
@@ -113,6 +120,10 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `spike/render-web` is run by opening its page in a browser whose window is in front: a browser gives no
   animation frames to a page it is not showing. Name the browser and the machine with its figures. The
   `wasm-bindgen` command must be the version `Cargo.toml` pins, or the page fails to load.
+- `spike/store-trial`'s timing run writes up to about 1.1 GB under `spike/store-trial/target/data` at its default
+  sizes and needs about 4 GB of memory for the largest; it removes its files when it ends. On macOS
+  `synchronous=FULL` does not make the drive write its cache out; only the `fullfsync=ON` rows are a durable
+  commit there. Take its figures on a machine that is doing nothing else.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions
