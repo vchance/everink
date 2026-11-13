@@ -1,7 +1,7 @@
 # Spike slice 5: storage
 
-Date: 2026-11-12. Code: `spike/store-trial`, and two small additions to `crates/everink-sync`
-(`Room::from_objects`, `Room::rng_state`). This answers question 9 of [`README.md`](README.md): **how fast is
+Date: 2026-11-12. Code: `spike/store-trial`, and three small additions to `crates/everink-sync`
+(`Room::from_objects`, `Room::next_ordinal`, `Room::rng_state`). This answers question 9 of [`README.md`](README.md): **how fast is
 storage?** Section 03 of the design has one SQLite file per room and marks every figure for it as unmeasured.
 
 Every timing is from one machine: an Apple M4 (macOS, its internal SSD, APFS), release build, Rust 1.97.1, SQLite
@@ -19,7 +19,8 @@ Every timing is from one machine: an Apple M4 (macOS, its internal SSD, APFS), r
 - **A room opens in 28 ms at 10,000 strokes, 0.29 s at 100,000 and 4 to 6 s at 1,000,000**, from a file the
   operating system already holds in memory. The design estimated 5 s to decode a million objects and 1 to 2 s
   more for the spatial index, which is not built here. Reading the chunks out of SQLite is the largest part.
-- **The commit does not slow as the file grows**: the same on a 10 MB file and a 1 GB one.
+- **The commit does not slow as the file grows**: 4 ms durable, and 0.04 ms of SQLite's own, on a 10 MB file and
+  on a 1 GB one alike.
 - **The file is 1,008 bytes a stroke.** LZ4 saves 1% on these strokes, which are random walks and pack worse
   than a hand's; the gain on real strokes is not known.
 - **The log cannot be replayed exactly as designed.** The room draws random numbers when it makes an order key,
@@ -54,7 +55,8 @@ second place, the store thread and the hold on acknowledgements, the daily sweep
 ## Measurements
 
 Command: `cargo run --release --locked --manifest-path spike/store-trial/Cargo.toml`. Two runs with the machine
-otherwise idle; a range is over the two. A stroke is 200 points and one change (about 1 KB).
+otherwise idle; a range is over the two. A third run, after review, added the durable commit on the large
+files and agreed with the two on the rest. A stroke is 200 points and one change (about 1 KB).
 
 ### One commit of the log
 
@@ -75,11 +77,19 @@ otherwise idle; a range is over the two. A stroke is 200 points and one change (
 - With a durable commit of 4 ms, a room that commits each change alone manages about 250 changes a second; one
   that commits what arrived during the last commit (the design's group commit) writes 100 changes in the same
   4 ms. The design's busy room is 15 changes a second.
-- The occasional commit of 15 to 24 ms is the write-ahead log being moved into the main file (a checkpoint),
-  which SQLite does on the committing thread by default every 1,000 pages.
+- The occasional commit of 15 to 24 ms is most likely the write-ahead log being moved into the main file (a
+  checkpoint), which SQLite does on the committing thread by default every 1,000 pages: about every 40 commits
+  of 100 changes. That is inferred from the sizes, not measured.
 
-On a file that already holds a room, one change a commit with `synchronous=FULL`: 0.038 to 0.040 ms at 10,000
-strokes, 0.038 to 0.044 ms at 100,000, 0.032 ms at 1,000,000. The file's size does not show.
+On a file that already holds a room, one change a commit:
+
+| Strokes in the file | `synchronous=FULL` (300 commits) | with `fullfsync=ON` (100 commits; one run): median | 95th |
+|---|---|---|---|
+| 10,000 | 0.036 to 0.040 ms | 3.97 ms | 4.4 ms |
+| 100,000 | 0.038 to 0.044 ms | 3.96 ms | 4.2 ms |
+| 1,000,000 | 0.032 to 0.033 ms | 3.79 ms | 6.0 ms |
+
+The file's size does not show in either.
 
 ### Snapshots
 
@@ -101,7 +111,8 @@ That is a whole snapshot, which a room writes once. The design's example is a sn
   chunks and 141 KB measured (the trial's manifest has the chunk's number beside each hash).
 - Building takes 63 to 88 ms at a million objects because the trial sorts every object by ordinal to find the
   chunks; the design's shards would not. It is not the cost of the three chunks.
-- These transactions are with `synchronous=FULL` and without `fullfsync`; add the 4 ms of a durable commit.
+- The transactions in both tables are with `synchronous=FULL` and without `fullfsync`; add the 4 ms of a
+  durable commit to each.
 
 ### Opening a room
 
@@ -112,9 +123,9 @@ million), each on a new connection. The file is in the operating system's cache:
 |---|---|---|---|---|---|---|
 | 10,600 | 28 ms | 7 ms | 5 ms | 9 ms | 4 ms | 1.9 ms |
 | 100,600 | 291 to 293 ms | 108 to 112 ms | 46 to 48 ms | 82 to 85 ms | 46 to 48 ms | 1.9 to 2.0 ms |
-| 1,000,600 | 4.0 to 6.0 s | 1.6 to 2.9 s | 0.53 s | 0.9 to 1.1 s | 0.9 s | 2.4 to 7.7 ms |
+| 1,000,600 | 4.0 to 6.0 s (4.2 s in the third run) | 1.6 to 2.9 s | 0.53 s | 0.9 to 1.1 s | 0.9 s | 2.4 to 7.7 ms |
 
-- Up to 100,000 strokes the time is 2.8 to 2.9 microseconds a stroke. At a million it is 4 to 6, and the part
+- Up to 100,000 strokes the time is 2.6 to 2.9 microseconds a stroke. At a million it is 4 to 6, and the part
   that grew and varied is reading from SQLite (1 GB of chunks, each about 258 KB, which SQLite keeps as a chain
   of 4 KB pages). The machine has 16 GB of memory and the run holds the file's pages and the room at once; how
   much of the 1.6 to 2.9 s is that is not known.
@@ -159,7 +170,9 @@ million), each on a new connection. The file is in the operating system's cache:
 - The manifest holds the chunk's number beside each hash, and the room's random state.
 - `chunk` has no `blobs` column and `snap` no `dedupe`, `kind`, `name`, `by` or `ord_next`; the table of clients'
   newest changes is not saved, so a client that resends a change after a restart is not recognised.
-- A chunk is hashed after compression, so it can be checked before it is decompressed.
+- A chunk is hashed after compression, so it can be checked before it is decompressed, and a chunk that says
+  it holds more than 256 of the largest objects is refused before memory is taken for it. The hash and the
+  manifest's checksum guard against damage, not against a file made to deceive: neither is keyed.
 - A whole snapshot is found by sorting the objects, not from the design's 4,096 shards.
 
 ## What the design should change
@@ -173,4 +186,4 @@ million), each on a new connection. The file is in the operating system's cache:
 ## Kept afterwards
 
 `spike/store-trial` stays until the server's store is written; its tests are the start of that store's.
-`Room::from_objects` and `Room::rng_state` stay in `crates/everink-sync`.
+`Room::from_objects`, `Room::next_ordinal` and `Room::rng_state` stay in `crates/everink-sync`.

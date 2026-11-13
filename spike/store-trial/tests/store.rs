@@ -150,6 +150,7 @@ fn a_room_comes_back_exactly_from_a_snapshot_and_the_log_after_it() {
     assert!(stats.log_rows >= 400, "{stats:?}");
     assert_eq!(stats.objects, 900);
     assert!(opened.encode_all() == w.room.encode_all());
+    assert_eq!(opened.rng_state(), w.room.rng_state());
     opened.check_tree().unwrap();
 }
 

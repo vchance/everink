@@ -189,7 +189,19 @@ fn room_of(dir: &Path, size: usize) {
     println!(
         "one change a commit on this file, synchronous=FULL: median {med:.3} ms, 95th {p95:.3}, 99th {p99:.3}, most {most:.3}"
     );
-    w.log(&mut store, 700, 100);
+    // The same with a commit that reaches the disk, where that is a different setting.
+    if cfg!(target_os = "macos") {
+        drop(store);
+        store = Store::open(&path, Sync::FullFsync).expect("the file opens");
+        let took = w.log(&mut store, 100, 1);
+        let (med, p95, p99, most) = spread(&took);
+        println!(
+            "one change a commit on this file, synchronous=FULL, fullfsync=ON: median {med:.3} ms, 95th {p95:.3}, 99th {p99:.3}, most {most:.3}"
+        );
+    } else {
+        w.log(&mut store, 100, 100);
+    }
+    w.log(&mut store, 600, 100);
     store.checkpoint().expect("a checkpoint");
     println!(
         "the file with a log tail of 1,000 changes: {:.1} MB",
@@ -260,13 +272,12 @@ fn main() {
         dir.display()
     );
     commits(&dir);
-    for size in sizes {
-        room_of(&dir, size);
+    for size in &sizes {
+        room_of(&dir, *size);
     }
-    for entry in std::fs::read_dir(&dir)
-        .expect("the directory is there")
-        .flatten()
-    {
-        let _ = std::fs::remove_file(entry.path());
+    // Only the files this run made are removed: the directory may be anyone's.
+    fresh(&dir, "commit.sqlite");
+    for size in &sizes {
+        fresh(&dir, &format!("room-{size}.sqlite"));
     }
 }

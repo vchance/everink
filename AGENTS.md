@@ -121,7 +121,7 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   animation frames to a page it is not showing. Name the browser and the machine with its figures. The
   `wasm-bindgen` command must be the version `Cargo.toml` pins, or the page fails to load.
 - `spike/store-trial`'s timing run writes up to about 1.1 GB under `spike/store-trial/target/data` at its default
-  sizes and needs about 4 GB of memory for the largest; it removes its files when it ends. On macOS
+  sizes and needs about 4 GB of memory for the largest; it removes the files it made when it ends, and nothing else in that directory. On macOS
   `synchronous=FULL` does not make the drive write its cache out; only the `fullfsync=ON` rows are a durable
   commit there. Take its figures on a machine that is doing nothing else.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.

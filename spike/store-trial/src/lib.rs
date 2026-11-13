@@ -19,6 +19,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 /// Objects in a chunk: the design's starting value.
 pub const CHUNK: u32 = 256;
 
+/// The most a chunk may say it holds once decompressed: 256 objects of the largest size the wire allows (1 MiB)
+/// and their lengths. A chunk that says more is refused before any memory is taken for it.
+const MAX_CHUNK_BYTES: usize = CHUNK as usize * ((1 << 20) + 4);
+
 /// How hard a commit pushes its bytes to the disk.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Sync {
@@ -323,6 +327,12 @@ impl Store {
                 for ((number, hash), data) in manifest.chunks.iter().zip(&datas) {
                     if blake3::hash(data).as_bytes() != hash {
                         return damaged(format!("chunk {number} does not match its hash"));
+                    }
+                    let says = data
+                        .get(..4)
+                        .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
+                    if says.is_none_or(|n| n > MAX_CHUNK_BYTES) {
+                        return damaged(format!("chunk {number} says it is too large"));
                     }
                     match lz4_flex::decompress_size_prepended(data) {
                         Ok(raw) => raws.push(raw),
