@@ -645,6 +645,11 @@ pub struct UiFrame { pub scene: SceneFragment, pub tree: Option<accesskit::TreeU
 pub struct UiContext<'a> { pub commands: &'a mut Vec<Command>, pub announce: &'a mut Vec<String> }
 ```
 
+`UiFrame.scene` as written is the own toolkit's form. egui cannot fill it: it gives triangles for `egui-wgpu`, so
+with egui the frame would carry those and the compose pass a host render pass in place of a `SceneFragment`. The
+spike's own trait left the scene out for this reason (`../spike/results-4a-controls.md`). The trait's output is
+settled with the choice of toolkit.
+
 - **Controls only issue `Command`s**, the same enum as the embedding API, so the built-in UI is the first user of
   the public surface. They read a `UiModel`, a read-only snapshot (tool, color, can-undo, peers, connection state,
   role capabilities, camera description); they hold no document state.

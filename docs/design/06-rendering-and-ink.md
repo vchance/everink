@@ -311,7 +311,8 @@ A frame runs these stages. Stages 1 to 4 run only when the camera or the visible
    helper when the tile is rendered, so the tile's scene holds only small numbers.
 6. **Compose.** One GPU pass draws, back to front: tile quads (ready tiles at their exact placement; stale or
    other-scale tiles scaled), live (non-cached) objects, then the live ink, the overlay and the controls. The
-   controls arrive as a `SceneFragment` from `everink-ui` (see [Scene API](#scene-api-for-the-controls)).
+   controls arrive as a `SceneFragment` from `everink-ui` (see [Scene API](#scene-api-for-the-controls)); with
+   egui they would arrive as its triangles and a host render pass (see "Controls toolkit" above and section 07).
 7. **Present.**
 
 **The tile cache.** A *raster tile* is 512 x 512 device pixels of premultiplied RGBA8 (1 MiB). Section 01 holds the
@@ -1249,8 +1250,8 @@ Open because of the spike (measured in slices 3a to 3c; the choices are the owne
    and bands has none and costs the processor renderer far more for 10,000 strokes (394 to 407 ms
    against 61 to 64 ms natively). Fewer corners, discs only at turns, or a true union were named and not tried. See
    "The outline: variable width, deterministic".
-6. **WebAssembly SIMD.** The tile budget holds in a browser only with it, and a module built with it does not load
-   without it. Require it, or ship two builds?
+6. **WebAssembly SIMD.** The tile budget holds in a browser only with it, and then only for the single-path
+   outline; a module built with it does not load without it. Require it, or ship two builds?
 7. **The backend order.** Natively the processor renderer was faster than the GPU one for strokes; in Chrome all
    three took the same time. Whether the order changes waits for other browsers and machines.
 
