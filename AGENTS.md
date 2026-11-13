@@ -240,16 +240,33 @@ Decided:
   not), and nothing is pushed anywhere. An agent does not put 4c material in either repository.
 
 Deferred by the owner, with what comes first:
-- **The outline form: no decision yet.** The owner chose to have the lighter hole-free forms that the spike named
-  and did not try built and measured first (a further spike slice, 3d); the choice follows those figures.
+- **The outline form** was deferred until the lighter hole-free forms had been built and measured (spike slice
+  3d). It has since been decided: see the decisions of later that day, below.
 - **The backend order: not re-decided yet.** It stays as designed (WebGPU, then WebGL2, then the processor
   renderer, best effort) until other content, other browsers and a slower machine have been measured, and is
   looked at again then.
 - **The controls toolkit: no decision yet.** The owner runs the screen-reader and keyboard checks first
   (`spike/controls-window/README.md`, `spike/controls-web/README.md`).
 
-Ask, do not decide: the controls toolkit (after the owner's checks), the outline form (after slice 3d), the backend
+Owner Von Chance, 2026-11-13, later the same day: two questions asked one at a time after slice 3d and part 4c of
+the spike. The options as offered and the answers are quoted in https://github.com/vchance/everink/pull/26. In
+both the owner chose the option the agent had marked as recommended; the recommendations were the agent's.
+
+Decided:
+- **The stroke outline form is runs with smoothed sides**: the third of the three variants slice 3d measured, a
+  run ended at an eighth of a turn (`build_runs_within` with `FRAC_1_SQRT_2` and `smooth`). The evidence is
+  `docs/spike/results-3d-outline-forms.md`. What the owner was told when asked: a stroke tapers where the pressure
+  changes, so the eraser's cut and the hit test have to follow that shape; small notches remain where one run
+  ends and the next begins; and for this variant "no holes" is argued up to thin slivers at the outside of turns
+  and tested on 1,000 rough strokes, not fully proved. To follow (the agent's plan, not part of the decision): a
+  change that makes this the only builder, removes `tests/golden/outlines.txt`, keeps only the chosen variant in
+  `tests/golden/outlines_runs.txt`, and rewrites section 06's steps for it.
+- **The further candidate is not used as a renderer backend; the renderer stays as designed, and the question is
+  closed.** The candidate stays unnamed and undescribed in this repository. The 4c folder on the owner's machine
+  is the owner's to keep or delete.
+
+Ask, do not decide: the controls toolkit (after the owner's checks), the backend
 order (after further measurements), dropping or keeping the presence fallback and the
-1 Mbit/s target (after a real-network test), whether to use, name or
-describe that further candidate here, publishing or reserving package names, registering domains, and opening the
+1 Mbit/s target (after a real-network test), whether to name or describe that further candidate here or to use it
+for anything, publishing or reserving package names, registering domains, and opening the
 repository to outside contributors.
