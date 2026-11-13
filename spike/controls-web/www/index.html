@@ -1,0 +1,191 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>controls-web: waiting</title>
+<style>
+  body { font: 13px/1.4 ui-monospace, monospace; margin: 12px; }
+  #stage { position: relative; width: 800px; height: 56px; border: 1px solid #999; }
+  #stage canvas { position: absolute; left: 0; top: 0; width: 800px; height: 56px; }
+  /* The mirror: real elements where the controls are drawn, for assistive technology and for the DOM's focus.
+     They are not seen and take no pointer: the canvas draws the controls and takes the pointer. */
+  #mirror, #mirror * { position: absolute; margin: 0; padding: 0; border: 0; background: transparent;
+    color: transparent; opacity: 0; pointer-events: none; overflow: hidden; outline: none; resize: none;
+    font: inherit; }
+  #mirror { left: 0; top: 0; width: 800px; height: 56px; opacity: 1; }
+  pre { white-space: pre-wrap; }
+</style>
+<p>Everink spike, slice 4b, the browser. <code>?candidate=own</code> or <code>?candidate=egui</code>.
+The toolbar below is drawn on a canvas; under it is a mirror of real elements for a screen reader.</p>
+<div id="stage">
+  <canvas id="canvas"></canvas>
+  <div id="mirror" role="application" aria-label="Drawing surface controls"></div>
+</div>
+<pre id="log"></pre>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const candidate = q.get('candidate') ?? 'own';
+  const scale = window.devicePixelRatio || 1;
+  const canvas = document.getElementById('canvas');
+  const mirror = document.getElementById('mirror');
+  const log = document.getElementById('log');
+  const say = (s) => { log.textContent += s + '\n'; };
+  canvas.width = Math.round(800 * scale);
+  canvas.height = Math.round(56 * scale);
+
+  // For a test that drives the page: the last frame, and everything the shell was told.
+  window.trial = { state: null, commands: [], events: [] };
+
+  const ARIA = { Toolbar: 'toolbar', RadioGroup: 'radiogroup', RadioButton: 'radio', Button: 'button',
+    Label: 'status', TextInput: 'textbox' };
+  const elements = new Map();   // node id -> element
+  let composing = false;
+  let shell;
+  let settingFocus = false;
+
+  function elementFor(node) {
+    let el = elements.get(node.id);
+    if (!el) {
+      // The text field is a real textarea: it is what the platform's text input and a screen reader edit.
+      el = document.createElement(node.role === 'TextInput' ? 'textarea' : 'div');
+      el.dataset.node = node.id;
+      if (node.role === 'TextInput') { el.rows = 1; el.spellcheck = false; el.autocapitalize = 'off'; }
+      else el.setAttribute('role', ARIA[node.role]);
+      el.addEventListener('focus', () => {
+        // Focus that came from outside (a screen reader, a script): tell the controls.
+        if (!settingFocus && window.trial.state.focus !== node.id) {
+          shell.action(node.id, 'focus');
+          draw();
+        }
+      });
+      el.addEventListener('click', (e) => {
+        // A click that reaches a mirror element is assistive technology's: the pointer goes to the canvas.
+        e.preventDefault();
+        window.trial.events.push(`mirror click ${node.label ?? node.value}`);
+        shell.action(node.id, 'click');
+        draw();
+      });
+      elements.set(node.id, el);
+    }
+    return el;
+  }
+
+  // Makes the mirror what the tree says, and the DOM's focus what the tree's is.
+  function sync(state) {
+    const byId = new Map(state.nodes.map((n) => [n.id, n]));
+    const seen = new Set();
+    const place = (id, parent, origin) => {
+      const node = byId.get(id);
+      if (!node) return;
+      let host = parent, at = origin;
+      if (ARIA[node.role]) {
+        const el = elementFor(node);
+        seen.add(id);
+        if (el.parentElement !== parent) parent.appendChild(el);
+        // Every string goes in as an attribute or as text, never as markup.
+        if (node.role === 'Label') el.textContent = node.value ?? node.label ?? '';
+        else if (node.label != null) el.setAttribute('aria-label', node.label);
+        if (node.checked != null) el.setAttribute('aria-checked', String(node.checked));
+        if (node.disabled) el.setAttribute('aria-disabled', 'true'); else el.removeAttribute('aria-disabled');
+        if (node.bounds) {
+          const [x0, y0, x1, y1] = node.bounds;
+          Object.assign(el.style, { left: `${x0 - origin[0]}px`, top: `${y0 - origin[1]}px`,
+            width: `${x1 - x0}px`, height: `${y1 - y0}px` });
+          at = [x0, y0];
+        }
+        // One element in the tab order: the one the controls say has the focus, or the first that can take it.
+        if (node.actions.includes('focus')) el.tabIndex = node.id === state.focus ? 0 : -1;
+        if (node.role === 'TextInput' && !composing) {
+          // The field's text, for a screen reader. Never rewritten while text is being composed.
+          const text = state.textInput && node.id === state.focus ? state.textInput.value : (node.value ?? '');
+          if (el.value !== text) el.value = text;
+        }
+        host = el;
+      }
+      for (const child of node.children) place(child, host, at);
+    };
+    place(state.root, mirror, [0, 0]);
+    for (const [id, el] of elements) if (!seen.has(id)) { el.remove(); elements.delete(id); }
+    const focused = elements.get(state.focus);
+    if (focused && document.activeElement !== focused) {
+      settingFocus = true;
+      focused.focus({ preventScroll: true });
+      settingFocus = false;
+    } else if (!focused && mirror.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    if (!mirror.querySelector('[tabindex="0"]')) {
+      const first = mirror.querySelector('[tabindex="-1"]');
+      if (first) first.tabIndex = 0;
+    }
+  }
+
+  function draw() {
+    const state = JSON.parse(shell.frame());
+    window.trial.state = state;
+    for (const c of state.commands) { window.trial.commands.push(c); say(c); }
+    sync(state);
+  }
+
+  try {
+    const m = await import('./pkg/controls_web.js');
+    await m.default();
+    if (!navigator.gpu) throw new Error('this browser has no WebGPU, which the page draws with');
+    shell = await m.Shell.create(candidate, canvas, scale);
+    draw(); draw();
+
+    const at = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    canvas.addEventListener('pointermove', (e) => { shell.pointer(0, ...at(e)); draw(); });
+    canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); shell.pointer(1, ...at(e)); draw(); });
+    canvas.addEventListener('pointerup', (e) => { shell.pointer(2, ...at(e)); draw(); });
+
+    document.addEventListener('keydown', (e) => {
+      // While text is being composed the keys are the input method's.
+      if (e.isComposing || e.keyCode === 229 || composing) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const inField = document.activeElement instanceof HTMLTextAreaElement;
+      const inMirror = mirror.contains(document.activeElement);
+      // Tab from the page's body goes to the controls, which say where their focus starts (the chosen tool, for
+      // one that follows the radio group's pattern). From anywhere else the keys are not theirs.
+      const entering = !inMirror && e.key === 'Tab' && document.activeElement === document.body;
+      if (!inMirror && !entering) return;
+      // In the field, a key that makes a character is left to `beforeinput`.
+      if (inField && e.key.length === 1 && e.key !== ' ') return;
+      const before = window.trial.state.focus;
+      if (shell.key(e.key, e.shiftKey)) {
+        draw();
+        // Tab past the last control: the focus leaves the controls, and the browser takes the key.
+        if (e.key === 'Tab' && window.trial.state.focus === window.trial.state.root && before !== window.trial.state.root) return;
+        e.preventDefault();
+      }
+    });
+
+    // The text field: the textarea's own events, as section 07 has them.
+    mirror.addEventListener('compositionstart', () => { composing = true; });
+    mirror.addEventListener('compositionupdate', (e) => {
+      window.trial.events.push(`compositionupdate ${JSON.stringify(e.data)}`);
+      shell.preedit(e.data); draw();
+    });
+    mirror.addEventListener('compositionend', (e) => {
+      window.trial.events.push(`compositionend ${JSON.stringify(e.data)}`);
+      composing = false;
+      if (e.data) shell.commit(e.data); else shell.cancel_composition();
+      draw();
+    });
+    mirror.addEventListener('beforeinput', (e) => {
+      if (!(e.target instanceof HTMLTextAreaElement)) return;
+      window.trial.events.push(`beforeinput ${e.inputType} ${JSON.stringify(e.data)}`);
+      if (e.isComposing || e.inputType.startsWith('insertComposition') || e.inputType === 'insertFromComposition') return;
+      // Everything else is cancelled and done by the controls, so the textarea never edits itself.
+      e.preventDefault();
+      if (e.inputType === 'insertText' && e.data) shell.commit(e.data);
+      else if (e.inputType === 'insertFromPaste' && e.dataTransfer) shell.commit(e.dataTransfer.getData('text/plain'));
+      else if (e.inputType === 'deleteContentBackward') shell.key('Backspace', false);
+      else if (e.inputType === 'deleteContentForward') shell.key('Delete', false);
+      else if (e.inputType === 'insertLineBreak') shell.key('Enter', false);
+      draw();
+    });
+    document.title = `controls-web: ${candidate} ready`;
+  } catch (e) {
+    say(`FAILED: ${e && e.stack ? e.stack : e}`);
+    document.title = 'controls-web: failed';
+  }
+</script>

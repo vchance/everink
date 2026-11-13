@@ -191,8 +191,8 @@ jobs:
 
   # The controls trial (spike slice 4a): a package outside the workspace, with the two candidate toolkits (egui;
   # taffy and parley for Everink's own). It runs when the trial or the toolchain changes, and on the full runs.
-  # spike/controls-window (part 4b) shows the two in a native window; here it is type-checked and linted only: a hosted
-  # runner has no display and no GPU, and a screen reader and a real keyboard are for a person.
+  # spike/controls-window (part 4b) shows the two in a native window and spike/controls-web on a canvas in a
+  # browser; here both are type-checked and linted only: a hosted runner has no display and no GPU.
   controls-trial:
     name: controls-trial
     needs: [changes]
@@ -224,6 +224,10 @@ jobs:
         run: cargo fmt --manifest-path spike/controls-window/Cargo.toml --check
       - name: The window shell, clippy (warnings are errors)
         run: cargo clippy --manifest-path spike/controls-window/Cargo.toml --all-targets --locked -- -D warnings
+      - name: The browser page's module, format check
+        run: cargo fmt --manifest-path spike/controls-web/Cargo.toml --check
+      - name: The browser page's module, clippy on wasm32 (warnings are errors; the page is driven in Chrome by hand, not here)
+        run: cargo clippy --manifest-path spike/controls-web/Cargo.toml --target wasm32-unknown-unknown --locked -- -D warnings
 
   ci-result:
     name: ci-result

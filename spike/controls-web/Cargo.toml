@@ -1,0 +1,37 @@
+# The controls trial in a browser (spike slice 4b, web part). A package of its own, outside the workspace, for
+# the same reason as `spike/controls-window`, whose drawing and candidates it shares. Nothing here is a decision.
+[package]
+name = "controls-web"
+version = "0.0.0"
+description = "Everink spike: the two controls candidates on a canvas in a browser, with the DOM mirror."
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+controls-trial = { path = "../controls-trial" }
+accesskit = "=0.25.2"
+wgpu = { version = "=30.0.2", default-features = false, features = ["std", "wgsl", "webgpu"] }
+egui = "=0.37.0"
+egui-wgpu = { version = "=0.37.0", default-features = false, features = ["fragile-send-sync-non-atomic-wasm"] }
+epaint_default_fonts = "=0.37.0"
+vello_gpu = { version = "=0.4.0", default-features = false, features = ["wgpu", "text"] }
+vello_common = "=0.4.0"
+glifo = "=0.5.0"
+parley = { version = "=0.12.0", default-features = false, features = ["std"] }
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "=0.4.80"
+web-sys = { version = "=0.3.107", features = ["HtmlCanvasElement"] }
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace]

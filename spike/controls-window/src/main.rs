@@ -11,146 +11,20 @@
 //! has the focus. A screen reader and a keyboard are then a person's to try: see `README.md` here.
 
 mod paint;
+#[path = "shell.rs"]
+mod shell;
 
 use std::sync::Arc;
 
-use controls_trial::own::OwnControls;
-use controls_trial::with_egui::EguiControls;
-use controls_trial::{
-    Command, Controls, InputEvent, Key, SURFACE, TextEvent, Tool, UiFrame, UiModel,
-};
-use paint::{EguiPainter, Gpu, OwnPainter, physical};
+use controls_trial::{InputEvent, Key, SURFACE, TextEvent, UiFrame};
+use paint::{Gpu, physical};
+use shell::{Candidate, Document, Painter, tree_for_platform};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{Window, WindowId};
-
-/// One of the two, with what draws it.
-#[allow(
-    clippy::large_enum_variant,
-    reason = "there is one of these in the program"
-)]
-enum Candidate {
-    Own(OwnControls),
-    Egui(EguiControls),
-}
-
-#[allow(
-    clippy::large_enum_variant,
-    reason = "there is one of these in the program"
-)]
-enum Painter {
-    Own(OwnPainter),
-    Egui(EguiPainter),
-}
-
-impl Candidate {
-    fn new(name: &str, scale: f32) -> Candidate {
-        match name {
-            "own" => Candidate::Own(OwnControls::default()),
-            "egui" => {
-                let mut controls = EguiControls::default();
-                controls.keep_paint(scale);
-                Candidate::Egui(controls)
-            }
-            other => panic!("the candidate is `own` or `egui`, not {other}"),
-        }
-    }
-
-    fn controls(&mut self) -> &mut dyn Controls {
-        match self {
-            Candidate::Own(c) => c,
-            Candidate::Egui(c) => c,
-        }
-    }
-
-    fn painter(&self, gpu: &Gpu, format: wgpu::TextureFormat, scale: f32) -> Painter {
-        match self {
-            Candidate::Own(_) => Painter::Own(OwnPainter::new(gpu, format, scale)),
-            Candidate::Egui(_) => Painter::Egui(EguiPainter::new(gpu, format)),
-        }
-    }
-
-    fn paint(
-        &mut self,
-        painter: &mut Painter,
-        gpu: &Gpu,
-        view: &wgpu::TextureView,
-        scale: f32,
-        frame: &UiFrame,
-    ) {
-        match (self, painter) {
-            (Candidate::Own(c), Painter::Own(p)) => {
-                p.paint(gpu, view, scale, c.paint(), frame.text_input.as_ref())
-            }
-            (Candidate::Egui(c), Painter::Egui(p)) => {
-                if let Some(paint) = c.take_paint() {
-                    p.paint(gpu, view, paint);
-                }
-            }
-            _ => unreachable!("a candidate is drawn by its own painter"),
-        }
-    }
-}
-
-/// The document the controls act on, as far as the trial has one: a tool, a colour, and what can be undone.
-struct Document {
-    model: UiModel,
-    past: Vec<(Tool, controls_trial::Rgb)>,
-    future: Vec<(Tool, controls_trial::Rgb)>,
-}
-
-impl Document {
-    fn new() -> Document {
-        Document {
-            model: UiModel {
-                tool: Tool::Pen,
-                colour: [0x20, 0x20, 0x20],
-                can_undo: false,
-                can_redo: false,
-                zoom_percent: 100,
-            },
-            past: Vec::new(),
-            future: Vec::new(),
-        }
-    }
-
-    fn apply(&mut self, commands: &mut Vec<Command>) {
-        for command in commands.drain(..) {
-            let now = (self.model.tool, self.model.colour);
-            match command {
-                Command::SetTool(tool) if tool != self.model.tool => {
-                    self.past.push(now);
-                    self.future.clear();
-                    self.model.tool = tool;
-                }
-                Command::SetColour(colour) if colour != self.model.colour => {
-                    self.past.push(now);
-                    self.future.clear();
-                    self.model.colour = colour;
-                }
-                Command::Undo => {
-                    if let Some((tool, colour)) = self.past.pop() {
-                        self.future.push(now);
-                        (self.model.tool, self.model.colour) = (tool, colour);
-                    }
-                }
-                Command::Redo => {
-                    if let Some((tool, colour)) = self.future.pop() {
-                        self.past.push(now);
-                        (self.model.tool, self.model.colour) = (tool, colour);
-                    }
-                }
-                _ => {}
-            }
-            println!("{command:?}");
-        }
-        self.model.can_undo = !self.past.is_empty();
-        self.model.can_redo = !self.future.is_empty();
-    }
-}
 
 fn gpu(surface: Option<&wgpu::Surface<'_>>, instance: &wgpu::Instance) -> (wgpu::Adapter, Gpu) {
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -164,22 +38,6 @@ fn gpu(surface: Option<&wgpu::Surface<'_>>, instance: &wgpu::Instance) -> (wgpu:
     }))
     .expect("a device");
     (adapter, Gpu { device, queue })
-}
-
-/// The accessibility tree in the window's physical pixels. egui's root node already scales; the own toolkit's
-/// gives logical pixels, so the shell puts the scale on its root.
-fn tree_for_platform(
-    mut tree: accesskit::TreeUpdate,
-    own: bool,
-    scale: f32,
-) -> accesskit::TreeUpdate {
-    if let (true, Some(info)) = (own, &tree.tree) {
-        let root = info.root;
-        if let Some((_, node)) = tree.nodes.iter_mut().find(|(id, _)| *id == root) {
-            node.set_transform(accesskit::Affine::scale(f64::from(scale)));
-        }
-    }
-    tree
 }
 
 // ---------------------------------------------------------------------------------------------------------------
