@@ -378,20 +378,20 @@ impl OwnControls {
             .iter()
             .enumerate()
             .map(|(i, tool)| {
-                let w = self.text_width(tool.name()) + 20.0;
+                let w = self.text_width(tool.name()) + 16.0;
                 leaf(&mut tree, Some(Item::Tool(i)), w.max(24.0), 28.0)
             })
             .collect();
         let swatches: Vec<taffy::NodeId> = (0..SWATCHES.len())
             .map(|i| leaf(&mut tree, Some(Item::Swatch(i)), 24.0, 24.0))
             .collect();
-        let undo_w = self.text_width("Undo") + 20.0;
-        let redo_w = self.text_width("Redo") + 20.0;
+        let undo_w = self.text_width("Undo") + 16.0;
+        let redo_w = self.text_width("Redo") + 16.0;
         let zoom_w = self.text_width(&format!("Zoom {}%", model.zoom_percent));
         let undo = leaf(&mut tree, Some(Item::Undo), undo_w, 28.0);
         let redo = leaf(&mut tree, Some(Item::Redo), redo_w, 28.0);
         let zoom = leaf(&mut tree, None, zoom_w, 20.0);
-        let field = leaf(&mut tree, Some(Item::Field), 84.0, 28.0);
+        let field = leaf(&mut tree, Some(Item::Field), 76.0, 28.0);
         let tool_group = tree.new_with_children(row(2.0), &tools).expect("a row");
         let colour_group = tree.new_with_children(row(6.0), &swatches).expect("a row");
         let root = tree
@@ -402,7 +402,7 @@ impl OwnControls {
                         height: length(SURFACE.1),
                     },
                     padding: length(8.0),
-                    ..row(14.0)
+                    ..row(10.0)
                 },
                 &[tool_group, colour_group, undo, redo, zoom, field],
             )
@@ -455,7 +455,7 @@ impl OwnControls {
         }];
         let label = |out: &mut Vec<Paint>, rect: &Rect, text: &str, rgba: [u8; 4]| {
             out.push(Paint::Text {
-                at: [rect[0] + 10.0, rect[1] + 6.0],
+                at: [rect[0] + 8.0, rect[1] + 6.0],
                 text: text.to_string(),
                 rgba,
             });
@@ -469,6 +469,14 @@ impl OwnControls {
                         radius: 6.0,
                         rgba: if on { ON } else { FACE },
                     });
+                    if on {
+                        // Not by colour alone: the chosen tool has a dark outline too.
+                        out.push(Paint::Outline {
+                            rect: [rect[0] + 1.0, rect[1] + 1.0, rect[2] - 1.0, rect[3] - 1.0],
+                            radius: 5.0,
+                            rgba: INK,
+                        });
+                    }
                     label(&mut out, rect, Tool::ALL[i].name(), INK);
                 }
                 Item::Swatch(i) => {
@@ -477,6 +485,12 @@ impl OwnControls {
                         rect: *rect,
                         radius: 4.0,
                         rgba: [c[0], c[1], c[2], 0xff],
+                    });
+                    // An outline, so that a swatch near the background's colour is still seen.
+                    out.push(Paint::Outline {
+                        rect: [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5],
+                        radius: 4.0,
+                        rgba: [0x60, 0x60, 0x60, 0xff],
                     });
                     if c == model.colour {
                         out.push(Paint::Outline {
@@ -529,14 +543,16 @@ impl OwnControls {
                     rgba: [0, 0, 0, 0x20],
                 });
             }
-            if self.focus == Some(*item) {
-                // The controls draw their own focus ring: on the web the browser's is hidden under the canvas.
-                out.push(Paint::Outline {
-                    rect: [rect[0] - 3.0, rect[1] - 3.0, rect[2] + 3.0, rect[3] + 3.0],
-                    radius: 8.0,
-                    rgba: RING,
-                });
-            }
+        }
+        if let Some(focus) = self.focus {
+            // The controls draw their own focus ring: on the web the browser's is hidden under the canvas. It is
+            // drawn after everything else, so that the control beside the focused one does not cover it.
+            let rect = self.placed.rect(focus);
+            out.push(Paint::Outline {
+                rect: [rect[0] - 3.0, rect[1] - 3.0, rect[2] + 3.0, rect[3] + 3.0],
+                radius: 8.0,
+                rgba: RING,
+            });
         }
         out.push(Paint::Text {
             at: [self.placed.zoom[0], self.placed.zoom[1]],
@@ -702,8 +718,18 @@ impl Controls for OwnControls {
         let text_input = (self.focus == Some(Item::Field)).then(|| {
             let field = self.placed.rect(Item::Field);
             self.editor.layout(&mut self.fonts, &mut self.layouts);
-            let caret = self.editor.cursor_geometry(1.5);
-            let (x0, x1) = caret.map_or((0.0, 1.5), |c| (c.x0 as f32, c.x1 as f32));
+            // While text is being composed the editor hides its caret; the place given then is the start of
+            // what is being composed, which is where an input method puts its window.
+            let caret = self.editor.cursor_geometry(1.5).or_else(|| {
+                let area = self.editor.ime_cursor_area();
+                Some(parley::BoundingBox {
+                    x1: area.x0 + 1.5,
+                    ..area
+                })
+            });
+            let (x0, x1) = caret.map_or((0.0, 1.5), |c: parley::BoundingBox| {
+                (c.x0 as f32, c.x1 as f32)
+            });
             let left = (field[0] + FIELD_PAD + x0).min(field[2] - 1.5);
             let compose = self.editor.raw_compose().clone();
             TextInputState {

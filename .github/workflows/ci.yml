@@ -191,7 +191,8 @@ jobs:
 
   # The controls trial (spike slice 4a): a package outside the workspace, with the two candidate toolkits (egui;
   # taffy and parley for Everink's own). It runs when the trial or the toolchain changes, and on the full runs.
-  # Nothing here opens a window; a screen reader and a real keyboard are for a person (part 4b).
+  # spike/controls-window (part 4b) shows the two in a native window; here it is type-checked and linted only: a hosted
+  # runner has no display and no GPU, and a screen reader and a real keyboard are for a person.
   controls-trial:
     name: controls-trial
     needs: [changes]
@@ -219,6 +220,10 @@ jobs:
         run: cargo run --release --locked --manifest-path "$MANIFEST" --example bench_controls
       - name: Size of each candidate in a WebAssembly module
         run: sh spike/controls-trial/size.sh
+      - name: The window shell, format check
+        run: cargo fmt --manifest-path spike/controls-window/Cargo.toml --check
+      - name: The window shell, clippy (warnings are errors)
+        run: cargo clippy --manifest-path spike/controls-window/Cargo.toml --all-targets --locked -- -D warnings
 
   ci-result:
     name: ci-result

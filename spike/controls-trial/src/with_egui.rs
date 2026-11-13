@@ -20,18 +20,34 @@ pub struct EguiControls {
     hex: String,
     /// The text being composed, as last sent to egui. egui does not say which part of the string it is.
     preedit: Option<String>,
+    /// Physical pixels to a logical one, for a shell that draws on a real display.
+    scale: f32,
+    /// `Some` once a shell has asked for what was painted: the last frame's triangles, and the texture changes
+    /// since the shell last took them.
+    kept: Option<(Vec<egui::ClippedPrimitive>, egui::TexturesDelta)>,
+}
+
+/// What a shell needs to draw a frame of egui.
+pub struct EguiPaint {
+    pub primitives: Vec<egui::ClippedPrimitive>,
+    pub textures: egui::TexturesDelta,
+    pub pixels_per_point: f32,
 }
 
 impl Default for EguiControls {
     fn default() -> Self {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
+        // The light theme, whatever the machine prefers, so that the two candidates are seen alike.
+        ctx.set_theme(egui::ThemePreference::Light);
         EguiControls {
             ctx,
             events: Vec::new(),
             time: 0.0,
             hex: String::new(),
             preedit: None,
+            scale: 1.0,
+            kept: None,
         }
     }
 }
@@ -48,6 +64,36 @@ fn key(key: Key) -> egui::Key {
         Key::Escape => egui::Key::Escape,
         Key::Backspace => egui::Key::Backspace,
         Key::Delete => egui::Key::Delete,
+    }
+}
+
+impl EguiControls {
+    /// For a shell that draws: the display's scale, and from now on each frame's paint is kept for `take_paint`.
+    pub fn keep_paint(&mut self, scale: f32) {
+        self.scale = scale;
+        if self.kept.is_none() {
+            self.kept = Some((Vec::new(), egui::TexturesDelta::default()));
+        }
+    }
+
+    /// The last frame's triangles and every texture change since this was last called.
+    pub fn take_paint(&mut self) -> Option<EguiPaint> {
+        let (primitives, textures) = self.kept.as_mut()?;
+        Some(EguiPaint {
+            primitives: std::mem::take(primitives),
+            textures: std::mem::take(textures),
+            pixels_per_point: self.scale,
+        })
+    }
+}
+
+impl Drop for EguiControls {
+    fn drop(&mut self) {
+        // egui asserts that texture changes are not dropped unapplied; a shell that stops has nowhere to
+        // apply them.
+        if let Some((_, textures)) = &mut self.kept {
+            textures.clear();
+        }
     }
 }
 
@@ -114,7 +160,7 @@ impl Controls for EguiControls {
 
     fn frame(&mut self, model: &UiModel, commands: &mut Vec<Command>) -> UiFrame {
         self.time += 1.0 / 60.0;
-        let input = egui::RawInput {
+        let mut input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(SURFACE.0, SURFACE.1),
@@ -124,6 +170,9 @@ impl Controls for EguiControls {
             events: std::mem::take(&mut self.events),
             ..Default::default()
         };
+        if let Some(viewport) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
+            viewport.native_pixels_per_point = Some(self.scale);
+        }
         let hex_id = egui::Id::unique("hex");
         let hex_text = &mut self.hex;
         let mut field_has_focus = false;
@@ -156,11 +205,27 @@ impl Controls for EguiControls {
                                     4.0,
                                     Color32::from_rgb(colour[0], colour[1], colour[2]),
                                 );
-                                if on || response.has_focus() {
+                                // An outline, so that a swatch near the background's colour is still seen.
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    4.0,
+                                    egui::Stroke::new(1.0, Color32::from_gray(0x60)),
+                                    egui::StrokeKind::Inside,
+                                );
+                                if on {
                                     ui.painter().rect_stroke(
                                         rect.expand(2.0),
                                         5.0,
                                         ui.visuals().selection.stroke,
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
+                                if response.has_focus() {
+                                    // Focus is drawn apart from "chosen": further out, and thicker.
+                                    ui.painter().rect_stroke(
+                                        rect.expand(5.0),
+                                        7.0,
+                                        egui::Stroke::new(2.0, ui.visuals().strong_text_color()),
                                         egui::StrokeKind::Outside,
                                     );
                                 }
@@ -211,11 +276,17 @@ impl Controls for EguiControls {
                     });
                 });
         });
-        let painted = self
+        let primitives = self
             .ctx
-            .tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point)
-            .len();
-        output.textures_delta.clear();
+            .tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
+        let painted = primitives.len();
+        match &mut self.kept {
+            Some((kept, textures)) => {
+                *kept = primitives;
+                textures.append(std::mem::take(&mut output.textures_delta));
+            }
+            None => output.textures_delta.clear(),
+        }
         let tree = output
             .platform_output
             .accesskit_update
