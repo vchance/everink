@@ -1,0 +1,34 @@
+# The controls trial in a window (spike slice 4b, native part). A package of its own, outside the workspace,
+# for the same reason as `spike/controls-trial`, whose two candidates it shows. Nothing here is a decision.
+[package]
+name = "controls-window"
+version = "0.0.0"
+description = "Everink spike: the two controls candidates in a native window, for a screen reader and a real keyboard."
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+controls-trial = { path = "../controls-trial" }
+accesskit = "=0.25.2"
+accesskit_winit = "=0.34.2"
+winit = "=0.30.13"
+wgpu = "=30.0.2"
+egui = "=0.37.0"
+egui-wgpu = "=0.37.0"
+epaint_default_fonts = "=0.37.0"
+vello_gpu = "=0.4.0"
+vello_common = "=0.4.0"
+glifo = "=0.5.0"
+parley = { version = "=0.12.0", default-features = false, features = ["std"] }
+pollster = "=1.0.1"
+png = "0.18"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace]

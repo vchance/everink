@@ -8,8 +8,8 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
 spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with two crates
-(`crates/everink-core`, `crates/everink-sync`) and five trial packages outside it (`spike/text-trial`,
-`spike/render-trial`, `spike/render-web`, `spike/store-trial`, `spike/controls-trial`). Nothing is released or published.
+(`crates/everink-core`, `crates/everink-sync`) and six trial packages outside it (`spike/text-trial`,
+`spike/render-trial`, `spike/render-web`, `spike/store-trial`, `spike/controls-trial`, `spike/controls-window`). Nothing is released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
@@ -50,6 +50,10 @@ cargo run --release --locked --manifest-path spike/controls-trial/Cargo.toml --e
 sh spike/controls-trial/size.sh                                     # each candidate's size in a wasm module
 cargo clippy --manifest-path spike/controls-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/controls-trial/Cargo.toml --check   # its format check
+cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own    # the own toolkit in a window (or `egui`)
+cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own --shot own.png   # a picture, no window (needs a GPU)
+cargo clippy --manifest-path spike/controls-window/Cargo.toml --all-targets --locked -- -D warnings   # its lint
+cargo fmt --manifest-path spike/controls-window/Cargo.toml --check  # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
@@ -95,6 +99,10 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   (`src/own.rs`: `taffy`, `parley`, an AccessKit tree by hand) and with egui (`src/with_egui.rs`), behind one
   trait and without a window (spike slice 4a). `tests/contract.rs` runs the same tests on both. Another package
   of its own with its own `Cargo.lock`; it builds nothing of the workspace in.
+- `spike/controls-window`: the two candidates of `spike/controls-trial` in a native window (spike slice 4b):
+  winit, `accesskit_winit`, and one `wgpu` surface drawn by `vello_gpu` or `egui-wgpu`. Its `README.md` is the
+  script of checks for a person with a screen reader and a keyboard. Another package of its own with its own
+  `Cargo.lock`. The `controls-trial` CI job builds and lints it and does not run it.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
@@ -137,6 +145,10 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   candidates to the same behaviour; when one fails after a version change, the library changed, and
   `docs/spike/results-4a-controls.md` is where to say so. Neither candidate uses the machine's fonts: the trial
   carries its own (`own-fonts`, `egui-fonts`), and without one the own toolkit's text field cannot be edited.
+- `spike/controls-window` opens a window on the machine it is run on, and its `--shot` mode needs a GPU; neither
+  works on a hosted runner. The pictures in `docs/spike/images/` come from `--shot`: write them again when the
+  look of either candidate changes, and say so. An agent cannot press keys in the window or hear a screen
+  reader: those checks are the owner's.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions
