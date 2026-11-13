@@ -16,8 +16,6 @@ vello_cpu = "=0.4.0"
 vello_common = "=0.4.0"
 wgpu = "=30.0.2"
 pollster = "=1.0.1"
-i_overlay = "=9.1.0"
-png = "=0.18.1"
 
 [lints.rust]
 unsafe_code = "forbid"

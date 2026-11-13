@@ -152,8 +152,8 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
   [4a](../spike/results-4a-controls.md), [4b native](../spike/results-4b-window.md), [4b web](../spike/results-4b-web.md));
   no decision yet.
 - **Which outline form.** Decided on 2026-11-13: **runs with smoothed sides**, a run ended at an eighth of a turn
-  (owner; [results 3d](../spike/results-3d-outline-forms.md)). Kept here so the row can be found. The builder is
-  made the only one, and section 06's steps rewritten for it, in a change still to come. The owner first chose to have
+  (owner; [results 3d](../spike/results-3d-outline-forms.md)). Kept here so the row can be found. It is
+  the only builder in `everink-core`, and section 06's steps describe it. The owner first chose to have
   the lighter hole-free forms built and measured (spike slice 3d). Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
   discs and bands has none and takes the processor renderer 394 to 407 ms for 10,000 strokes against 61 to 64
   ([3a](../spike/results-3a-wasm-outlines-cut.md), [3b](../spike/results-3b-renderer.md)). Slice 3d has since built a

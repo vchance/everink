@@ -1,6 +1,9 @@
 # Spike slice 3, part d: lighter outline forms that leave no holes
 
-Date: 2026-11-13. Code: `crates/everink-core/src/outline.rs` (`build_runs`, `build_runs_within`), its tests in
+Date: 2026-11-13. (Later: the owner chose runs with smoothed sides that day, and the builder was then made the
+only one, as `everink_core::outline::build`. The other builders, `build_runs_within` and its arguments, and the
+trial's `coverage`, `union` and `picture` runs named below were removed in that change. They are at commit
+`4b84a65`: check it out to run the commands in this file.) Code: `crates/everink-core/src/outline.rs` (`build_runs`, `build_runs_within`), its tests in
 `crates/everink-core/tests/outlines.rs`, and `spike/render-trial` and `spike/render-web`, which draw the new forms.
 Design: [`../design/06-rendering-and-ink.md`](../design/06-rendering-and-ink.md), "The outline: variable width,
 deterministic".
@@ -359,6 +362,6 @@ same time and twice as long to refill the view, where the redraw times alone say
 
 ## Kept afterwards
 
-`build_runs` and `build_runs_within` stay in `everink-core` beside `build` and `build_single_path` until the
+(Done since: see the note at the top of this file.) `build_runs` and `build_runs_within` stay in `everink-core` beside `build` and `build_single_path` until the
 outline form is chosen; the builders not chosen go then, with their golden files. `spike/render-trial` stays as
 part 3b left it.
