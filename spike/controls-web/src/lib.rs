@@ -163,32 +163,30 @@ impl Shell {
     /// Draws a frame on the canvas and returns, as JSON, the accessibility tree, the text field's state while
     /// it has the focus, and the commands given since the last call.
     pub fn frame(&mut self) -> Result<String, JsValue> {
-        // Two frames when commands come out: egui answers an event in the frame after it, and the model may
-        // change with the answer.
+        // Two frames, always: egui gives some answers (a command, a focus moved by Shift and Tab) only in the
+        // frame after the one that took the event, and nothing would draw that frame until the next event.
         let mut commands = Vec::new();
-        let mut frame = self
+        self.candidate
+            .controls()
+            .frame(&self.document.model, &mut commands);
+        self.document.apply(&mut commands);
+        let frame = self
             .candidate
             .controls()
             .frame(&self.document.model, &mut commands);
-        if !commands.is_empty() {
-            self.document.apply(&mut commands);
-            frame = self
-                .candidate
-                .controls()
-                .frame(&self.document.model, &mut commands);
-            self.document.apply(&mut commands);
+        self.document.apply(&mut commands);
+        // A canvas that cannot be drawn on (a lost device, a hidden tab) must not stop the mirror: the tree
+        // and the field's state go back to the page all the same.
+        if let wgpu::CurrentSurfaceTexture::Success(target)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(target) = self.surface.get_current_texture()
+        {
+            let view = target
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.candidate
+                .paint(&mut self.painter, &self.gpu, &view, self.scale, &frame);
+            self.gpu.queue.present(target);
         }
-        let target = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            other => return Err(err(other)),
-        };
-        let view = target
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        self.candidate
-            .paint(&mut self.painter, &self.gpu, &view, self.scale, &frame);
-        self.gpu.queue.present(target);
 
         let nodes: Vec<Value> = frame
             .tree

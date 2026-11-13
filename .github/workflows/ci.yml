@@ -198,7 +198,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.all == 'true' || needs.changes.outputs.controls == 'true' }}
     runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
-    timeout-minutes: 20
+    timeout-minutes: 30   # about 11 minutes: three packages and six wasm builds, without a cache
     env:
       MANIFEST: spike/controls-trial/Cargo.toml
     steps:

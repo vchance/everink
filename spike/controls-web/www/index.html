@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="en">
 <meta charset="utf-8">
 <title>controls-web: waiting</title>
 <style>
@@ -6,19 +7,22 @@
   #stage { position: relative; width: 800px; height: 56px; border: 1px solid #999; }
   #stage canvas { position: absolute; left: 0; top: 0; width: 800px; height: 56px; }
   /* The mirror: real elements where the controls are drawn, for assistive technology and for the DOM's focus.
-     They are not seen and take no pointer: the canvas draws the controls and takes the pointer. */
+     They are not seen and take no pointer: the canvas draws the controls and takes the pointer. Nothing is
+     clipped: an element with no size of its own must not hide the ones inside it. */
   #mirror, #mirror * { position: absolute; margin: 0; padding: 0; border: 0; background: transparent;
-    color: transparent; opacity: 0; pointer-events: none; overflow: hidden; outline: none; resize: none;
-    font: inherit; }
+    color: transparent; opacity: 0; pointer-events: none; outline: none; resize: none; font: inherit; }
   #mirror { left: 0; top: 0; width: 800px; height: 56px; opacity: 1; }
+  #mirror textarea { overflow: hidden; }
   pre { white-space: pre-wrap; }
 </style>
 <p>Everink spike, slice 4b, the browser. <code>?candidate=own</code> or <code>?candidate=egui</code>.
-The toolbar below is drawn on a canvas; under it is a mirror of real elements for a screen reader.</p>
+The toolbar below is drawn on a canvas; over it lies a mirror of real elements, unseen, for a screen reader.</p>
+<p><button id="before">A button before the controls</button></p>
 <div id="stage">
   <canvas id="canvas"></canvas>
   <div id="mirror" role="application" aria-label="Drawing surface controls"></div>
 </div>
+<p><button id="after">A button after the controls</button></p>
 <pre id="log"></pre>
 <script type="module">
   const q = new URLSearchParams(location.search);
@@ -34,8 +38,9 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
   // For a test that drives the page: the last frame, and everything the shell was told.
   window.trial = { state: null, commands: [], events: [] };
 
+  // The ARIA role of each kind of node. A label is plain text: it has no role, and is not a live region.
   const ARIA = { Toolbar: 'toolbar', RadioGroup: 'radiogroup', RadioButton: 'radio', Button: 'button',
-    Label: 'status', TextInput: 'textbox' };
+    Label: null, TextInput: null };
   const elements = new Map();   // node id -> element
   let composing = false;
   let shell;
@@ -45,12 +50,12 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
     let el = elements.get(node.id);
     if (!el) {
       // The text field is a real textarea: it is what the platform's text input and a screen reader edit.
-      el = document.createElement(node.role === 'TextInput' ? 'textarea' : 'div');
+      el = document.createElement(node.role === 'TextInput' ? 'textarea' : node.role === 'Label' ? 'span' : 'div');
       el.dataset.node = node.id;
       if (node.role === 'TextInput') { el.rows = 1; el.spellcheck = false; el.autocapitalize = 'off'; }
-      else el.setAttribute('role', ARIA[node.role]);
+      if (ARIA[node.role]) el.setAttribute('role', ARIA[node.role]);
       el.addEventListener('focus', () => {
-        // Focus that came from outside (a screen reader, a script): tell the controls.
+        // Focus that came from outside (a screen reader, a script, the browser's own Tab): tell the controls.
         if (!settingFocus && window.trial.state.focus !== node.id) {
           shell.action(node.id, 'focus');
           draw();
@@ -68,30 +73,32 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
     return el;
   }
 
-  // Makes the mirror what the tree says, and the DOM's focus what the tree's is.
-  function sync(state) {
+  // Makes the mirror what the tree says. With `focus`, also makes the DOM's focus what the tree's is.
+  function sync(state, focus = true) {
     const byId = new Map(state.nodes.map((n) => [n.id, n]));
     const seen = new Set();
+    const set = (el, name, value) => { if (el.getAttribute(name) !== value) el.setAttribute(name, value); };
     const place = (id, parent, origin) => {
       const node = byId.get(id);
       if (!node) return;
       let host = parent, at = origin;
-      if (ARIA[node.role]) {
+      if (node.role in ARIA) {
         const el = elementFor(node);
         seen.add(id);
         if (el.parentElement !== parent) parent.appendChild(el);
-        // Every string goes in as an attribute or as text, never as markup.
-        if (node.role === 'Label') el.textContent = node.value ?? node.label ?? '';
-        else if (node.label != null) el.setAttribute('aria-label', node.label);
-        if (node.checked != null) el.setAttribute('aria-checked', String(node.checked));
-        if (node.disabled) el.setAttribute('aria-disabled', 'true'); else el.removeAttribute('aria-disabled');
-        if (node.bounds) {
-          const [x0, y0, x1, y1] = node.bounds;
-          Object.assign(el.style, { left: `${x0 - origin[0]}px`, top: `${y0 - origin[1]}px`,
-            width: `${x1 - x0}px`, height: `${y1 - y0}px` });
-          at = [x0, y0];
-        }
-        // One element in the tab order: the one the controls say has the focus, or the first that can take it.
+        // Every string goes in as an attribute or as text, never as markup, and only when it changed.
+        if (node.role === 'Label') {
+          const text = node.value ?? node.label ?? '';
+          if (el.textContent !== text) el.textContent = text;
+        } else if (node.label != null) set(el, 'aria-label', node.label);
+        if (node.checked != null) set(el, 'aria-checked', String(node.checked));
+        if (node.disabled) set(el, 'aria-disabled', 'true'); else el.removeAttribute('aria-disabled');
+        // Where the control is drawn. A node that gives no bounds (egui's groups do not) takes no room, so
+        // that it lies over nothing; the elements inside it are still placed, and nothing clips them.
+        const [x0, y0, x1, y1] = node.bounds ?? [origin[0], origin[1], origin[0], origin[1]];
+        Object.assign(el.style, { left: `${x0 - origin[0]}px`, top: `${y0 - origin[1]}px`,
+          width: `${x1 - x0}px`, height: `${y1 - y0}px` });
+        at = [x0, y0];
         if (node.actions.includes('focus')) el.tabIndex = node.id === state.focus ? 0 : -1;
         if (node.role === 'TextInput' && !composing) {
           // The field's text, for a screen reader. Never rewritten while text is being composed.
@@ -104,6 +111,7 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
     };
     place(state.root, mirror, [0, 0]);
     for (const [id, el] of elements) if (!seen.has(id)) { el.remove(); elements.delete(id); }
+    if (!focus) return;
     const focused = elements.get(state.focus);
     if (focused && document.activeElement !== focused) {
       settingFocus = true;
@@ -112,17 +120,24 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
     } else if (!focused && mirror.contains(document.activeElement)) {
       document.activeElement.blur();
     }
+    // With no focus in the controls, one element still takes the browser's Tab: a checked one (the chosen
+    // tool), or failing that the first that can take the focus.
     if (!mirror.querySelector('[tabindex="0"]')) {
-      const first = mirror.querySelector('[tabindex="-1"]');
+      const first = mirror.querySelector('[aria-checked="true"][tabindex="-1"]') ?? mirror.querySelector('[tabindex="-1"]');
       if (first) first.tabIndex = 0;
     }
   }
 
-  function draw() {
+  // Runs a frame and takes its state and commands; does not touch the mirror.
+  function step() {
     const state = JSON.parse(shell.frame());
     window.trial.state = state;
     for (const c of state.commands) { window.trial.commands.push(c); say(c); }
-    sync(state);
+    return state;
+  }
+
+  function draw() {
+    sync(step());
   }
 
   try {
@@ -130,7 +145,7 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
     await m.default();
     if (!navigator.gpu) throw new Error('this browser has no WebGPU, which the page draws with');
     shell = await m.Shell.create(candidate, canvas, scale);
-    draw(); draw();
+    draw();
 
     const at = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
     canvas.addEventListener('pointermove', (e) => { shell.pointer(0, ...at(e)); draw(); });
@@ -143,19 +158,35 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const inField = document.activeElement instanceof HTMLTextAreaElement;
       const inMirror = mirror.contains(document.activeElement);
-      // Tab from the page's body goes to the controls, which say where their focus starts (the chosen tool, for
+      // Tab from the page's body (nothing has the focus) goes to the controls, which say where their focus starts (the chosen tool, for
       // one that follows the radio group's pattern). From anywhere else the keys are not theirs.
       const entering = !inMirror && e.key === 'Tab' && document.activeElement === document.body;
       if (!inMirror && !entering) return;
       // In the field, a key that makes a character is left to `beforeinput`.
       if (inField && e.key.length === 1 && e.key !== ' ') return;
       const before = window.trial.state.focus;
-      if (shell.key(e.key, e.shiftKey)) {
-        draw();
-        // Tab past the last control: the focus leaves the controls, and the browser takes the key.
-        if (e.key === 'Tab' && window.trial.state.focus === window.trial.state.root && before !== window.trial.state.root) return;
-        e.preventDefault();
+      if (!shell.key(e.key, e.shiftKey)) return;
+      let state = step();
+      if (e.key === 'Tab' && inMirror && state.focus !== state.root && before !== state.root) {
+        // A toolkit that cycles its focus (egui does) never lets go of it, which would trap the keyboard in the
+        // controls. If Tab took the focus the wrong way round the controls, the shell makes them let go.
+        const [from, to] = [elements.get(before), elements.get(state.focus)];
+        const forward = from && to && (from.compareDocumentPosition(to) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+        if (from && to && from !== to && forward === e.shiftKey) {
+          window.trial.events.push('the shell released a focus that wrapped');
+          shell.key('Escape', false);
+          state = step();
+        }
       }
+      if (e.key === 'Tab' && inMirror && state.focus === state.root && before !== state.root) {
+        // Tab past the first or the last control: the controls have let go of the focus, and the browser takes
+        // the key from where the DOM's focus still is. The mirror catches up once it has gone.
+        sync(state, false);
+        setTimeout(() => sync(window.trial.state), 0);
+        return;
+      }
+      sync(state);
+      e.preventDefault();
     });
 
     // The text field: the textarea's own events, as section 07 has them.
@@ -170,15 +201,20 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
       if (e.data) shell.commit(e.data); else shell.cancel_composition();
       draw();
     });
+    // The kinds of `beforeinput` the trial does something with. Every other kind (deleting a word, undo,
+    // formatting) is cancelled and nothing is done.
+    const INSERTS = ['insertText', 'insertFromPaste', 'insertFromDrop', 'insertReplacementText'];
     mirror.addEventListener('beforeinput', (e) => {
       if (!(e.target instanceof HTMLTextAreaElement)) return;
       window.trial.events.push(`beforeinput ${e.inputType} ${JSON.stringify(e.data)}`);
       if (e.isComposing || e.inputType.startsWith('insertComposition') || e.inputType === 'insertFromComposition') return;
-      // Everything else is cancelled and done by the controls, so the textarea never edits itself.
+      // The textarea never edits itself: the controls do, and the mirror shows the result.
       e.preventDefault();
-      if (e.inputType === 'insertText' && e.data) shell.commit(e.data);
-      else if (e.inputType === 'insertFromPaste' && e.dataTransfer) shell.commit(e.dataTransfer.getData('text/plain'));
-      else if (e.inputType === 'deleteContentBackward') shell.key('Backspace', false);
+      if (INSERTS.includes(e.inputType)) {
+        // In a textarea the text is in `data`; `dataTransfer` is for rich fields.
+        const text = e.data ?? e.dataTransfer?.getData('text/plain') ?? '';
+        if (text) shell.commit(text);
+      } else if (e.inputType === 'deleteContentBackward') shell.key('Backspace', false);
       else if (e.inputType === 'deleteContentForward') shell.key('Delete', false);
       else if (e.inputType === 'insertLineBreak') shell.key('Enter', false);
       draw();
@@ -189,3 +225,4 @@ The toolbar below is drawn on a canvas; under it is a mirror of real elements fo
     document.title = 'controls-web: failed';
   }
 </script>
+</html>

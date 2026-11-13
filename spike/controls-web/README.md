@@ -16,9 +16,9 @@ python3 -m http.server 8766 --bind 127.0.0.1 --directory spike/controls-web/www 
 
 Then `http://127.0.0.1:8766/?candidate=own` or `?candidate=egui`, in a browser with WebGPU.
 
-`check.mjs` opens Chrome in a window of its own with an empty profile, which it deletes. It presses real keys,
-runs an input method's composition and reads the accessibility tree through Chrome's debugging protocol, and
-exits with 1 if a check fails. Its `result:` lines are measurements: the candidates differ there.
+`check.mjs` opens Chrome in a window of its own with an empty profile, which it deletes. Through Chrome's
+debugging protocol it sends keys and text by the browser's own input path, runs an input method's composition
+and reads the accessibility tree; it exits with 1 if a check fails. No person presses anything. Its `result:` lines are measurements: the candidates differ there.
 
 ## What a person should still try
 
@@ -30,9 +30,12 @@ exits with 1 if a check fails. Its `result:` lines are measurements: the candida
 2. Does activating a tool from the screen reader (VoiceOver: Control-Option-Space) change the tool? The page
    prints `SetTool(...)` under the toolbar.
 3. Is the hex field read as an edit field named "Hex colour" with its value, and are typed characters echoed?
+   (It is a textarea, so a reader may call it multi-line.) Is the zoom figure read when you move to it, and
+   not after every key?
 4. With a touch screen reader (VoiceOver on iOS, TalkBack): can the controls be found by touch? The mirror's
    elements lie over the canvas and take no pointer; whether explore-by-touch reaches them is not known.
-5. In Safari and Firefox: does the page come up at all (it draws with WebGPU), and do a dead key (Option-E then
+5. Press Escape in the controls: the focus goes to nothing until the next Tab. Is that what you expect?
+6. In Safari and Firefox: does the page come up at all (it draws with WebGPU), and do a dead key (Option-E then
    E on a Mac) and a Japanese or Chinese input method work in the field?
 
 ## What is here
@@ -42,7 +45,8 @@ exits with 1 if a check fails. Its `result:` lines are measurements: the candida
   (`paint.rs`) and the candidate and toy document (`shell.rs`) are `spike/controls-window`'s own files.
 - `www/index.html`: the web shell, in the page so that it can be read. The mirror: one element for each
   control, with its ARIA role, name and state, placed where the control is drawn, not seen and taking no
-  pointer. The text field's element is a real textarea. The DOM's focus follows the controls' focus.
+  pointer. The text field's element is a real textarea. The DOM's focus follows the controls' focus, and the
+  shell lets it out past either end.
 - `check.mjs`: the checks. `build.sh`: the build; `www/pkg` is its output and is not kept in git.
 
 CI type-checks and lints the module for wasm32. It cannot run the page: there is no browser with a GPU there.

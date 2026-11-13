@@ -11,7 +11,6 @@
 //! has the focus. A screen reader and a keyboard are then a person's to try: see `README.md` here.
 
 mod paint;
-#[path = "shell.rs"]
 mod shell;
 
 use std::sync::Arc;
@@ -259,18 +258,17 @@ impl App {
         let (Some(candidate), Some(shown)) = (&mut self.candidate, &mut self.shown) else {
             return;
         };
-        // Two frames: egui answers an event in the frame after it, and the model may change with the answer.
+        // Two frames, always: egui gives some answers (a command, a focus moved by Shift and Tab) only in the
+        // frame after the one that took the event, and nothing would draw that frame until the next event.
         let mut commands = Vec::new();
-        let mut frame = candidate
+        candidate
             .controls()
             .frame(&self.document.model, &mut commands);
-        if !commands.is_empty() {
-            self.document.apply(&mut commands);
-            frame = candidate
-                .controls()
-                .frame(&self.document.model, &mut commands);
-            self.document.apply(&mut commands);
-        }
+        self.document.apply(&mut commands);
+        let frame = candidate
+            .controls()
+            .frame(&self.document.model, &mut commands);
+        self.document.apply(&mut commands);
 
         // The platform's text input: on while the field has the focus, with its window at the caret.
         let wants = frame.text_input.is_some();
