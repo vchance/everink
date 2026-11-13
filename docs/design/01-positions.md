@@ -472,7 +472,9 @@ which is the worst case, for geometry at the edge of the window and well off scr
 visible area, within `V/2`) the spacing is under 0.001 pixel.
 
 **Cost (measured in the spike, `../spike/results-1-positions.md`; Apple M4, native aarch64, medians of 51 runs).**
-These are one machine's figures. A slower machine, and WebAssembly (not yet measured), will be slower.
+These are one machine's figures. A slower machine will be slower. WebAssembly was measured for the cut only (see
+"Cutting large shapes down to the piece near the view"); the re-base and per-frame figures below were not re-run on
+wasm32.
 
 | Quantity | Estimated before the spike | Measured |
 |---|---|---|
@@ -569,16 +571,21 @@ Allowed in `geometry`: `+ - * /` on f32 and f64, `sqrt`, `abs`, `neg`, `copysign
 
 Not allowed: `mul_add` (explicitly fused: correct in IEEE terms, but wasm has no fused instruction outside relaxed
 SIMD, so it would fall back to a slow software routine on some targets; the point is to keep the set of operations
-small), `sin`, `cos`, `tan`, `atan2`, `exp`, `ln`, `powf`, `powi`, `cbrt`, `hypot` (platform libm may differ native
-vs wasm), `min`/`max`/`clamp` on floats that may be zero (the sign of a zero result is not specified in the same way
-across targets; use `if a < b`), any relaxed-SIMD instruction, and `-ffast-math` style flags (Rust has none by
-default). Auto-vectorization must not use relaxed SIMD: the build never enables the `relaxed-simd` target feature in
+small), `sin`, `cos`, `tan`, `atan2`, `exp`, `ln`, `log2`, `powf`, `powi`, `cbrt`, `hypot` (platform libm may differ
+native vs wasm), `min`/`max`/`clamp` on floats that may be zero (the sign of a zero result is not specified in the
+same way across targets; use `if a < b`), any relaxed-SIMD instruction, and `-ffast-math` style flags (Rust has none
+by default). Auto-vectorization must not use relaxed SIMD: the build never enables the `relaxed-simd` target feature in
 `everink-core`.
 
 - *FMA contraction.* Rust does not fuse `a * b + c` on its own as far as the RFC implies (it says strict IEEE
   semantics preclude such transformations, without stating it as a rule); I could not find a statement that a Rust
   compiler never contracts. The CI test of equal output on x86-64 (with FMA hardware), aarch64 (FMA native) and
-  wasm32 catches a change. Marked **unverified** as a guarantee.
+  wasm32 catches a change. **Measured** (`../spike/results-3a-wasm-outlines-cut.md`): with this toolchain no fused
+  operation was seen. The golden files written on aarch64, where the fused operation is always available, pass on
+  wasm32 and on x86-64 built without the feature, which cannot fuse; CI also runs both golden files on x86-64 with
+  `-C target-feature=+fma`, optimised and not, and they pass. That is a test and not a guarantee: a later compiler
+  could change it, and these runs are what would notice. The spike's `clippy.toml` also refuses `log2` (the camera's
+  display figure used it; it is now marked as outside shared geometry).
 - *NaN and infinity.* Nothing that is NaN or infinite may enter. Every float entering from outside (file, wire, tool
   input) is checked `is_finite()` at the boundary and refused otherwise. Inside `geometry`, inputs are finite and
   bounded (|x| < 2^40, and either 0 or |x| >= 2^-60) so no operation can produce NaN or infinity. The last step
@@ -637,24 +644,66 @@ The flatness shortcut halves the depth: a smooth piece of size `s` deviates from
 (for curve size `S`), so the recursion stops at `s ~ sqrt(S w 2^-24)` instead of `s ~ w`, which is about
 `5 Δ + 12` bisections instead of `10 Δ`.
 
+**As built in the spike** (`../spike/results-3a-wasm-outlines-cut.md`), which departs in four places. A straight
+piece is halved and not clipped to the window, because clipping (Liang-Barsky) needs a division of long numbers
+and halving needs an addition and a shift; so every level costs ten halvings (11 for 1 level, 99 for 10, 1,003 for
+100), not five, and the `5 Δ + 12` count is for the clipping, which was not tried. A far piece is pulled onto a box
+sixteen windows across and kept as a chord, so that a cut shape stays closed and the renderer needs no polygon
+clipping for fills (in place of Sutherland-Hodgman, Step 3). The window and the pieces are relative to the window's
+centre and not to `R`; the caller adds the small offset. And `cut_quad` takes one window, the expanded one, and keeps
+pieces up to four of those across. Quadratic curves only; cubics are not built.
+
 **Step 3: fills.** Pieces replaced by chords keep the outline closed, so a fill's inside is still correct inside the
 window. If every piece ends outside `W'`, the chord polygon is clipped to `W''` with Sutherland-Hodgman, which
 returns either the whole rectangle (window inside the shape) or nothing. The same result answers "is the camera
 inside this shape".
 
-**Cost (estimate).** The number of bisection nodes is about 2 per depth step. The width of numbers is about `10 d`
-bits at the start and shrinks. For `Δ = 3` everything is `i128`: tens of nanoseconds per segment. For `Δ = 100`
-(1,000 bisections, average 8 words, 8 coordinates each): about 64,000 word operations, 30 to 60 microseconds per
-curve. It grows as `Δ^2`: at `Δ = 2,000` (the cap's worst case) about 15 milliseconds per curve. Results are cached
-by `(object, generation)` and recomputed only on re-base or when the object changes. A faster algorithm exists
-(find the parameter of the window center by Newton iteration in big integers, then re-expand the cubic around that
-parameter, the same idea as perturbation theory); it is **not** specified because its cost is not needed yet and
-its root-isolation cases (several crossings, cusps) are harder to make robust.
+**Cost (measured in the spike, `../spike/results-3a-wasm-outlines-cut.md`; Apple M4, `cargo run --release --example
+bench_cut`, native and the same binary on wasm32 under Node 26).** For each row, 200 random curves that pass through
+the window, each cut five times and its fastest kept; the median over the 200. A curve `N` levels above is about
+`1024^N` times the window across. "Worst" is a curve that crosses exactly at its middle, so both halves reach the
+window.
+
+| Levels above the view (`Δ`) | Halvings | Native | Native, worst | wasm32 | Estimated before the spike |
+|---|---|---|---|---|---|
+| 1 | 11 | 1.8 µs | 2.9 µs | 6.6 µs | |
+| 3 | 35 | 4.7 µs | 8.1 µs | 17 µs | "tens of nanoseconds per segment" |
+| 10 | 99 | 20 µs | 37 µs | 55 µs | |
+| 30 | 299 | 96 µs | 195 µs | 263 µs | |
+| 100 | 1,003 | 372 µs | 701 µs | 1,122 µs | 30 to 60 µs |
+| 300 | 3,003 | 1.6 ms | 2.9 ms | 5.0 ms | |
+| 1,000 | 10,003 | 11 ms | 19 ms | 42 ms | about 15 ms at `Δ = 2,000` |
+
+- **The estimates were low by 6 to 12 times at `Δ = 100`.** Two reasons: the halvings are ten a level (see "As
+  built" above; the design counted both 1,000 and `5 Δ + 12` for the same case), and one halving of a long number
+  costs about 0.37 µs at `Δ = 100`, which the estimate put far lower. The code is not tuned: every addition and
+  shift makes a new number. Comparing two long coordinates without copying them made the cut about five times faster
+  (1.75 ms to 0.37 ms at `Δ = 100`); taking a piece's bounds without copying changed little; in-place arithmetic was
+  not tried.
+- **The figure at the depth cap is close, but it was measured at 1,000 levels, not 2,000.** The cut costs 11 to 19 ms
+  there natively and 42 ms on wasm32. The cost at 2,000 levels was not measured.
+- A curve that misses the window costs nothing to speak of (its box is compared with the window once). The cut gives
+  about seven pieces for a curve through the window, at every depth.
+- **wasm32 is about three to four times slower than native** for this arithmetic (3 times at 100 levels, 4 at 1,000)
+  under Node 26, which is the engine of Chrome and not a browser. The stroke outline's floats are 2.7 times slower.
+  The wasm32 figures were taken with the machine less quiet than the native ones, and their spread is wider.
+- **Against the 2 ms budget** (native, ordinary case): 5 curves a frame at 100 levels, 1 at 300, and at 1,000 levels
+  one curve takes five frames' worth. On wasm32, 1 or 2 at 100 levels and none at 300.
+
+Results are cached by `(object, generation)` and recomputed only on re-base or when the object changes. A faster
+algorithm exists (find the parameter of the window center by Newton iteration in big integers, then re-expand the
+cubic around that parameter, the same idea as perturbation theory); it is **not** specified because its cost is not
+needed yet and its root-isolation cases (several crossings, cusps) are harder to make robust.
 
 **Budget.** The cut runs in a work queue with a budget of 2 ms per frame. An object whose cut is not finished is
 drawn from its previous cut if one exists, and otherwise not drawn and marked "pending" (the shell may show a
 placeholder). This keeps a hostile document (1,000 enormous curves that all cross the window) from freezing the
 client; see Failure modes.
+
+**The budget is spent per halving, not per object** (measured, see "Cost"). One curve does not fit in a frame from
+about 300 levels up, and at 1,000 levels it takes 11 to 19 ms natively and 42 ms on wasm32, so a queue that finishes
+an object before it stops would overrun. The cut of one curve has to be able to stop and go on in the next frame. The
+spike keeps a curve's unfinished pieces on an explicit stack, which makes that a small change; it is not built.
 
 ### Re-levelling
 
@@ -887,7 +936,8 @@ pub struct Scale { pub level: i32, pub z: f64 }   // total = z * 1024^level pixe
 doublings, 3,600 levels. That would cost a position 9 KB and, since a cut grows with the square of the level
 difference, a cut of about 50 ms per curve (15 ms at 2,000 levels) (and 3,600 levels of nothing to look at). I
 choose **1,024 levels either way** as a default: 10,240 doublings, which is one hour of hand-zooming at about 2.8
-doublings per second, but also bounded: a position is at most 3.1 KB and the worst cut costs about 15 ms (budgeted).
+doublings per second, but also bounded: a position is at most 3.1 KB and the worst cut costs about 15 ms (budgeted;
+measured at 1,000 levels: 11 to 19 ms natively, 42 ms on wasm32, see "Cost" of the cut).
 `max_cell_bits = 12,288` allows cell values up to 2^12288: 1,024 levels (10,240 bits) plus 2,048 bits of horizontal
 distance. The server refuses a placement or view beyond the cap, and `check_cap_bytes` decides this on the raw bytes
 before any number is built; the client camera stops at the cap (a gentle "this is as deep as this surface goes"
@@ -1057,7 +1107,7 @@ column says otherwise.
 | Failure | What happens |
 |---|---|
 | Hostile position: level or cell beyond the cap, non-canonical bytes | Decoder refuses; server refuses the change and counts it against the sender's rate limit (08). |
-| Hostile cost: many huge curves whose `Δ` is large, all crossing the window | The cut queue has a per-frame budget; items past it draw from the previous cut or are marked pending. Also: the server may limit how many objects with `Δ` above a threshold it sends per view (03/08). The cap bounds the worst case at about 15 ms per curve. |
+| Hostile cost: many huge curves whose `Δ` is large, all crossing the window | The cut queue has a per-frame budget; items past it draw from the previous cut or are marked pending. Also: the server may limit how many objects with `Δ` above a threshold it sends per view (03/08). The cap bounds the worst case: measured 11 to 19 ms per curve at 1,000 levels natively and 42 ms on wasm32 (not measured at 2,000), so one curve's cut has to be able to stop part-way (see "Budget"). |
 | NaN or infinity from outside | Refused at the boundary (`is_finite`). Stored data that predates a rule is validated on load; an invalid object is kept in the document but not drawn, and reported. |
 | `i128` fast path overflow | Fast path is chosen by a bit-length check before arithmetic; the path is tested at the boundary values; on any doubt use the big path. |
 | Camera flapping between levels | Hysteresis (0.5 to 2048). |
@@ -1084,12 +1134,12 @@ column says otherwise.
 | Zoom keeps the focus point | `zoom_about` then project the focus point: error below 1e-6 pixel at every depth tested up to 1,024 levels. In the spike, one zoom step keeps the point under the pointer to within a millionth of a pixel at depths 0 to 1,000. |
 | Re-base does not accumulate error | One million random pans; compare every prepared origin with a fresh exact conversion: difference below 1e-9 of a pixel. |
 | Camera-relative values are accurate | Random objects at levels -3 to 3 and at depth 1 to 1,000 levels: projected position vs reference rational arithmetic within 0.01 pixel in the window. |
-| Cut is faithful | For random curves and `Δ` from 1 to 200: compare the prepared pieces with a reference de Casteljau in rationals with 4,000 bits: control points within 2^-38 of the window side; winding number at 10,000 sample points inside the window identical. |
+| Cut is faithful | For random curves and `Δ` from 1 to 200: compare the prepared pieces with a reference de Casteljau in rationals with 4,000 bits: control points within 2^-38 of the window side; winding number at 10,000 sample points inside the window identical. The spike did not build the rational reference; its cut tests check against the curve's construction instead (a curve built to pass through a point of the window, 1 to 500 levels above, is cut to pieces through that point to within a millionth of a unit; a triangle up to 500 levels larger than the window still winds once round the window's centre when the window is inside it) (`../spike/results-3a-wasm-outlines-cut.md`). |
 | Fill is correct when the window is entirely inside | Shapes with the camera inside at `Δ` up to 500: coverage of the window is full; just outside: empty. |
 | Chord replacement preserves coverage | Randomized shapes: render coverage by sampled winding with and without replacement; equal in the window. |
 | Hit testing across levels | Random pointers over scenes with objects whose levels differ from the camera's by 0, 1, 5 and 50 in either direction: result equals the brute-force reference using exact arithmetic. |
-| Determinism, native vs wasm | Golden file: 10,000 random objects (all kinds) to lattice outlines and bounds, checked in on x86-64, aarch64 and wasm32 (wasmtime and a browser engine in CI); all compare bit for bit. |
-| Forbidden float operations are not used | `clippy.toml` `disallowed-methods` for `mul_add`, `sin`, `cos`, `tan`, `atan2`, `exp`, `ln`, `powf`, `powi`, `hypot`, `f64::min`, `f64::max`, `f64::clamp` in `everink-core::geometry`; CI also checks the build features exclude `relaxed-simd`. |
+| Determinism, native vs wasm | Golden file: 10,000 random objects (all kinds) to lattice outlines and bounds, checked in on x86-64, aarch64 and wasm32 (wasmtime and a browser engine in CI); all compare bit for bit. In the spike: the positions file (1,988 lines) and an outlines file (1,000 strokes), written on aarch64, pass on x86-64 and on wasm32 run under Node's WASI (V8, Chrome's engine; no browser was driven for this check). |
+| Forbidden float operations are not used | `clippy.toml` `disallowed-methods` for `mul_add`, `sin`, `cos`, `tan`, `atan2`, `exp`, `ln`, `log2`, `cbrt`, `powf`, `powi`, `hypot`, `f64::min`, `f64::max`, `f64::clamp` in `everink-core::geometry`; CI also checks the build features exclude `relaxed-simd`. |
 | NaN and infinity never enter | Fuzz the codec and all tool entry points with NaN, inf, subnormals and huge numbers; none reach shared state. |
 | Re-level preserves the shape | For random objects and `k` in [-50, 50]: world-space outline before and after equal exactly for finer, within 2^-54 new unit for coarser. |
 | `compose` is exact and deterministic | Differential test against rational arithmetic: world anchor equals the exact value floored once to the child lattice; `Lw` is bit-identical on x86-64, aarch64 and wasm32; chains of depth 1 to 16 with level spans up to 8. |
@@ -1225,26 +1275,36 @@ Fetched or searched on 2026-11-11 unless noted.
 - dashu-int docs: https://docs.rs/dashu-int/latest/dashu_int/
 
 - Spike results: `../spike/results-1-positions.md` (cost, golden file, the zoom finding),
-  `../spike/results-2a-object-map.md` (the cost of depth in memory and in state bytes).
+  `../spike/results-2a-object-map.md` (the cost of depth in memory and in state bytes),
+  `../spike/results-3a-wasm-outlines-cut.md` (wasm32, the outline golden file, the cut's cost).
 
 **Settled by the spike.**
 - Timing estimates for subtraction, re-base and per-frame update: measured on an Apple M4 (and a CI runner for two
   figures), `../spike/results-1-positions.md`. Several were off by a factor of 3 or more; see "Cost".
-- Positions are the same on aarch64 and x86-64: one golden file of 1,988 lines passes byte for byte on both
-  (same file). wasm32 is not yet run.
+- Positions are the same on aarch64, x86-64 and wasm32: one golden file of 1,988 lines passes byte for byte on all
+  three (`../spike/results-1-positions.md`, `../spike/results-3a-wasm-outlines-cut.md`). The wasm32 run is
+  `wasm32-wasip1` under Node 26, not a browser; other engines (Firefox, Safari) were not run.
+- Stroke outlines are bit-identical on aarch64, x86-64 and wasm32: one golden file of 1,000 strokes written on
+  aarch64 passes on the other two (`../spike/results-3a-wasm-outlines-cut.md`).
+- No fused multiply-add was seen from this toolchain, on aarch64 or on x86-64 with the feature on (see "Outline
+  geometry and determinism"). A test and not a guarantee.
+- Timing of the cut: measured, native and wasm32 (see "Cutting large shapes down to the piece near the view").
 
 **Unverified claims.**
 - Pad++, Jazz, Piccolo and Endless Paper internals and depth limits (papers unreadable; store listing says nothing
   about representation).
 - Figma's zoom limits and the -65,500 to +65,500 canvas (forum report only).
 - Outerra and Star Citizen details beyond the quoted remarks; the exact KSP floating-origin mechanism.
-- That Rust never contracts `a * b + c` into a fused operation (the RFC implies it; I found no explicit rule).
+- That Rust never contracts `a * b + c` into a fused operation, as a guarantee (the RFC implies it; I found no
+  explicit rule; the spike saw none, which is a test of this toolchain only, see "Settled by the spike").
 - Whether native and wasm32 `sin`, `exp` and similar functions give identical bits (assumed not).
 - Flush-to-zero of subnormals on some 32-bit ARM NEON configurations.
 - `num-bigint` 0.5.1 `no_std` support; wasmtime's license.
-- Timing estimates for the cut: these are my estimates from operation counts, not measurements (those for
-  big-integer subtraction, re-base and per-frame update are settled, above).
+- The cut's timing is settled (above). Not measured: the cut at 2,000 levels, cubic curves, in-place arithmetic,
+  clipping a straight piece in one step (the design's `5 Δ + 12` count), and the re-base and per-frame figures on
+  wasm32.
 - The claim that the van Wijk path keeps the interpolated-center error under a thousandth of a pixel (follows from
   the path shape; to be proven by the animation test).
 - The accuracy bound for the cut (2^-38 of the window side): derived by hand from the rounding rule, to be confirmed
-  by the cut test.
+  by the cut test. The spike's tests check the cut against the curve's construction, not against 4,000-bit
+  rationals, so the bound is still not confirmed.

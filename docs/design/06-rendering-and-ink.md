@@ -224,11 +224,15 @@ makes sense. Nothing in this design depends on it until it has been measured.
   live-ink canvas and the stroke modeler are built to the design below, but the per-device latency measurements and
   prediction tuning wait. Overview pictures stay in build step 6.
 - **Controls toolkit (not yet chosen).** The spike builds the same toolbar twice, with Everink's own small toolkit
-  and with egui. Either draws through the scene API below, so the choice does not change this section.
+  and with egui. Everink's own toolkit draws through the scene API below. egui does not: it gives triangles that
+  `egui-wgpu` draws into a host render pass (section 07), so with egui the controls layer of the compose pass is that
+  pass and not a `SceneFragment`.
 - **Merge model (owner decision, 2026-11-12).** Everink's own server-ordered object map, with a CRDT library only
   for text. Nothing in this section depends on it.
 
-**Spike plan, rendering part.** Measure first: the tile raster rate of `vello_gpu` on 10,000 objects (see the
+**Spike plan, rendering part.** (Slices 3b and 3c have measured the tile raster rate and the cached view; see
+"Performance budget per frame". The cost of moving many lifted objects and the pen path are still to be measured.)
+Measure first: the tile raster rate of `vello_gpu` on 10,000 objects (see the
 performance budget); the cost of moving many lifted objects; and the stroke path from pen sample to GPU submit. The
 further candidate the owner asked to have considered is evaluated in the same spike behind the `Backend` trait,
 with its details kept outside this repository; nothing depends on it until it has been measured.
@@ -301,12 +305,14 @@ A frame runs these stages. Stages 1 to 4 run only when the camera or the visible
 4. **Dirty tiles.** Compare the needed tiles (below) with the cache. A tile is *missing*, *stale* (an object in it
    changed) or *ready*. Missing and stale tiles go on a priority queue, nearest the view center first.
 5. **Tile raster, budgeted.** Take tiles from the queue until the budget for the frame (4 ms of CPU, to be tuned) is
-   spent. For each tile, build a `Scene` from the objects touching it (cached encoded paths, below) and call
+   spent. A tile cannot stop half-way in the spike, so a tile that takes longer than the box overruns it (see "Tile
+   cache, measured"). For each tile, build a `Scene` from the objects touching it (cached encoded paths, below) and call
    `Backend::render_scene`. A tile's origin relative to `R` is one small exact subtraction per tile, done by 01's
    helper when the tile is rendered, so the tile's scene holds only small numbers.
 6. **Compose.** One GPU pass draws, back to front: tile quads (ready tiles at their exact placement; stale or
    other-scale tiles scaled), live (non-cached) objects, then the live ink, the overlay and the controls. The
-   controls arrive as a `SceneFragment` from `everink-ui` (see [Scene API](#scene-api-for-the-controls)).
+   controls arrive as a `SceneFragment` from `everink-ui` (see [Scene API](#scene-api-for-the-controls)); with
+   egui they would arrive as its triangles and a host render pass (see "Controls toolkit" above and section 07).
 7. **Present.**
 
 **The tile cache.** A *raster tile* is 512 x 512 device pixels of premultiplied RGBA8 (1 MiB). Section 01 holds the
@@ -369,8 +375,36 @@ when its `Xform` changes). Per tile, the object is emitted with a transform only
 `render_scene`, which flattens to a tolerance of 0.25 px at the tile's own scale (so deep zoom stays smooth at any
 depth). A `Cut` object is emitted as the given segments; only true edges are stroked.
 
-**Static scene cost.** A static, fully cached view costs one compose pass of about 20 textured quads: well under 1
+**Static scene cost.** A static, fully cached view costs one compose pass of about 40 textured quads at 3840 x 2160: well under 1
 ms of GPU time and no CPU path work. When nothing changes and no animation runs, no frame is produced at all.
+**Measured** (`../spike/results-3c-browser.md`; Chrome 157, Apple M4): a 3840 x 2160 canvas composed from 40 cached
+tiles on every frame while it pans held a frame every 16.7 ms on both WebGPU and WebGL2, with no frame more than
+half a frame late in seven runs of 300 frames on WebGPU and one (the first) in three runs on WebGL2. The page's
+thread took a median of 0.2 to 0.8 ms a frame (5.2 ms at most). The GPU's own time was not measured apart; that no
+frame was late shows it fits 16.7 ms. A canvas shown at its full size on a 4K display was not measured, and the pan
+moved the same 40 tiles (a real pan brings new ones, which have to be drawn: see "Tile cache, measured").
+
+**Tile cache, measured** (`../spike/results-3b-renderer.md`, `../spike/results-3c-browser.md`).
+- **The compose pass can be the renderer's own image drawing.** In the spike a second scene the size of the view
+  draws each cached tile texture as an image, moved by the pan offset, using `vello_gpu`'s support for textures it does
+  not own, on both WebGPU and WebGL2. On WebGL2 a tile texture's first row is the bottom of the image, so the compose
+  scene flips each tile. The canvas composed on WebGL2 differed from the tile drawn directly on 0 pixels; the one
+  composed on WebGPU was not read back.
+- **The wait for the GPU is once for a batch of tiles, not after each.** Natively the trial waited after every tile and
+  saw 23 to 63 ms a view of waiting; in the browser it waited once after all 40 tiles were sent and found 0.5 to 3.0
+  ms left (WebGPU 0.5 to 1.0, WebGL2 1.5 to 3.0), because the GPU works while the page prepares the next tile.
+- **A tile of about 330 strokes does not fit the 4 ms box for any outline but the single path.** One tile with the
+  design's single-path outline takes 1.5 ms natively and 2.0 ms in WebAssembly with SIMD (2 tiles in the box); with
+  the union of discs and bands 10 ms and 13.5 ms (no whole tile fits); without SIMD 4.6 to 5.3 ms for the single path
+  and 31 to 34 ms for the union. Redrawing the whole view at 4 ms a frame takes 20 frames (0.33 s) for the single path
+  and 135 (2.3 s) for the union, in the browser with SIMD. A pan that brings one new column of five tiles into view
+  costs 10 ms with the single path and 68 ms with the union. Tiles prepared one at a time cost about 5% more than one
+  scene for the view, because a stroke that crosses a tile edge is prepared once for each tile.
+- **A tile's raster cannot yet stop and go on.** Either it can, or tiles are smaller where they are dense; neither is
+  designed or built, and which to do is not decided.
+- **Not built or measured:** invalidation and eviction (the cache was 40 textures that never change), several levels
+  of tiles, zoom with cached tiles drawn scaled while new ones are made (the "soft for four frames"), and redrawing off
+  the page's thread (a worker).
 
 ### Frame pacing
 
@@ -396,7 +430,8 @@ Starting budgets, shared by tiles and image textures and enforced by LRU evictio
 | Mobile (iPad, Android) | 128 MiB | |
 
 A full-screen 3840 x 2160 view needs about 4.5 x 2.5 = 12 to 20 tiles per octave, 40 MiB with a second octave cached
-for zooming. Image textures (decoded in section 05) are counted against the same budget; each image keeps one
+for zooming. (The spike counted 40 tiles for that view, 8 by 5 of 512 pixels, so one octave is 40 MiB and two about
+80 MiB; the budgets below were not re-derived.) Image textures (decoded in section 05) are counted against the same budget; each image keeps one
 texture at the resolution the zoom needs (section 05 supplies the mip levels, section 06 chooses the one for the
 current on-screen size with `steppedScreenScale` logic like tldraw's), and an image bigger than the device's maximum
 texture size is drawn in tiles. WebGPU's default 2D texture limit is 8192 pixels per side (spec default; read the
@@ -409,11 +444,24 @@ reported as a device problem (see failure modes).
 At startup the shell asks for a backend in this order, and `Backend::capabilities()` reports the result.
 
 1. **`vello_gpu` on wgpu**, native (Vulkan, Metal, DX12) and in browsers with WebGPU.
-2. **`vello_gpu` WebGL2**, in browsers without WebGPU. Cargo feature `webgl`.
+2. **`vello_gpu` WebGL2**, in browsers without WebGPU. Cargo feature `webgl`. This is `vello_gpu`'s own backend and
+   does not go through `wgpu` (`../spike/results-3c-browser.md`).
 3. **`vello_cpu`** into an RGBA buffer shown through a canvas, for browsers or machines with neither (best effort,
    owner decision 2026-11-12: it must open and work, slowly; it is not tuned or tested as a full experience). It is
    single-threaded unless the page is cross-origin isolated (needed for shared-memory threads in wasm); expect a
    lower tile rate, shown as longer softness after zoom. This is a degraded mode, with a banner in the UI.
+
+**Measured in the spike** (`../spike/results-3b-renderer.md`, `../spike/results-3c-browser.md`; one Apple M4, strokes
+only). Natively the processor renderer redraws a view of 10,000 strokes faster than the GPU one in every row and
+every session (single-path outlines: `vello_cpu` 61 to 64 ms against `vello_gpu` 78 to 110 ms; discs and bands: 394
+to 407 against 420 to 478), because the time is path preparation, which both do on one processor thread. In Chrome
+on the same machine WebGPU, WebGL2 (through ANGLE on Metal) and the processor renderer took the same time to within
+a few percent, and drew the same pixels on the busiest tile (0 of about 138,000 differing, in colour and coverage,
+for every pair and every outline form). `vello_gpu`'s WebGL2 backend worked as documented, including texture targets
+and textures it does not own. So for many small strokes the GPU backends bought no speed on this machine, and
+WebGL2 was not a second-class fallback. Not shown: large fills, images and text, slower processors, other
+browsers (Safari and Firefox), a phone or integrated graphics, and threads. **Whether the order above should
+change is not decided**; it is to be confirmed by figures from those (see [the index](README.md#still-open)).
 
 No other section may assume WebGPU is present. What each backend does for the two paths that touch the browser:
 
@@ -567,7 +615,10 @@ Algorithm (version 1, named by `style_ver` so later changes never alter old stro
 1. Convert lattice points to `f64` (an exact conversion).
 2. Width at each point: `r_i = base_width * w(pressure_i, speed_i) / 2`, where `w` is a 256-entry table of constants
    written into the source (not computed) and linearly interpolated with `+ - * /` only. Speed is used only when
-   pressure is unavailable (flag in the brush), taken from point spacing with fixed `t`.
+   pressure is unavailable (flag in the brush), taken from point spacing with fixed `t`. (The spike's table has 17
+   entries, each a multiple of 1/64, interpolated: the lightest touch is a quarter of the width, and no pressure from
+   the device is the full width. The 256-entry table, a taper at the ends and width from speed were not built;
+   `../spike/results-3a-wasm-outlines-cut.md`.)
 3. Unit tangent and normal at each point from the neighbors with `+ - * /` and `sqrt` (the correctly rounded square
    root; both native and wasm give identical results).
 4. Left side forward, right side backward: `p_i +- r_i * n_i`. Where the turn is sharper than a fixed limit, add a
@@ -585,9 +636,45 @@ Algorithm (version 1, named by `style_ver` so later changes never alter old stro
    01's `Outline { segs, closed, fill }` of `Seg::Line` and `Seg::Quad` over `LPt`. A stroke with several runs has
    one `Outline` with several closed sub-paths. This lattice outline, not the `f64` intermediate, is what section
    01's cut consumes, what the index derives bounds from, and what the bit-identical test compares.
-8. The path is filled with the **non-zero** rule, so self-overlaps in tight turns need no clipping step (the
-   perfect-freehand README suggests a separate polygon-clipping crate; the renderer's non-zero fill makes that
-   unnecessary).
+8. The path is filled with the **non-zero** rule, so self-overlaps in tight turns were expected to need no clipping
+   step (the perfect-freehand README suggests a separate polygon-clipping crate; the renderer's non-zero fill was
+   expected to make that unnecessary). **The spike found this is not so for one path: it leaves holes** (next
+   paragraphs).
+
+**Measured in the spike** (`../spike/results-3a-wasm-outlines-cut.md`, `../spike/results-3b-renderer.md`,
+`../spike/results-3c-browser.md`; Apple M4; the corpus is 1,000 random-walk strokes with sharp turns, doubling back,
+pauses, single dots and strokes at the edge of the lattice, and its pressure changes at random from point to point,
+which is rougher than a real pen).
+
+- **The single path described above leaves holes over the stroke.** It goes up the left side, round the end and
+  down the right side. Where a stroke doubles back, or curls tightly under a wide brush, the two sides cross, and
+  the non-zero rule leaves the crossed part empty. On the corpus 10,012 of 140,838 stroke points (7.1%) are outside
+  the outline of their own stroke, in 560 of the 1,000 strokes; with the turns taken out of the corpus it is still
+  1.7%, and the count is the same with a constant pressure. Small handwriting with a wide marker would show it.
+- **A union of simple pieces has no holes, by construction and by test**: a disc at every point and a band along every
+  piece, all going the same way round, so overlaps add and never cancel. It is 3.6 times the segments (3,996 against
+  1,109 for 200 points) and under twice the time to build (7.4 µs against 4.2 µs native; 20 and 12.5 µs on wasm32).
+- **What the forms cost the renderer** (10,000 strokes over a 3840 x 2160 view, redrawn from nothing, `vello_cpu`;
+  native / WebAssembly with SIMD in Chrome):
+
+  | Outline | Segments a stroke | Native | WebAssembly with SIMD | Holes |
+  |---|---|---|---|---|
+  | Discs and bands (the union above) | 1,485 | 394 to 407 ms | 540 ms | none |
+  | Octagons and bands (a trial form, plain floats, not a builder to keep) | 889 | 263 to 271 ms | 358 to 363 ms | none |
+  | Single path (the design's) | 165 | 61 to 64 ms | 80 to 81 ms | yes |
+
+  The renderer's cost follows the segments, at 20 to 25 ns a segment (see "Performance budget per frame"). So the
+  outline that leaves no holes is too heavy for the renderer as it stands (nine times the segments, over six times
+  the processor renderer's time), and the light one leaves holes.
+- **Ways to a form that is both light and whole were named and not tried**, except the octagon figure above: fewer
+  and straighter corners; discs only where the stroke turns sharply or its width changes, with bands elsewhere; one
+  path for the stroke's outside found by a true union of the pieces (the polygon clipping this section chose to
+  avoid, which would have to give the same result on every machine).
+
+**Which outline form to use is not decided** (to be decided; see [the index](README.md#still-open)). Until it is,
+steps 4 to 8 above describe the single path, and the version-1 algorithm is not fixed. The prototype keeps both
+builders in `everink-core`, `build` (the union) and `build_single_path` (this section's first form, kept to record
+its flaw); `build_single_path` goes when the choice is made.
 
 The same function, with an *incremental* entry point, builds the live preview and the final stroke (section 04 needs
 both to match):
@@ -611,7 +698,7 @@ readable on its own:
 - Allowed: `+ - * /` on `f32` and `f64`, `sqrt`, `abs`, negation, `copysign`, comparisons, `floor`, `ceil`, `trunc`,
   `round_ties_even`, conversion with `as` (saturating, NaN becomes 0), `f32` to `f64` conversion, bit operations on
   floats, integer arithmetic.
-- Banned: `mul_add`, every transcendental function (`sin`, `cos`, `tan`, `atan2`, `exp`, `ln`, `powf`, `powi`,
+- Banned: `mul_add`, every transcendental function (`sin`, `cos`, `tan`, `atan2`, `exp`, `ln`, `log2`, `powf`, `powi`,
   `cbrt`, `hypot`), float `min`, `max` and `clamp` (write `if a < b`), relaxed SIMD, and fast-math flags.
 - No NaN or infinity enters: every input is finite and bounded, and the last step checks `is_finite()` and the
   lattice range and refuses the object otherwise.
@@ -980,7 +1067,7 @@ under the frame time.
 | Visible-set query | 1.0 | | section 01/core; zero on most frames |
 | Placement of new objects (exact step, cuts) | 2.0 | | 01's cut queue budget: 2 ms per frame, the one figure for exact arithmetic; items past it draw from the previous cut |
 | Order, dirty-tile detection | 0.5 | | |
-| Tile raster (time-boxed) | 4.0 | 3.0 | spread across frames; the budget, not the need |
+| Tile raster (time-boxed) | 4.0 | 3.0 | spread across frames; the budget, not the need. The measured split is not this one: see "What the spike measured" below |
 | Lifted/live objects | 1.0 | 1.0 | selection drag, cut objects |
 | Compose (tiles, live ink, overlay) | 0.5 | 1.0 | |
 | Controls (section 07) | 0.5 | 0.3 | |
@@ -992,6 +1079,43 @@ The decisive unknown is the rate at which `vello_gpu` rasterizes tiles. If a ful
 If it takes 400 ms, the tile approach still holds, but zoom feels soft for about a quarter second, and the spike
 decides whether to use `vello_cpu` threads, pre-rendered pictures, or lower tile counts. This is the first
 measurement to make.
+
+**What the spike measured** (`../spike/results-3b-renderer.md` natively, `../spike/results-3c-browser.md` in Chrome
+157; Apple M4; strokes of 30 to 120 points, 2 to 6 pixels wide; every figure is one fast machine's).
+- **A 3840 x 2160 view is 40 tiles of 512 pixels, not about 20.** The totals for 10,000 strokes are still comparable
+  with the readings above, because the cost follows the strokes' segments and not the number of tiles. The per-tile
+  figures are not: with the same strokes in half as many tiles each tile would hold twice as many and take about twice
+  as long. The trial's 10,000 strokes are 327 a tile on average.
+- **Redrawing the whole view of 10,000 strokes from nothing:**
+
+  | Outline | Segments a stroke | Native, `vello_cpu` | Native, `vello_gpu` | WebAssembly with SIMD (any of the three) | WebAssembly without SIMD |
+  |---|---|---|---|---|---|
+  | Single path (this section's first form; leaves holes) | 165 | 61 to 64 ms | 78 to 110 ms | 76 to 81 ms | 183 to 211 ms |
+  | Octagons and bands (a trial form) | 889 | 263 to 271 ms | 281 to 325 ms | 355 to 363 ms | 881 to 970 ms |
+  | Discs and bands (the union that has no holes) | 1,485 | 394 to 407 ms | 420 to 478 ms | 536 to 555 ms | 1,244 to 1,345 ms |
+
+  In the units of the reading above: 61 ms is four frames at 60 Hz and 400 ms is twenty-four; the reading above
+  takes the first as acceptable and says of the second that the tile approach still holds and a remedy is chosen. The single path is at the first figure natively and in WebAssembly with SIMD
+  (80 ms); the union is at the second (540 ms in WebAssembly with SIMD, 1.2 to 1.3 s without). Which outline to use is
+  open (see "The outline: variable width, deterministic").
+- **Tile raster is processor time, and it follows the outline's segments, at 20 to 25 ns a segment.** Building the
+  scenes, which is the `fill_path` calls that hand each stroke's path to the renderer, flattens the path and makes its
+  coverage strips on the calling thread; it is the same code and the same time in `vello_gpu` (on either backend) and
+  `vello_cpu`, and is most of the time for every outline form. For 10,000 strokes of 1,485 segments, each prepared for
+  1.3 tiles, it takes 386 ms (20 ns a segment); for 165 segments, 53 ms (25 ns). The GPU share is smaller and less
+  steady: natively, waiting after every tile, 23 to 63 ms a view, and about 13 to 1, 8 to 1 and 2 to 1 processor to
+  GPU for the three outlines on the steadiest session; in the browser, waiting once for the whole view, 0.5 to 3 ms. So
+  the 4 ms and 3 ms split in the table is not what is measured: the processor is the limit and a faster GPU would not
+  help. The budget values themselves are not changed here.
+- **WebAssembly costs 1.3 to 1.4 times native with SIMD and 3.0 to 3.4 times without** for this redraw. SIMD
+  (`-C target-feature=+simd128`) is worth 2.3 to 2.6 times; a module built with it does not load in a browser
+  without it. **In a browser this budget is met only with WebAssembly SIMD** (and only by the single path). Whether to require it or ship two builds is not decided (see section 07, "Packaging", and [the
+  index](README.md#still-open)).
+- **Scenes built tile by tile cost about 5% more** than one scene for the view, and several tiles could be prepared on
+  several threads natively; a browser page that is not cross-origin isolated has one (section 07).
+- **Not measured:** other machines (the design asks for three reference machines and a mid-range laptop), large
+  fills, images, text, clips, objects cut by section 01's cut, moving many lifted objects (the frame-rate case the
+  spike still has to measure), and `vello_cpu`'s own threads.
 
 ## Failure modes
 
@@ -1017,7 +1141,7 @@ measurement to make.
 
 | Rule | Proved by |
 |---|---|
-| Stored ink outline is identical on all targets | One corpus of 1,000 random and 100 recorded strokes; outline path bytes hashed on native Linux, macOS, Windows, arm64 and wasm in CI; hashes must match. |
+| Stored ink outline is identical on all targets | One corpus of 1,000 random and 100 recorded strokes; outline path bytes hashed on native Linux, macOS, Windows, arm64 and wasm in CI; hashes must match. In the spike: 1,000 random-walk strokes (no recorded ones), a segment count and a hash of every coordinate, written on aarch64 macOS and passing on x86-64 Linux (with and without fused multiply-add) and on wasm32 under Node; Windows was not run. |
 | Outline code uses only allowed operations | The same `clippy.toml` `disallowed-methods` list as section 01 (it is the reference), applied to the outline module, plus a CI check that `relaxed-simd` is not enabled. |
 | The outline lies on section 01's lattice | A property test: every coordinate of the built `Outline` is an `i64` produced by the rounding in step 7, and equals the value from an independent big-rational reference to within one lattice step. |
 | Incremental and one-shot outlines agree | Random point streams; `OutlineBuilder::push` then `finish` against a one-shot build; byte-identical `Outline`. Section 04's preview test reuses it. |
@@ -1120,6 +1244,17 @@ languages, the first app, the merge model, the controls toolkit and the further 
 4. **Highlighter and blend modes.** Multiply-style highlighters and blend modes are not offered in the first version
    because the renderer lacks some blend modes. Is that acceptable?
 
+Open because of the spike (measured in slices 3a to 3c; the choices are the owner's and are not made here):
+
+5. **Which outline form.** The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
+   and bands has none and costs the processor renderer far more for 10,000 strokes (394 to 407 ms
+   against 61 to 64 ms natively). Fewer corners, discs only at turns, or a true union were named and not tried. See
+   "The outline: variable width, deterministic".
+6. **WebAssembly SIMD.** The tile budget holds in a browser only with it, and then only for the single-path
+   outline; a module built with it does not load without it. Require it, or ship two builds?
+7. **The backend order.** Natively the processor renderer was faster than the GPU one for strokes; in Chrome all
+   three took the same time. Whether the order changes waits for other browsers and machines.
+
 ## Sources
 
 All pages were fetched or searched on 2026-11-11 unless noted.
@@ -1162,13 +1297,29 @@ All pages were fetched or searched on 2026-11-11 unless noted.
 - HarfRust: https://crates.io/api/v1/crates/harfrust ; cosmic-text: https://crates.io/api/v1/crates/cosmic-text
 - Other crates: https://crates.io/api/v1/crates/skia-safe , /tiny-skia , /wgpu , /lyon , /femtovg , /kurbo , /rstar
 
+**Settled by the spike** (`../spike/results-3a-wasm-outlines-cut.md`, `../spike/results-3b-renderer.md`,
+`../spike/results-3c-browser.md`; one Apple M4 and Chrome 157 unless stated).
+- The stroke outline is bit-identical on aarch64, x86-64 and wasm32 (one golden file of 1,000 strokes; wasm32 under
+  Node, not a browser).
+- `vello_gpu` 0.4.0 builds and runs against `wgpu` 30.0.2 (the wgpu version match was a listed unknown; it holds for
+  that pair), native and in the browser, and its WebGL2 backend works as documented.
+- Tile throughput on strokes: measured (see "Performance budget per frame"). For large scenes of other content it is
+  not.
+- The three renderers draw the same pixels on the busiest tile of the trial scene, in colour and coverage.
+- A cached view composed on every frame holds 60 frames a second while it pans, on WebGPU and WebGL2.
+- The size of the WebAssembly build for the renderer: built for size, one renderer is 364 to 519 KB raw and 122 to 155
+  KB with Brotli, all three together 914 KB and 262 KB; for speed, all three are 1.35 to 1.46 MB (290 to 306 KB
+  Brotli). Paths and images only: no text and none of the optional shaders, so a product build is larger. `wasm-opt`
+  was not run.
+
 **Claims left unverified**
 
 - Exact Chrome/Firefox/Safari support versions for `getCoalescedEvents` and `getPredictedEvents`; live MDN tables
   not read.
 - Whether a WebGPU canvas context honors `desynchronized`; whether delegated ink trails give a measurable gain.
 - Web pen-to-ink latency numbers (my 33 to 50 ms estimate has no source).
-- Vello's blend color space; `vello_gpu` multithreading and tile throughput on large scenes; its wgpu version match.
+- Vello's blend color space; `vello_gpu` multithreading and tile throughput on large scenes (the spike measured
+  strokes only).
 - Bit-identical Parley and HarfRust results between native and wasm.
 - Glifo's support for COLRv1 color emoji; its release timing.
 - Excalidraw culling; MapLibre tile behavior as described; Graphite's current renderer; Rerun and Makepad.

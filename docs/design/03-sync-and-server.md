@@ -164,7 +164,7 @@ that, because it walks only occupied space.
 | | SQLite file per room | redb per room | Postgres | Object storage only | Own segment files |
 |---|---|---|---|---|---|
 | Crash safety | Mature (WAL) | COW B-tree, checksums, repair path | Mature | Atomic put | Must be built and tested |
-| Commit latency | fsync, about 1 ms on SSD (unmeasured) | fsync, similar | Network plus fsync | 10 to 100 ms per put (unverified) | fsync |
+| Commit latency | fsync: 4 ms measured on one Apple M4 SSD with `fullfsync=ON`; about 1 ms was the estimate | fsync, similar (not measured) | Network plus fsync | 10 to 100 ms per put (unverified) | fsync |
 | Append log plus blobs | Good | Good | Good, bigger ops cost | Poor for small appends | Good |
 | Move a room | Copy one file | Copy one file | Nothing to move | Nothing to move | Copy files |
 | Self-hosting (library goal) | One dependency, no daemon | Pure Rust, no daemon | A daemon to run | Needs a store | None |
@@ -175,6 +175,10 @@ that, because it walks only occupied space.
 redb has "persistent savepoints" ([design doc](https://github.com/cberner/redb/blob/master/docs/design.md)), which
 look like free versions, but restoring one rolls the whole database back, and it does not offer to open one
 read-only beside the live data. Versions need both, so it does not help.
+
+The spike measured only SQLite (`../spike/results-5-storage.md`); redb and every other engine in the table were not
+tried, so the table's other cells stay as researched, and "SQLite versus redb speed" stays in this section's list of
+what is not verified. Nothing measured speaks against the default.
 
 ### Wire encoding
 
@@ -717,8 +721,9 @@ by the state that the log order produces, replay reaches the same decisions.
 **releases both the `Ack` and the `Apply` messages to others only after the store reports the batch durable** under
 the room's durability mode (local disk by default; local disk and a second copy in strict mode).
 Reason: if `Apply` went out first and the server then crashed, other clients would hold a change the log lacks and
-their copy would diverge with no one to reconcile it. The cost is one commit latency (about 1 to 5 ms on an SSD,
-unmeasured) added to remote delivery, not to the author, who sees the change at once. The store thread commits
+their copy would diverge with no one to reconcile it. The cost is one commit latency (about 1 to 5 ms on an SSD was
+the estimate; **measured** 3.8 to 4.4 ms at the median and 4 to 8.5 ms at the 95th percentile on an Apple M4, with one
+change or a hundred in the commit, `../spike/results-5-storage.md`) added to remote delivery, not to the author, who sees the change at once. The store thread commits
 whatever has arrived while the previous commit was running (group commit), so load does not increase latency per
 change. Presence and `Pong` are never held for the commit.
 
@@ -895,7 +900,12 @@ rev it had), and **pinned** (unacknowledged edits, selected objects, objects bei
 **One SQLite file per room** (`rusqlite` 0.42.0, MIT, with the `bundled` feature), in WAL mode with
 `synchronous=FULL`, so a commit is durable when it returns (with `NORMAL`, the SQLite documentation says a commit
 might roll back after power loss, which would break the acknowledgement rule;
-[WAL](https://www.sqlite.org/wal.html)). WAL has one writer at a time, which is how a room already works. Readers
+[WAL](https://www.sqlite.org/wal.html)). **On Apple systems `synchronous=FULL` alone is not enough: `fullfsync=ON`
+must be set beside it.** The spike measured a commit at 0.04 ms with `synchronous=FULL` alone, because on macOS
+`fsync` does not make the drive write its cache out, and at 3.8 to 4.4 ms with `fullfsync=ON`, which is what makes it
+wait (`../spike/results-5-storage.md`, Apple M4; `synchronous=NORMAL` was 0.012 ms). It matters for a native client
+that keeps a local store and for anyone running the server on a Mac. A Linux server's disk was not measured, so
+whether it needs the setting is not shown here. WAL has one writer at a time, which is how a room already works. Readers
 (a snapshot job, a version opened read-only) do not block it. The file is on local disk; WAL does not work over a
 network file system.
 
@@ -914,17 +924,33 @@ CREATE TABLE audit (seq INTEGER, time_ms INTEGER, session BLOB, user BLOB, actio
 
 **The log** is the sequence of accepted changes exactly as the room applied them (section 02's encoding), with a
 CRC32C per row against bit rot. A batch from the actor is one transaction. Replaying the log from a snapshot with
-the same code must give the same document, so the room has no hidden state that is not in the log.
+the same code must give the same document, so the room has no hidden state that is not in the log or the snapshot.
+**The room does have one: its random number generator.** It draws random numbers when it makes an order key, so a
+room opened from a snapshot gives the changes after it other keys than they got the first time, unless the state of
+the generator is saved with the snapshot. The spike saves it in the manifest, and a test shows that replay without it
+gives a different room (`../spike/results-5-storage.md`). So the snapshot manifest carries the generator's state. The alternative, logging what the room did (the effects,
+with the keys it chose) and not what the client asked, was not tried.
 
 **Snapshots by cohort chunks.** The document is divided into **chunks** by creation order: chunk `c` holds the
 objects with ordinals `256·c .. 256·c + 255`, serialized as section 02's canonical `Doc::body` bytes (same state,
 same bytes), compressed with LZ4, and stored under its BLAKE3 hash. A snapshot is a **manifest**: the
-list of chunk hashes in order, plus the sequence number and the dedupe table. Because most objects never change
+list of chunk hashes in order, plus the sequence number, the dedupe table and the room's random state (above). Because most objects never change
 after the pen lifts, and new objects fall into the newest chunks, a snapshot only rewrites chunks that changed
 since the last one: the room keeps a set of dirty chunk numbers, and taking a snapshot serializes only those. A
 snapshot of a 1-million-object surface after 600 new strokes writes about 3 chunks plus a manifest of about
 4,000 hashes (128 KB). The trade-off: editing one old object rewrites its 256-object chunk (about 128 KB), so
 heavy editing of old content costs write amplification; the chunk size (256) is a starting value to tune.
+
+**Measured** (`../spike/results-5-storage.md`; Apple M4, SQLite 3.54.1 through `rusqlite` 0.42.0; strokes of 200
+points, one change and about 1 KB each). A snapshot after 600 new strokes in a room of 1,000,000 wrote 3 chunks of
+3,909 and a manifest of 141 KB (the trial's manifest has the chunk's number beside each hash), 669 KB in all, building
+in 63 to 88 ms (the trial sorts every object by ordinal, which the design's shards would not) and writing in 2.6 to
+10.9 ms, plus the 4 ms of a durable commit. A whole snapshot of 1,000,000 strokes is 1,007.9 MB in 3,907 chunks, 1,008
+bytes a stroke, built in 1.3 to 1.5 s and written in 5.4 to 7.2 s. **LZ4 saved 1% on these strokes**, which are
+random walks and pack worse than a hand's; whether LZ4 is worth its place depends on real strokes, which were not
+measured. A commit now and then takes 15 to 24 ms, most likely SQLite moving the write-ahead log into the main file (a
+checkpoint, by default every 1,000 pages, which it does on the committing thread; inferred from the sizes, not
+measured). If that matters, the store thread could run checkpoints itself between commits; not tried.
 
 *Taking a snapshot without stopping the room:* the document is held in 4,096 reference-counted shards. The actor
 clones the shard pointers (microseconds), hands the clone to a background job, and then mutates shards with
@@ -961,7 +987,14 @@ last snapshot, or room unload. A final snapshot at unload makes the next load fa
    so it exists only in the author's outbox and is resent.
 
 `everink-server repair <room-file>` runs steps 1 to 3 on a copy and reports. Estimated load time for 1 million
-objects: decode about 5 s, index 1 to 2 s (unmeasured; the spike measures it).
+objects was: decode about 5 s, index 1 to 2 s. **Measured** (`../spike/results-5-storage.md`, Apple M4, the file
+already in the operating system's memory, spatial index not built): a room opens in 28 ms at 10,000 strokes, 0.29 s
+at 100,000 and 4 to 6 s at 1,000,000, with a log tail of 1,000 changes after the snapshot. Up to 100,000 strokes that
+is 2.6 to 2.9 µs a stroke; at a million reading the chunks out of SQLite is the largest part (1.6 to 2.9 s, 1 GB in
+chunks of about 258 KB), then decoding (0.9 to 1.1 s), building the room (0.9 s) and checking hashes and
+decompressing (0.53 s). Replaying a log row costs 2 to 8 µs, so a 16 MiB tail adds about 0.1 s. A file that is not in
+the operating system's cache, and memory use while opening, were not measured. A larger page size, or chunks beside
+the file, were not tried.
 
 **Durability modes (owner decision, 2026-11-12).** The `RoomStore` trait (append batch, read snapshot manifest, read
 chunks, write snapshot, list/expire) hides SQLite, so a Postgres store can be added for a hosted service. A room
@@ -1232,19 +1265,22 @@ Derived:
 | Presence out, typical (each sees a fifth) | 4.4 MB/s / 5 | 0.9 MB/s |
 | Actor CPU for changes | 15 · (20 µs apply + 50 · 0.1 µs route + encode) | well under 1% of a core. The 20 µs is an estimate that also covers storage and sending, which are not built; the object map's own work on a change was measured at 0.4 to 1.1 µs at depth 0 and about 3 µs at 1,000 levels |
 | Actor CPU for presence worst case | 73,500 per second · about 1 µs | about 7% of a core |
-| First fill of 2,000 objects | 2,000 · 1 KB, LZ4 about 2 times | 1 MB, 0.4 s at 20 Mbit/s |
+| First fill of 2,000 objects | 2,000 · 1 KB, LZ4 about 2 times | 1 MB, 0.4 s at 20 Mbit/s. (Slice 5 saw LZ4 save 1% on its random-walk strokes, so the "2 times" is not supported by that data; real strokes were not measured.) |
 | Server memory at the cap, estimate | 2M · (110 B header + 1,000 B stroke body + 170 B index) | about 2.6 GB; about 4 GB if the in-memory form costs 50% more than the packed form. Measured without the spatial index (not built, so its 170 B stays an estimate): 1.3 to 1.5 KB per object estimated and 1.8 to 2.3 KB resident, so the range holds; at depth 100 an object costs 1,590 B and at depth 1,000 3,840 B (estimated, per object) |
-| Load of 1,000,000 objects | estimate: about 5 s to decode and 1 to 2 s to index | measured: 2.6 s to decode, check and build the children index (Apple M4); reading from disk and the spatial index are not in it |
+| Load of 1,000,000 objects | estimate: about 5 s to decode and 1 to 2 s to index | measured: 2.6 s to decode, check and build the children index from one buffer (slice 2a); opened from SQLite, 4 to 6 s with the file in the operating system's cache (slice 5); the spatial index is not in either (Apple M4) |
+| Size of the stored room | about 1 KB a stroke | measured: 1,008 bytes a stroke in chunks, 1,010.6 MB the file for 1,000,000 strokes; LZ4 saved 1% (slice 5) |
+| A durable commit | 1 to 5 ms | measured: 3.8 to 4.4 ms at the median with `fullfsync=ON`, the same for 1 change or 100; 0.01 to 0.04 ms of it is SQLite's own; it did not change from a 10 MB file to a 1 GB one (Apple M4, one SSD; slice 5) |
 | Per connection | two bitmaps (up to 100 KB), 256 KB buffers | under 0.5 MB, 50 people is 25 MB |
 | Log growth, busy | 18 KB/s | 65 MB per hour |
 | Log growth, ordinary (5 people, 0.1 strokes/s each) | 0.5 · 1.2 KB | 0.6 KB/s, 2 MB per hour, trimmed at the second snapshot |
-| Commits per second per room | one per commit round trip, 1 to 5 ms | up to 200; usually 20 to 50 |
+| Commits per second per room | one per commit round trip, 1 to 5 ms | up to 200; usually 20 to 50. Measured: about 250 a second for commits of one change at 4 ms, and 100 changes in the same 4 ms with group commit |
 | Active rooms per host, memory-bound | 32 GB / (100 MB typical big board) | about 300; about 10,000 for 1,000-object boards |
 
-The measured rows come from `../spike/results-2a-object-map.md` (Apple M4, native, release build, strokes of 200
-points). The storage and sending parts of the work per change, and the spatial index, are still estimates until
-slices 5 and 3 (the results file says "2c and 5"; slice 2c measured the pacing of sending and not its cost
-per change, so sending stays an estimate until the server exists). Memory grows with depth because positions are stored whole: positions are 73% of the state at
+The measured rows come from `../spike/results-2a-object-map.md` and `../spike/results-5-storage.md` (Apple M4, native,
+release build, strokes of 200 points). The sending part of the work per change, and the spatial index, are still
+estimates (slice 2c measured the pacing of sending and not its cost per change, so sending stays an estimate until
+the server exists; slice 5 built the store without the lease, the copy to a second place, the store thread and the
+hold on acknowledgements). Memory grows with depth because positions are stored whole: positions are 73% of the state at
 1,000 levels, which is the second measurement (after the speed of section 01) saying that positions should be stored
 and sent as differences from a base.
 
@@ -1298,7 +1334,7 @@ shards a snapshot job is writing, fits a host with 8 GB; ten times the cap (13 t
 | Held-list revalidation | Scenario: client caches region, disconnects, others edit and delete, client reconnects; compare final cache with server truth |
 | Ack only after durable | Store test double that delays commits: no `Ack` or foreign `Apply` before the commit callback; kill the actor after apply and before commit, restart, resubmit, compare |
 | Idempotent resubmission | Submit every change twice, and in a loop with random disconnects; log has each exactly once, and each resubmission is answered with the original `(ClientChangeId, Seq)` pair |
-| Crash safety | Fault injection: kill the process at random points across 10,000 runs of random workloads; recovered state equals the acknowledged prefix; also truncated and bit-flipped log rows |
+| Crash safety | Fault injection: kill the process at random points across 10,000 runs of random workloads; recovered state equals the acknowledged prefix; also truncated and bit-flipped log rows. The spike did not cut the power or kill the process mid-commit; its tests refuse a changed or missing chunk, a changed manifest and a missing or changed log row, and show the room coming back byte for byte from the log, from a snapshot and from a snapshot with a log after it (`../spike/results-5-storage.md`) |
 | Snapshot fallback | Corrupt the newest manifest, then a chunk, then both; recovery still yields the correct state |
 | Snapshot equals log | At any seq, snapshot plus replay equals replay from empty |
 | Chunk dedupe | Two snapshots after N strokes share all but O(N/256) chunks |
@@ -1473,12 +1509,18 @@ protocol window of 6 months, the cap of 2 million objects, and the text library.
   rusqlite, rstar, roaring, lz4_flex, blake3, zstd, wtransport, loro (1.17.1, MIT), yrs (0.28.1, MIT);
   all read 2026-11-11 through the crates.io API.
 - Spike results, in this repository: `../spike/results-1-positions.md`, `../spike/results-2a-object-map.md`,
-  `../spike/results-2b-text-libraries.md`, `../spike/results-2c-paced-connection.md`.
+  `../spike/results-2b-text-libraries.md`, `../spike/results-2c-paced-connection.md`,
+  `../spike/results-5-storage.md`.
 - Settled by the spike: that `TCP_NOTSENT_LOWAT` works on Linux (the pacing run, 2c) and that its safe wrapper in
   `socket2` 0.6.5 covers Linux and Android only; the pacing figures; the object map's memory, load time and work
   per change (2a).
+- Settled by the spike (slice 5, one Apple M4 SSD): the durable commit costs about 4 ms with `fullfsync=ON` and does not
+  depend on the changes in it or on the file's size; the open times and the stored size above. Not shown: a server's
+  disk (Linux, NVMe, a cloud volume, power loss protection), power loss and crash recovery under fault injection, a
+  file not in the operating system's cache, real strokes, concurrent readers, redb or any other engine, versions and
+  their retention, the sweep of old chunks and the copy to a second place.
 - Not verified: that `TCP_NOTSENT_LOWAT` is available on every target (Linux measured; macOS has it but it is not
   exposed safely; others unknown) and the
   WebSocket library's maximum-frame option names; the Yjs partial-replica limitation; hierarchical grids as a named
   technique; SQLite versus redb
-  speed; S3 put latency; all capacity figures; Figma's current multiplayer sizing.
+  speed (redb was not measured); S3 put latency; the capacity figures not marked measured; Figma's current multiplayer sizing.

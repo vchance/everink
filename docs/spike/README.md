@@ -60,8 +60,8 @@ Owner decisions of 2026-11-12, recorded in `AGENTS.md` › Owner decisions:
   real-network test (question 8). That test is not one of this spike's slices; it needs the product's server.
 - `spike/text-trial` is kept until the yrs adapter exists.
 
-The corrections the results asked for were applied to `docs/design/` after slice 2. Later slices record theirs
-in their results files in the same way.
+The corrections the results asked for were applied to `docs/design/` after slice 2, and those of slices 3, 4a, 4b
+and 5 are now applied too. Later slices record theirs in their results files in the same way.
 
 ## Results
 

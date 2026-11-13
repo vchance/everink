@@ -136,7 +136,9 @@ dozen widgets, and Slint's license is not MIT OR Apache-2.0 and would pass its c
   scroll containers and popover placement itself.
 - **Candidate 2: egui** (0.37.0, MIT OR Apache-2.0 [1]) with `egui-wgpu` drawing into a host render pass, behind
   `Controls`. Cost: its own text stack (not Parley), AccessKit coverage that its README lists as native Windows and
-  macOS only [2], and a hidden `<input>` text agent on the web with open issues [9].
+  macOS only [2], and a hidden `<input>` text agent on the web with open issues [9]. The spike qualified three of
+  these (below; on the web through Everink's mirror, and natively without a screen reader): egui lays text out itself but shapes it with the libraries Parley uses; its AccessKit output carries
+  container roles and names; and the text agent is not used when egui is driven through Everink's shell.
 
 What each must show in the spike, on the same fixed scope, measured and written into this section:
 
@@ -150,6 +152,60 @@ What each must show in the spike, on the same fixed scope, measured and written 
 | Effort | Person-days to reach the fixed scope, lines of code, and the widget behaviors still missing (focus trap, scroll, popover placement) |
 | Frame cost | Layout, painting and accessibility update within the 1 ms per frame planning figure |
 | Maintenance and license | Both are MIT OR Apache-2.0 today; release cadence and breaking-change history over the spike period |
+
+**What the spike measured** (`../spike/results-4a-controls.md`, `../spike/results-4b-window.md`,
+`../spike/results-4b-web.md`; Apple M4, release build, Chrome 157; the same toolbar and hex field built twice, behind
+one cut-down `Controls` trait). **The choice is not made** (to be decided; see [the index](README.md#still-open)).
+No person pressed a key and no screen reader was heard: the tree is checked by tests and, on the web, read from
+Chrome's accessibility tree; keys and compositions come from tests and from Chrome's debugging protocol.
+
+| | Own (`taffy`, `parley`, AccessKit by hand) | egui 0.37.0 |
+|---|---|---|
+| The tree a screen reader needs (toolbar, radio groups, names, states, field) | Yes | Yes |
+| Text composition (dead key, cancel, an input method in steps) | Yes | Yes |
+| A frame with nothing changed; something changed (median, processor only, no drawing) | 1 µs; 7 to 9 µs | 18 µs; 19 to 21 µs |
+| Added to a WebAssembly module, raw; Brotli; no font | 1.24 MB; 366 KB | 2.42 MB; 616 KB |
+| The same with a font | 1.64 MB; 513 KB (one font) | 3.09 MB; 886 KB (its three) |
+| Lines of code for this toolbar and field | 669 | 232 |
+| Smallest control | 24 by 24 | 24 wide, 20 high at its default style |
+| Presses of Tab from the start to the field | 4 (3 in the web page) | 13 (12 in the web page) |
+| Commands come out | With the event | One frame later (the web shell runs two frames an event) |
+| Arrow key on a focused tool | Focuses the next and chooses it | Focuses the next; chooses nothing |
+| Text stack | Parley, the canvas's own | Its own layout and line breaking, over the shaper and font reader Parley uses (`harfrust`, `skrifa`) |
+| Checks in the web page (54, five runs each) | All pass | All pass |
+
+- **Frame cost does not separate them.** Both are at least 45 times inside the 1 ms planning figure; the own toolkit's
+  figure leaves out shaping its text for drawing (the renderer's), egui's includes laying out text and tessellating.
+  Section 06 budgets 0.5 ms of processor for the controls; measured here, 0.001 to 0.02 ms.
+- **Size may.** egui is 1.7 to 1.95 times the bytes measured each alone, with or without fonts. The two share more than
+  the design supposed: egui 0.37 shapes with `harfrust` 0.12.0 and reads fonts with `skrifa` 0.44.0, the same versions
+  as Parley, so in a module that already has Parley egui adds about 1.85 MB raw without fonts, not 2.42. How much of
+  the own toolkit's 1.24 MB is Parley was not measured apart. egui also brings `vello_cpu` 0.2.0, another version than
+  the renderer's. Section 07's whole first version is budgeted at 8 MB raw and 2.5 MB with Brotli, fonts excluded.
+- **Effort.** The own toolkit has what the trial needed and nothing else: no selecting text with the pointer or Shift,
+  no copy, cut or paste, no hover look, no scroll, popovers, menus, sliders, tooltips or modal focus trap, and roles
+  and names written by hand. egui has those, and lacks two things the design asks for by name: the canvas's own text
+  layout, and one focus stop for a radio group with arrows inside it (it stops Tab at every button, and its arrows
+  move the focus without checking). A test holds the own toolkit to a 24 by 24 target; egui is not held to it, and its
+  default style is 20 high (`interact_size` can change it; not tried). Neither writes the caret and selection into the accessibility tree.
+  "Person-days" is not a figure the trial can give: an agent wrote both in one session each, egui first.
+- **egui's `TextEdit` puts the text being composed inside the application's string.** It worked in every test, but the
+  application cannot tell the value from the preedit unless it keeps track itself, and egui counts composed text
+  against the field's six-character limit (a seventh composed character is not shown).
+- **Neither works without a font it is given.** Parley's editor cannot move the caret or take typed text with no font
+  registered, so the controls must have their font before the first text field is shown. Neither uses the machine's
+  fonts, as the design asks.
+- **Pictures** (the same painters draw both, natively through `wgpu` and in Chrome through WebGPU): five faults were
+  found only by looking at rendered output, none visible to tests of the tree. Neither candidate's unchosen tools
+  have a boundary at 3:1 against the toolbar (WCAG 1.4.11): the own toolkit's by the trial's styling, egui's by its
+  default style; the disabled Redo is exempt. These are of a trial's styling and egui's defaults, not of a theme made
+  to meet WCAG 2.2 AA.
+- **Not shown.** A screen reader (the owner's, with `spike/controls-window/README.md` and `spike/controls-web/README.md`);
+  the platform adapters (`accesskit_winit` was handed the tree and nothing read it back from the system); a real
+  keyboard's dead keys and a real input method; Windows and Linux; Safari, Firefox and a phone; explore by touch
+  (the design's own open question); the mirror switched on by a button; a value written into the textarea by
+  assistive technology or dictation; scale, themes, right-to-left and a narrow screen; egui's animations;
+  maintenance and release cadence (not re-checked); and other machines.
 
 The owner also asked that a project of theirs be considered where it makes sense; it is evaluated in the spike, its
 details are kept outside this repository, and nothing here depends on it until then.
@@ -390,6 +446,11 @@ newest-wins when the queue is over the limit. A browser WebSocket has no other b
 | Heavy work (decode, hashing, large merges) | Runtime thread pool | Browser decoders (`createImageBitmap`); one worker for hashing, started on demand |
 | Threads inside wasm | n/a | **Not used.** They need `SharedArrayBuffer`, hence cross-origin isolation (COOP `same-origin`, COEP `require-corp`) for the whole page, which an embedder cannot accept in general |
 
+**Measured** (`../spike/results-3a-wasm-outlines-cut.md`, `../spike/results-3c-browser.md`; Apple M4): WebAssembly on
+one thread ran section 01's cut 3 to 4 times slower than native and the stroke outline 2.7 times slower (under Node
+26, Chrome's engine), and the renderer's redraw of 10,000 strokes 1.3 to 1.4 times slower than native with SIMD and 3.0 to 3.4
+times without. A worker that prepares tiles was not tried.
+
 The core is single-threaded on purpose: the document, camera and controls change only inside `handle`, so there are
 no locks and replay is deterministic. Anything slow is an effect. Re-entrancy: a DOM event can fire while an async
 continuation runs, so `handle` is never called re-entrantly; the runtime queues events that arrive during a `handle`
@@ -584,6 +645,11 @@ pub struct UiFrame { pub scene: SceneFragment, pub tree: Option<accesskit::TreeU
 pub struct UiContext<'a> { pub commands: &'a mut Vec<Command>, pub announce: &'a mut Vec<String> }
 ```
 
+`UiFrame.scene` as written is the own toolkit's form. egui cannot fill it: it gives triangles for `egui-wgpu`, so
+with egui the frame would carry those and the compose pass a host render pass in place of a `SceneFragment`. The
+spike's own trait left the scene out for this reason (`../spike/results-4a-controls.md`). The trait's output is
+settled with the choice of toolkit.
+
 - **Controls only issue `Command`s**, the same enum as the embedding API, so the built-in UI is the first user of
   the public surface. They read a `UiModel`, a read-only snapshot (tool, color, can-undo, peers, connection state,
   role capabilities, camera description); they hold no document state.
@@ -632,9 +698,18 @@ the mirror and the web shell together.
 `accesskit` (0.25.2, MIT OR Apache-2.0 [1]) is the schema crate; its types are the core's own output on every
 target.
 
+**What the spike found of AccessKit** (`../spike/results-4a-controls.md`, `../spike/results-4b-window.md`).
+AccessKit 0.25.2 has no role for a toggle button and reports "checked" and "pressed" through one property; both
+candidates used `RadioButton` with it. `parley` 0.12 has no AccessKit support, so the text field's caret and selection
+for a screen reader are Everink's to write with either candidate (egui's `TextEdit` gives the value only). egui 0.37
+lets a container carry a role and a name, and the tree it gave passed the same checks as the one written by hand. The
+display's scale has to reach the tree. The shell applies it, on the tree's root node, unless the toolkit's root
+already carries it: the own toolkit's does not, and egui's does.
+
 **Native.** `accesskit_winit` (0.34.2, Apache-2.0 only [1]) connects to UI Automation, NSAccessibility and AT-SPI.
 Adapters lack rich text [4], so text objects are a plain string value with caret and selection. The tree is built
-only when assistive technology asks.
+only when assistive technology asks. In the spike the adapter was offered every frame's tree and took it only while
+assistive technology was active, which it never was, so nothing was read back from the system.
 
 **Web.** `everink-web` translates `TreeUpdate` to DOM, after Flutter [10]:
 
@@ -642,7 +717,8 @@ only when assistive technology asks.
    on; until then no mirror nodes exist. The embedder can force it on.
 2. The mirror root is `<div role="application" aria-label="Drawing surface">` (a deliberate choice: screen readers
    then pass keystrokes to the page; the embedder can override). Nodes become elements with ARIA roles,
-   `aria-label`, `aria-pressed/checked/expanded/valuenow/disabled`, and roving `tabindex`. **Every string is set
+   `aria-label`, `aria-pressed/checked/expanded/valuenow/disabled`, and one element in the tab order (the one
+   that has the controls' focus; see "Which side moves the focus" below). **Every string is set
    with `textContent` or an attribute setter; the shell never uses `innerHTML`**, because names include
    user-supplied text (people, text objects, file names).
 3. Elements are positioned over their controls (see the stack under "Windowing" for what that does underneath the
@@ -652,6 +728,29 @@ only when assistive technology asks.
    itself.
 5. Two `aria-live` regions (polite, assertive) carry announcements, at most one per second, identical messages
    coalesced.
+
+**What the spike's web page found** (`../spike/results-4b-web.md`; Chrome 157; the mirror was always on, and the two
+live regions and the objects list were not built). One mirror kept from the AccessKit tree, a textarea as the text
+field and the DOM's focus as the single focus worked with both candidates: Chrome's accessibility tree was right, and
+typing and composition were right. AccessKit's role, label, value, toggled, disabled, bounds, children and the three
+actions were all the page needed. What the design did not say:
+- **Which side moves the focus.** The controls do, and the DOM's focus follows: the shell gives Tab and the arrows to
+  the controls and then puts the DOM's focus on the element of the control they name. (This section had the browser
+  moving the focus over a roving `tabindex`; left to the browser, the first Tab went to the first element in the
+  mirror and not to the control the toolkit starts at.) The controls choose their entry
+  whichever way and from wherever Tab comes, and let go of their focus when the DOM's focus goes elsewhere in the page,
+  but keep it when only the window loses the focus. A toolkit that cycles its focus (egui does) would trap the keyboard
+  (WCAG 2.1.2), so the shell makes it drop the focus and lets the browser take the key.
+- **A node may have no bounds.** egui gives none for its containers (the toolbar, the groups); the mirror must not size
+  or clip by them.
+- **A toolkit that answers late needs a second frame.** egui's commands, and its focus after Shift and Tab, appear in
+  the frame after the event; a shell that draws once an event shows it one key behind.
+- **A value that does not change is not rewritten.** Attributes and text are written only when they change, `tabindex`
+  included (writing it "only when it changes" at first never wrote it). The zoom figure is plain text and not a live
+  region, because as one it was rewritten on every frame. Pasted, dropped and replacement text become a commit, and
+  every other kind of edit (deleting a word, undo) is cancelled.
+- **Not shown:** explore by touch over a canvas (still the design's open question), whether a screen reader says the
+  textarea is multi-line of a one-line field, and the cost of keeping the mirror (not measured).
 
 **What the surface exposes.**
 
@@ -867,6 +966,20 @@ most 8 MB raw and 2.5 MB brotli (the two seconds on 10 Mbit/s computed above; th
 by measurement), fonts and shader data excluded and loaded separately. CI fails a build 5 percent over the recorded
 size. The browser compiles while downloading when the file is served as `application/wasm`.
 
+**Measured** (built for size, `opt-level = "s"`, link-time optimisation, one codegen unit, `panic = "abort"`, no
+`wasm-opt`; `../spike/results-3c-browser.md`, `../spike/results-4a-controls.md`). The renderer for paths and images,
+one backend: 0.36 to 0.52 MB raw and 122 to 155 KB with Brotli; all three backends 0.91 MB and 262 KB; no text and
+none of the optional shaders, so a product build is larger. The controls: 1.24 MB raw and 366 KB with Brotli for the
+own toolkit, 2.42 MB and 616 KB for egui, each without a font; with one font (the own) 1.64 MB and 513 KB, with egui's
+three 3.09 MB and 886 KB. The controls' and the renderer's figures are not to be added: the controls' leave out what draws
+them (`egui-wgpu` for egui), and a product renderer with text carries Parley again, which the own toolkit's figure
+already includes. Loading and compiling the speed build took 45 to 68 ms from a local server.
+**SIMD.** The renderer's speed in a browser depends on WebAssembly SIMD (`-C target-feature=+simd128`, not the
+`relaxed-simd` feature that section 01 bans): 2.3 to 2.6 times faster, and a module built with it does not load in a
+browser without it. A speed build with SIMD is 1.35 MB (290 KB Brotli) for all three backends; without, 1.46 MB (306
+KB). **Whether to require SIMD or ship two builds is not decided** (to be decided; see [the
+index](README.md#still-open)).
+
 | Need | Header or setting |
 |---|---|
 | Streaming compile | `Content-Type: application/wasm`; brotli or gzip `Content-Encoding` |
@@ -928,7 +1041,9 @@ Pens live on tablets, so these constrain the first design:
 | Stacking works | Browser test with the two canvases over the mirror: pointer events reach the top canvas, textarea and mirror take focus, the controls draw their own focus ring, and `focus()` in a tap raises the keyboard flag; manual VoiceOver (iOS) and TalkBack check of explore-by-touch, the one **unverified** risk (mirror elements under a canvas) and a release blocker for the mobile step |
 | Pointer, pen and touch | Eight coalesced samples arrive as eight with pressure, tilt and timestamps unchanged; a mouse has `pressure: None`; hover and leave arrive; scripted pen hover plus touch pans and does not draw |
 | Wheel classification | Recorded traces from the listed devices are replayed; 99 percent classified correctly (a starting threshold) |
-| IME on the web | Drive composition through Chromium's remote debugging interface (`Input.imeSetComposition`, unverified): preedit then commit, a cancelled composition, a remote edit during composition; assert the document text and that the textarea is not rewritten mid-composition |
+| IME on the web | Drive composition through Chromium's remote debugging interface (`Input.imeSetComposition`; **works** in Chrome 157, where it raises `compositionupdate` and `compositionend` on the textarea, and the spike's check does this): preedit then commit, a cancelled composition, a remote edit during composition; assert the document text and that the textarea is not rewritten mid-composition. The accessibility tree is read with `Accessibility.getFullAXTree`; no person is needed. These are Chrome's compositions and not a real keyboard's or input method's |
+| The web mirror and text bridge, in Chrome | The spike's script (54 checks per candidate) is the model. It must hit-test every mirror element at its control's middle (boxes that are right can still be unreachable), press Tab both ways from nothing and from the elements before and after the controls, check the DOM's focus and the controls' focus are on the same control at every stop, watch which attributes and text are rewritten (keys that change no text rewrite none), and check that its keys arrived (Chrome does not deliver keys to a window that is not in front) |
+| Picture tests of the controls | Render the controls to a picture by the painters the window uses and check it, beside the tree tests: five faults of the spike's own were found only by looking (a row wider than the surface, a caret in the wrong place while composing, an unreadable swatch in a dark theme, a focus ring painted over, a focused item drawn as a chosen one), and none shows in a tree. Contrast and focus rings are measured from the pixels |
 | IME on desktop and phones | Manual matrix per release for Latin accent composition (dead keys) on macOS, Windows (US-International), Linux (IBus, Fcitx 5; X11 and Wayland), iOS Safari and Android Chrome keyboards; the rows for Japanese, Pinyin and Korean are kept in the list and run when other scripts are added |
 | Toolkit comparison | The spike table under Options is filled for both candidates on the same toolbar and hex field; the choice is recorded with the numbers |
 | Renderer backends | Browser tests run on the WebGPU and WebGL2 paths; the processor-only path has a smoke test that it opens and a stroke can be drawn, with no performance claim |
@@ -1022,6 +1137,12 @@ guests. Still open:
 4. **Package names and the npm scope** (`@everink/web`, `everink`, `everink-runtime`): the owner's; placeholders
    here.
 
+Open because of the spike (the choices are the owner's and are not made here):
+
+5. **Which controls toolkit.** The spike has built both and measured them (see "Toolkit for the shared controls"); the
+   screen-reader and real-keyboard checks are the owner's to run.
+6. **WebAssembly SIMD: required, or two builds.** See "Packaging" and section 06.
+
 ## Sources
 
 Fetched or searched on 2026-11-11. "Search result" means I saw the entry and a summary but did not open the page;
@@ -1062,9 +1183,18 @@ claims resting on those are marked.
 
 Unverified: WCAG 2.2 criterion numbers and the WAI-ARIA authoring patterns; winit 0.31 IME API names, pen tilt per
 OS and Windows/Linux touchpad pinch; Safari support for coalesced and predicted pointer events and its gesture
-events; Safari storage eviction; `WebSocketStream`; the Keyboard Lock API; `Input.imeSetComposition`; `arboard`
+events; Safari storage eviction; `WebSocketStream`; the Keyboard Lock API; `arboard`
 custom formats; constructable stylesheets under a strict `style-src`; whether explore-by-touch reaches mirror
-elements under a canvas; wasm size of wgpu plus Vello; `redb` at 100,000 strokes; Figma and Miro mirrors; Linux IME
+elements under a canvas; `redb` at 100,000 strokes; Figma and Miro mirrors; Linux IME
 framework coverage; `axe-core` on mirrored DOM; licenses of serde, postcard, ciborium, smallvec and axe-core;
-streaming request bodies in `fetch` on each browser; the egui issues listed (not opened); Makepad, Iced and GPUI web
-state.
+streaming request bodies in `fetch` on each browser; the egui issues listed (not opened; the text agent is not used
+when egui is driven through Everink's shell, see "Toolkit for the shared controls"); Makepad, Iced and GPUI web state.
+
+**Settled by the spike** (`../spike/results-3c-browser.md`, `../spike/results-4a-controls.md`,
+`../spike/results-4b-window.md`, `../spike/results-4b-web.md`; one Apple M4, Chrome 157).
+- `Input.imeSetComposition` drives a real composition in Chrome 157 (it was unverified).
+- The size of WebAssembly modules for the renderer (wgpu plus Vello, paths and images only) and for each controls
+  candidate; frame cost of each candidate; that egui 0.37 can give containers roles and names.
+- That a mirror built from the AccessKit tree, a textarea and the DOM's focus work for both candidates in Chrome.
+- Still unverified: a screen reader, a real keyboard and input method, other browsers, explore by touch, the
+  platform adapters on Windows and Linux, and the maintenance claims.
