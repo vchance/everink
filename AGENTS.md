@@ -8,8 +8,9 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
 spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with two crates
-(`crates/everink-core`, `crates/everink-sync`) and six trial packages outside it (`spike/text-trial`,
-`spike/render-trial`, `spike/render-web`, `spike/store-trial`, `spike/controls-trial`, `spike/controls-window`). Nothing is released or published.
+(`crates/everink-core`, `crates/everink-sync`) and seven trial packages outside it (`spike/text-trial`,
+`spike/render-trial`, `spike/render-web`, `spike/store-trial`, `spike/controls-trial`, `spike/controls-window`,
+`spike/controls-web`). Nothing is released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
@@ -54,6 +55,10 @@ cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml --
 cargo run --release --locked --manifest-path spike/controls-window/Cargo.toml -- own --shot /tmp/own.png   # a picture, no window (needs a GPU)
 cargo clippy --manifest-path spike/controls-window/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/controls-window/Cargo.toml --check  # its format check
+sh spike/controls-web/build.sh                                      # the controls in a browser: builds into www/
+node spike/controls-web/check.mjs own                               # drives it in Chrome and checks it (or `egui`; needs Chrome and a GPU)
+cargo clippy --manifest-path spike/controls-web/Cargo.toml --target wasm32-unknown-unknown --locked -- -D warnings   # its lint
+cargo fmt --manifest-path spike/controls-web/Cargo.toml --check     # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
@@ -103,6 +108,11 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   winit, `accesskit_winit`, and one `wgpu` surface drawn by `vello_gpu` or `egui-wgpu`. Its `README.md` is the
   script of checks for a person with a screen reader and a keyboard. Another package of its own with its own
   `Cargo.lock`. The `controls-trial` CI job lints it and does not run it.
+- `spike/controls-web`: the same two candidates on a canvas in a browser (spike slice 4b): a wasm module that
+  draws through WebGPU, and a page (`www/index.html`) that is the web shell: the DOM mirror for assistive
+  technology and the hidden textarea for text input. It builds `spike/controls-window`'s `paint.rs` and
+  `shell.rs` in. `check.mjs` drives it in Chrome over the debugging protocol. Another package of its own with
+  its own `Cargo.lock`; `build.sh` needs `wasm-bindgen` 0.2.130.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
@@ -149,6 +159,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   works on a hosted runner. The four pictures in `docs/spike/images/` come from `--shot` (two with `--focus Pen`): write them again when the
   look of either candidate changes, and say so. An agent cannot press keys in the window or hear a screen
   reader: those checks are the owner's.
+- `spike/controls-web/check.mjs` opens a Chrome window with an empty profile, which it deletes, and needs a GPU:
+  it cannot run on a hosted runner. It reads the accessibility tree Chrome makes; it is not a screen reader,
+  and what VoiceOver or NVDA say of the page is still the owner's to hear.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions

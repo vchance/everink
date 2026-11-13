@@ -288,7 +288,7 @@ fn tab_stops(controls: Box<dyn Controls>) -> Vec<String> {
     panic!("Tab never reached the field: {stops:?}");
 }
 
-fn tab_reaches_the_field_and_space_presses_a_button(controls: Box<dyn Controls>) {
+fn tab_reaches_the_field_past_redo(controls: Box<dyn Controls>) {
     let name = controls.name();
     let stops = tab_stops(controls);
     println!(
@@ -404,8 +404,8 @@ macro_rules! for_candidate {
                 super::composition_goes_through_the_field_unharmed(make());
             }
             #[test]
-            fn tab_reaches_the_field_and_space_presses_a_button() {
-                super::tab_reaches_the_field_and_space_presses_a_button(make());
+            fn tab_reaches_the_field_past_redo() {
+                super::tab_reaches_the_field_past_redo(make());
             }
             #[test]
             fn the_keyboard_works_the_controls() {

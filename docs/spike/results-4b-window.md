@@ -16,7 +16,7 @@ DOM mirror, is a further part and is not here. The choice is the owner's; nothin
 | A screen reader reads it rightly | No | The owner's, with the script in `spike/controls-window/README.md` |
 | A real keyboard and dead keys | No | The same: the shell maps winit's events as winit documents them, and no key was pressed |
 | An input method's window at the caret | No | The shell would call `set_ime_allowed` and `set_ime_cursor_area` while the field has the focus; in a window the field never had it, so the calls were never made |
-| Windows and Linux | No | Built on macOS only; CI builds it on Linux |
+| Windows and Linux | No | Built on macOS only; CI type-checks and lints it on Linux |
 
 So this part's result is a tool and its first pictures, not a verdict. The script has fourteen steps for each
 candidate.
@@ -60,7 +60,9 @@ With the focus on the Pen tool instead (Eraser still chosen):
 
 ### Measured from the pictures
 
-By the independent review of this change, from the pixels (logical pixels; contrast as WCAG computes it):
+By the independent review of this change, from the pixels (logical pixels; contrast as WCAG computes it). The
+figures were taken on the pictures before the review's fixes, which added only outlines and rings, and were
+checked again afterwards:
 
 | | Own toolkit | egui (its defaults, light theme) |
 |---|---|---|
@@ -70,6 +72,7 @@ By the independent review of this change, from the pixels (logical pixels; contr
 | An unchosen tool's boundary against the toolbar | A face at 1.1:1 | A circle at 1.15:1 |
 | The chosen swatch's ring | 15.6:1 | high |
 | Focus on the field | A ring at 6.2:1 | Its border, clearly seen |
+| The field's boundary when it has no focus | A border at 3.06:1 | None: white on the toolbar, 1.06:1 (its default) |
 | Smallest control | 24 by 24; buttons 28 high | 24 by 24 swatches; Undo, Redo and the field 20 high |
 | The mark under text being composed | none | A bar at 2.4:1 |
 

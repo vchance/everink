@@ -720,16 +720,14 @@ impl Controls for OwnControls {
             self.editor.layout(&mut self.fonts, &mut self.layouts);
             // While text is being composed the editor hides its caret; the place given then is the start of
             // what is being composed, which is where an input method puts its window.
-            let caret = self.editor.cursor_geometry(1.5).or_else(|| {
+            let caret = self.editor.cursor_geometry(1.5).unwrap_or_else(|| {
                 let area = self.editor.ime_cursor_area();
-                Some(parley::BoundingBox {
+                parley::BoundingBox {
                     x1: area.x0 + 1.5,
                     ..area
-                })
+                }
             });
-            let (x0, x1) = caret.map_or((0.0, 1.5), |c: parley::BoundingBox| {
-                (c.x0 as f32, c.x1 as f32)
-            });
+            let (x0, x1) = (caret.x0 as f32, caret.x1 as f32);
             let left = (field[0] + FIELD_PAD + x0).min(field[2] - 1.5);
             let compose = self.editor.raw_compose().clone();
             TextInputState {

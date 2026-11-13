@@ -76,9 +76,9 @@ while IFS= read -r -d '' f; do
     spike/render-trial/*|spike/render-web/*) render=true ;;
     # Row 6a. The storage trial: another package of its own.
     spike/store-trial/*) store=true ;;
-    # Row 6b. The controls trial and its window: two more packages of their own, which share a job. They build
-    # nothing of the workspace in.
-    spike/controls-trial/*|spike/controls-window/*) controls=true ;;
+    # Row 6b. The controls trial, its window and its page: three more packages of their own, which share a job.
+    # They build nothing of the workspace in.
+    spike/controls-trial/*|spike/controls-window/*|spike/controls-web/*) controls=true ;;
     # Row 7. The pinned toolchain builds all of them, and the format, lint and cargo settings at the root are
     # read by all of them (the tools look in parent directories, and cargo reads `.cargo/` from where it is run).
     rust-toolchain.toml|rustfmt.toml|clippy.toml|.cargo/*) rust=true; text=true; render=true; store=true; controls=true ;;
