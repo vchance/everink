@@ -82,6 +82,7 @@ version = "0.0.0"
 dependencies = [
  "accesskit",
  "egui",
+ "epaint_default_fonts",
  "parley",
  "taffy",
 ]

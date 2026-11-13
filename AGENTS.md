@@ -135,8 +135,8 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   commit there. Take its figures on a machine that is doing nothing else.
 - `spike/controls-trial` chooses nothing: the controls toolkit is the owner's decision. Its tests hold both
   candidates to the same behaviour; when one fails after a version change, the library changed, and
-  `docs/spike/results-4a-controls.md` is where to say so. On a machine with no fonts the own toolkit measures
-  text by a fixed width a character, so its layout differs there; the tests do not depend on it.
+  `docs/spike/results-4a-controls.md` is where to say so. Neither candidate uses the machine's fonts: the trial
+  carries its own (`own-fonts`, `egui-fonts`), and without one the own toolkit's text field cannot be edited.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions

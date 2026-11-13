@@ -11,27 +11,34 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [features]
-# `egui` is the toolkit alone; `egui-fonts` adds the fonts it ships (about 1 MB), without which it draws no text.
-# The tests and the timing run use the fonts; the size run measures both.
-default = ["own", "egui-fonts"]
+# `egui` and `own` are each toolkit alone, without a font: egui then draws no text and the own toolkit's field
+# cannot be edited (parley's editor needs glyphs to move over). `egui-fonts` adds the fonts egui ships (0.68 MB)
+# and `own-fonts` gives the own toolkit one of them, Ubuntu Light (0.36 MB), so that both set the same type.
+# The tests and the timing run use the fonts; the size run measures with and without.
+default = ["own-fonts", "egui-fonts"]
 own = ["dep:taffy", "dep:parley"]
+own-fonts = ["own", "dep:epaint_default_fonts"]
 egui = ["dep:egui"]
 egui-fonts = ["egui", "egui/default_fonts"]
+# The own toolkit with the machine's fonts as well. The design has the controls use the document's fonts and
+# never the system's, and on Linux this needs the fontconfig development library, so it is not a default.
+system-fonts = ["own", "parley/system"]
 
 [dependencies]
 accesskit = "=0.25.2"
 taffy = { version = "=0.15.1", optional = true }
-parley = { version = "=0.12.0", optional = true }
+parley = { version = "=0.12.0", optional = true, default-features = false, features = ["std"] }
 egui = { version = "=0.37.0", optional = true }
+epaint_default_fonts = { version = "=0.37.0", optional = true }
 
 # The tests and the timing run compare the two, so they need both. The size probe builds with either or none.
 [[test]]
 name = "contract"
-required-features = ["own", "egui-fonts"]
+required-features = ["own-fonts", "egui-fonts"]
 
 [[example]]
 name = "bench_controls"
-required-features = ["own", "egui-fonts"]
+required-features = ["own-fonts", "egui-fonts"]
 
 [lints.rust]
 unsafe_code = "forbid"

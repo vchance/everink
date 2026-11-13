@@ -8,7 +8,7 @@ set -eu
 cd "$(dirname "$0")"
 
 echo "probe: bytes, gzip -9, brotli"
-for features in "" own egui egui-fonts "own,egui-fonts"; do
+for features in "" own own-fonts egui egui-fonts "own-fonts,egui-fonts"; do
   name=${features:-baseline}
   cargo build --quiet --locked --profile small --target wasm32-unknown-unknown --example size_probe \
     --no-default-features --features "$features" --target-dir "target/size-$name"

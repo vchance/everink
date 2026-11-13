@@ -138,8 +138,22 @@ impl Default for OwnControls {
         editor
             .edit_styles()
             .insert(StyleProperty::from(GenericFamily::SansSerif));
+        #[allow(unused_mut, reason = "without a font nothing is registered")]
+        let mut fonts = FontContext::new();
+        #[cfg(feature = "own-fonts")]
+        {
+            // The one font the controls set their text in. The product would register the document's fonts
+            // here; the trial borrows one of egui's, so that both candidates set the same type.
+            let families = fonts.collection.register_fonts(
+                parley::fontique::Blob::from(epaint_default_fonts::UBUNTU_LIGHT.to_vec()),
+                None,
+            );
+            fonts
+                .collection
+                .set_generic_families(GenericFamily::SansSerif, families.iter().map(|(id, _)| *id));
+        }
         OwnControls {
-            fonts: FontContext::new(),
+            fonts,
             layouts: LayoutContext::new(),
             editor,
             widths: HashMap::new(),
