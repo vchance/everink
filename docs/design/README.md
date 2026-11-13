@@ -38,7 +38,7 @@ These are the decisions that cross section boundaries. The section named first h
 | Merge | The object map is Everink's own and is ordered by the server: each field is last-writer-wins by the surface's sequence number. A CRDT library is used only for the text inside text objects, and that library is yrs (owner decisions; yrs chosen 2026-11-12). | 02, 03 |
 | What is sent | An object is sent when it crosses the padded view and covers at least one pixel, with a budget that raises the threshold on dense views. Size decides, not level. The client sends its exact view; the server adds the padding. | 03, 06 |
 | Connection | One WebSocket carries changes and presence. Presence has its own queue, served first; bulk data is paced to what the link drains in about 20 ms, so a cursor waits about 40 ms at most behind it on links faster than about 1.6 Mbit/s. Data already queued in the network is not counted. The spike measured at most 39 ms from 2 Mbit/s up in a model, and 52 ms at 5 Mbit/s and 29 ms at 20 over loopback sockets, of which about 16 and 4 ms are the test's own buffers; the 200 ms target is missed at 1 Mbit/s. A second socket is the fallback; the owner decides about it after a real-network test. | 03, 04, 07, 08 |
-| Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine (the spike's outlines were identical on aarch64, x86-64 and wasm32). Which outline form is used is not decided: the single path leaves holes, and the union of discs and bands that has none is too heavy for the renderer as it stands. | 06, 01, 02 |
+| Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine (the spike's outlines were identical on aarch64, x86-64 and wasm32). The outline form is runs with smoothed sides (owner, 2026-11-13): the single path leaves holes, the union of discs and bands that has none is too heavy for the renderer, and runs have none at about 1.2 times the single path's cost. | 06, 01, 02 |
 | Partial erase | A stroke carries a set of cuts, so two people erasing parts of one stroke both take effect. | 02, 06 |
 | Renderer | `vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind Everink's own interface. Frames come from a cache of 512-pixel tiles. The spike measured that a view composed from cached tiles holds 60 frames a second, that redrawing tiles is processor time that follows the outline's segments, and that in a browser the redraw needs WebAssembly SIMD to fit the tile budget, and fits it then only with the single-path outline; the web build requires SIMD (owner, 2026-11-13); whether the order changes is looked at again after further measurements. | 06, 07 |
 | Controls | Not chosen yet: the owner decides after running the screen-reader and keyboard checks (2026-11-13). The spike has built the same toolbar and text field with Everink's own small toolkit and with egui and measured both (sizes, frame cost, accessibility tree, composition, in a window and in a browser). Whichever is chosen sits behind the `Controls` trait, with AccessKit's tree for accessibility. How it is drawn differs: Everink's own toolkit paints through the renderer's scene API; egui gives triangles that `egui-wgpu` draws into a host render pass. | 07, 06 |
@@ -111,7 +111,7 @@ documents with measurements, before anything is built on them.
 | What is pen latency really? | 06 | A 240 frames-per-second camera on named devices, with and without the low-latency canvas |
 | Do cursors stall during a bulk load on one connection? | 04, 03 | Cursor delay while a client loads a large surface over a slow link. Answered on a model and loopback sockets: no from about 2 Mbit/s up; a real-network test is still to come ([results 2c](../spike/results-2c-paced-connection.md)) |
 | Which controls toolkit? | 07 | The same toolbar and text field built twice, with Everink's own small toolkit and with egui: composition, a screen reader, wasm size and effort, native and web. Built and measured; the owner's choice and the screen-reader and real-keyboard checks are still to come ([results 4a](../spike/results-4a-controls.md), [4b native](../spike/results-4b-window.md), [4b web](../spike/results-4b-web.md)) |
-| Does the owner's further candidate make sense here? | 06, 07 | A project the owner asked to have considered, evaluated behind the renderer interface next to the Vello path; its details are kept outside this repository |
+| Does the owner's further candidate make sense here? | 06, 07 | A project the owner asked to have considered, evaluated behind the renderer interface next to the Vello path; its details are kept outside this repository. Run on 2026-11-13; the owner decided that day that it is not used as a renderer backend |
 | How fast is storage? | 03 | Commit latency and load time for one SQLite file per room. Answered for SQLite on one machine: a durable commit is about 4 ms (with `fullfsync=ON` on macOS), and a room opens in 0.29 s at 100,000 strokes and 4 to 6 s at 1,000,000 ([results 5](../spike/results-5-storage.md)) |
 
 ## Owner decisions
@@ -151,13 +151,15 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
   The spike has built and measured both candidates (results
   [4a](../spike/results-4a-controls.md), [4b native](../spike/results-4b-window.md), [4b web](../spike/results-4b-web.md));
   no decision yet.
-- **Which outline form.** No decision yet: on 2026-11-13 the owner chose to have the lighter hole-free forms built and
-  measured first (spike slice 3d). Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
+- **Which outline form.** Decided on 2026-11-13: **runs with smoothed sides**, a run ended at an eighth of a turn
+  (owner; [results 3d](../spike/results-3d-outline-forms.md)). Kept here so the row can be found. The builder is
+  made the only one, and section 06's steps rewritten for it, in a change still to come. The owner first chose to have
+  the lighter hole-free forms built and measured (spike slice 3d). Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
   discs and bands has none and takes the processor renderer 394 to 407 ms for 10,000 strokes against 61 to 64
   ([3a](../spike/results-3a-wasm-outlines-cut.md), [3b](../spike/results-3b-renderer.md)). Slice 3d has since built a
   third form, runs, which leaves no holes and takes 73.9 ms (76.2 ms with its sides smoothed, where "no holes" is
   argued up to edge slivers and tested, not proved), and tried a true union, which is heavier
-  ([3d](../spike/results-3d-outline-forms.md)). The choice is now the owner's to make.
+  ([3d](../spike/results-3d-outline-forms.md)).
 - **WebAssembly SIMD.** Decided on 2026-11-13: **required**, one build ([results 3c](../spike/results-3c-browser.md);
   sections 06 and 07). It narrows owner decision 3: a browser with WebGL2 and without SIMD is not supported. Kept here
   so the row can be found.
@@ -167,11 +169,10 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
   the processor renderer first would bear on owner decision 3 (WebGPU and WebGL2 supported,
   the processor-only path best effort)
   ([3b](../spike/results-3b-renderer.md), [3c](../spike/results-3c-browser.md)).
-- **The further candidate the owner named.** Evaluated in the spike (part 4c, run on 2026-11-13) and used only if
-  it makes sense; its code and results are kept in a folder on the owner's machine, outside both this repository and
-  the candidate's, and nothing is pushed (owner, 2026-11-13). Whether to use it is the owner's to decide from those
-  results; until then the design's renderer stays as section 06 has it. Any question it raises about naming or licensing is
-  the owner's.
+- **The further candidate the owner named.** Decided on 2026-11-13: **not used as a renderer backend**; the renderer
+  stays as section 06 has it, and the question is closed (owner). It was evaluated in the spike (part 4c, run that
+  day); its code and results are kept in a folder on the owner's machine, outside both this repository and the
+  candidate's, and nothing is pushed. Kept here so the row can be found.
 - Each section's "Questions for the owner" lists what remains for that part, for example canvas rotation and how
   pasted objects are sized (01), undoing your own creation after others edited it (02), whether people may choose
   their cursor color (04), SVG import (05), blend modes (06), how far embedders may customize the controls (07).

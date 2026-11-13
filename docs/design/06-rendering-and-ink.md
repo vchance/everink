@@ -234,8 +234,9 @@ makes sense. Nothing in this design depends on it until it has been measured.
 "Performance budget per frame". The cost of moving many lifted objects and the pen path are still to be measured.)
 Measure first: the tile raster rate of `vello_gpu` on 10,000 objects (see the
 performance budget); the cost of moving many lifted objects; and the stroke path from pen sample to GPU submit. The
-further candidate the owner asked to have considered is evaluated in the same spike behind the `Backend` trait,
-with its details kept outside this repository; nothing depends on it until it has been measured.
+further candidate the owner asked to have considered was evaluated in the same spike behind the `Backend` trait,
+with its details kept outside this repository; the owner decided on 2026-11-13 that it is not used as a renderer
+backend.
 
 
 ### Crate layout
@@ -679,11 +680,14 @@ does (the union: about 6.5 times); its shape tapers where the pressure changes, 
 a clipping library was heavier to draw and about two hundred times slower to make
 ([results 3d](../spike/results-3d-outline-forms.md)).
 
-**Which outline form to use is not decided** (to be decided; see [the index](README.md#still-open)). Until it is,
-steps 4 to 8 above describe the single path, and the version-1 algorithm is not fixed. The prototype keeps three
-builders in `everink-core`: `build` (the union), `build_single_path` (this section's first form, kept to record
-its flaw) and `build_runs_within` (runs, with the limit on a turn and the smoothing as arguments; `build_runs`
-is its loosest variant, a quarter turn with straight sides); those not chosen go when the choice is made.
+**The outline form is runs with smoothed sides, a run ended at an eighth of a turn** (owner decision,
+2026-11-13). Steps 4 to 8 above still describe the single path; they are rewritten for runs in the change that
+makes `build_runs_within` the only builder, and until that change the version-1 algorithm is not fixed. With
+runs a stroke tapers where the pressure changes, so the cut, the hit test and the eraser follow that shape. The
+prototype still keeps three builders in `everink-core`: `build` (the union), `build_single_path` (this section's
+first form, kept to record its flaw) and `build_runs_within` (runs, with the limit on a turn and the smoothing as
+arguments; `build_runs` is its loosest variant, a quarter turn with straight sides); those not chosen go in that
+change.
 
 The same function, with an *incremental* entry point, builds the live preview and the final stroke (section 04 needs
 both to match):
@@ -1105,8 +1109,9 @@ measurement to make.
 
   In the units of the reading above: 61 ms is four frames at 60 Hz and 400 ms is twenty-four; the reading above
   takes the first as acceptable and says of the second that the tile approach still holds and a remedy is chosen. The single path is at the first figure natively and in WebAssembly with SIMD
-  (80 ms); the union is at the second (540 ms in WebAssembly with SIMD, 1.2 to 1.3 s without). Which outline to use is
-  open (see "The outline: variable width, deterministic").
+  (80 ms); the union is at the second (540 ms in WebAssembly with SIMD, 1.2 to 1.3 s without). Runs, the form
+  the owner chose on 2026-11-13, are at 76 ms natively and 101 ms in WebAssembly with SIMD (see "The outline:
+  variable width, deterministic").
 - **Tile raster is processor time, and it follows the outline's segments, at 20 to 25 ns a segment.** Building the
   scenes, which is the `fill_path` calls that hand each stroke's path to the renderer, flattens the path and makes its
   coverage strips on the calling thread; it is the same code and the same time in `vello_gpu` (on either backend) and
@@ -1254,12 +1259,12 @@ languages, the first app, the merge model, the controls toolkit and the further 
 
 Raised by the spike (measured in slices 3a to 3c) and put to the owner on 2026-11-13:
 
-5. **Which outline form.** No decision yet: the owner chose to have the lighter hole-free forms built and measured
-   first (spike slice 3d). The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
+5. **Which outline form.** Decided on 2026-11-13: runs with smoothed sides. The owner first chose to have the
+   lighter hole-free forms built and measured (spike slice 3d). The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
    and bands has none and costs the processor renderer far more for 10,000 strokes (394 to 407 ms
    against 61 to 64 ms natively). Slice 3d has built a third form, runs, with no holes at about 1.2 times the single
-   path's cost, and tried a true union ([results 3d](../spike/results-3d-outline-forms.md)); the choice is now the
-   owner's to make. See "The outline: variable width, deterministic".
+   path's cost, and tried a true union ([results 3d](../spike/results-3d-outline-forms.md)). See "The outline: variable width,
+   deterministic".
 6. **WebAssembly SIMD.** Decided on 2026-11-13: required. (The tile budget holds in a browser only with it, and
    then only for the single-path outline; a module built with it does not load without it.)
 7. **The backend order.** Natively the processor renderer was faster than the GPU one for strokes; in Chrome all

@@ -9,7 +9,8 @@ Slice 3 left two outline forms and a gap between them. The design's single path 
 stroke doubles back or curls ([3a](results-3a-wasm-outlines-cut.md)). Discs and bands leave none and cost the
 renderer about six times as much ([3b](results-3b-renderer.md), [3c](results-3c-browser.md)). On 2026-11-13 the
 owner chose to have the lighter hole-free forms built and measured before choosing. This part does that. It
-chooses nothing: the outline form is the owner's decision.
+chooses nothing: the outline form is the owner's decision. (The owner chose later that day, from this file: runs
+with smoothed sides, a run ended at an eighth of a turn.)
 
 ## Answer
 
@@ -342,7 +343,7 @@ single path, with the taper stated as the stroke's shape, and the performance bu
 
 ## For the owner's choice
 
-The forms on the table, with what each means:
+The owner chose the last row on 2026-11-13. The forms that were on the table, with what each means:
 
 | Form | Holes | Redraw, natively | In Chrome | Whole view refilled in Chrome, at 4 ms a frame | Shape and look |
 |---|---|---|---|---|---|
