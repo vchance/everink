@@ -224,7 +224,9 @@ makes sense. Nothing in this design depends on it until it has been measured.
   live-ink canvas and the stroke modeler are built to the design below, but the per-device latency measurements and
   prediction tuning wait. Overview pictures stay in build step 6.
 - **Controls toolkit (not yet chosen).** The spike builds the same toolbar twice, with Everink's own small toolkit
-  and with egui. Either draws through the scene API below, so the choice does not change this section.
+  and with egui. Everink's own toolkit draws through the scene API below. egui does not: it gives triangles that
+  `egui-wgpu` draws into a host render pass (section 07), so with egui the controls layer of the compose pass is that
+  pass and not a `SceneFragment`.
 - **Merge model (owner decision, 2026-11-12).** Everink's own server-ordered object map, with a CRDT library only
   for text. Nothing in this section depends on it.
 
@@ -372,7 +374,7 @@ when its `Xform` changes). Per tile, the object is emitted with a transform only
 `render_scene`, which flattens to a tolerance of 0.25 px at the tile's own scale (so deep zoom stays smooth at any
 depth). A `Cut` object is emitted as the given segments; only true edges are stroked.
 
-**Static scene cost.** A static, fully cached view costs one compose pass of about 20 textured quads: well under 1
+**Static scene cost.** A static, fully cached view costs one compose pass of about 40 textured quads at 3840 x 2160: well under 1
 ms of GPU time and no CPU path work. When nothing changes and no animation runs, no frame is produced at all.
 **Measured** (`../spike/results-3c-browser.md`; Chrome 157, Apple M4): a 3840 x 2160 canvas composed from 40 cached
 tiles on every frame while it pans held a frame every 16.7 ms on both WebGPU and WebGL2, with no frame more than
@@ -661,7 +663,7 @@ which is rougher than a real pen).
   | Single path (the design's) | 165 | 61 to 64 ms | 80 to 81 ms | yes |
 
   The renderer's cost follows the segments, at 20 to 25 ns a segment (see "Performance budget per frame"). So the
-  outline that leaves no holes is too heavy for the renderer as it stands (nine times the segments, about six times
+  outline that leaves no holes is too heavy for the renderer as it stands (nine times the segments, over six times
   the processor renderer's time), and the light one leaves holes.
 - **Ways to a form that is both light and whole were named and not tried**, except the octagon figure above: fewer
   and straighter corners; discs only where the stroke turns sharply or its width changes, with bands elsewhere; one
@@ -1091,8 +1093,8 @@ measurement to make.
   | Octagons and bands (a trial form) | 889 | 263 to 271 ms | 281 to 325 ms | 355 to 363 ms | 881 to 970 ms |
   | Discs and bands (the union that has no holes) | 1,485 | 394 to 407 ms | 420 to 478 ms | 536 to 555 ms | 1,244 to 1,345 ms |
 
-  In the units of the reading above: 61 ms is four frames at 60 Hz and 400 ms is twenty-four; the design called the
-  first acceptable and the second not. The single path is at the first figure natively and in WebAssembly with SIMD
+  In the units of the reading above: 61 ms is four frames at 60 Hz and 400 ms is twenty-four; the reading above
+  takes the first as acceptable and says of the second that the tile approach still holds and a remedy is chosen. The single path is at the first figure natively and in WebAssembly with SIMD
   (80 ms); the union is at the second (540 ms in WebAssembly with SIMD, 1.2 to 1.3 s without). Which outline to use is
   open (see "The outline: variable width, deterministic").
 - **Tile raster is processor time, and it follows the outline's segments, at 20 to 25 ns a segment.** Building the
@@ -1106,8 +1108,7 @@ measurement to make.
   help. The budget values themselves are not changed here.
 - **WebAssembly costs 1.3 to 1.4 times native with SIMD and 3.0 to 3.4 times without** for this redraw. SIMD
   (`-C target-feature=+simd128`) is worth 2.3 to 2.6 times; a module built with it does not load in a browser
-  without it. **This budget assumes WebAssembly SIMD** (in the browser only the single path fits the tile budget, and
-  only with SIMD). Whether to require it or ship two builds is not decided (see section 07, "Packaging", and [the
+  without it. **In a browser this budget is met only with WebAssembly SIMD** (and only by the single path). Whether to require it or ship two builds is not decided (see section 07, "Packaging", and [the
   index](README.md#still-open)).
 - **Scenes built tile by tile cost about 5% more** than one scene for the view, and several tiles could be prepared on
   several threads natively; a browser page that is not cross-origin isolated has one (section 07).
@@ -1245,7 +1246,7 @@ languages, the first app, the merge model, the controls toolkit and the further 
 Open because of the spike (measured in slices 3a to 3c; the choices are the owner's and are not made here):
 
 5. **Which outline form.** The single path leaves holes (7.1% of a rough corpus's stroke points); the union of discs
-   and bands has none and costs about six times the processor renderer's time for 10,000 strokes (394 to 407 ms
+   and bands has none and costs the processor renderer far more for 10,000 strokes (394 to 407 ms
    against 61 to 64 ms natively). Fewer corners, discs only at turns, or a true union were named and not tried. See
    "The outline: variable width, deterministic".
 6. **WebAssembly SIMD.** The tile budget holds in a browser only with it, and a module built with it does not load

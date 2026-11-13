@@ -41,7 +41,7 @@ These are the decisions that cross section boundaries. The section named first h
 | Stroke data | Stored points: a 32-bit grid at 2^-16 of a unit plus pressure, fixed when the pen lifts. Derived outlines: a 64-bit grid at 2^-40, built with arithmetic that is identical on every machine (the spike's outlines were identical on aarch64, x86-64 and wasm32). Which outline form is used is not decided: the single path leaves holes, and the union of discs and bands that has none is too heavy for the renderer as it stands. | 06, 01, 02 |
 | Partial erase | A stroke carries a set of cuts, so two people erasing parts of one stroke both take effect. | 02, 06 |
 | Renderer | `vello_gpu` on WebGPU, then on WebGL2, then `vello_cpu`, behind Everink's own interface. Frames come from a cache of 512-pixel tiles. The spike measured that a view composed from cached tiles holds 60 frames a second, that redrawing tiles is processor time that follows the outline's segments, and that in a browser the redraw needs WebAssembly SIMD to fit the tile budget; whether the order changes and whether SIMD is required are not decided. | 06, 07 |
-| Controls | Not chosen yet: the owner decides after the spike, which has built the same toolbar and text field with Everink's own small toolkit and with egui and measured both (sizes, frame cost, accessibility tree, composition, in a window and in a browser). Whichever is chosen sits behind the `Controls` trait, drawn through the renderer's scene API, with AccessKit's tree for accessibility. | 07, 06 |
+| Controls | Not chosen yet: the owner decides after the spike, which has built the same toolbar and text field with Everink's own small toolkit and with egui and measured both (sizes, frame cost, accessibility tree, composition, in a window and in a browser). Whichever is chosen sits behind the `Controls` trait, with AccessKit's tree for accessibility. How it is drawn differs: Everink's own toolkit paints through the renderer's scene API; egui gives triangles that `egui-wgpu` draws into a host render pass. | 07, 06 |
 | Limits | One table holds every numeric limit. | 08 |
 | Blob access | One grant per blob, tied to the session, checked against revoked sessions on every request. | 08, 05 |
 | Clock | One offset from the server's clock, measured by ping, used by presence and video. | 03, 05, 04 |
@@ -151,16 +151,16 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
   [4a](../spike/results-4a-controls.md), [4b native](../spike/results-4b-window.md), [4b web](../spike/results-4b-web.md));
   the choice is the owner's, and the screen-reader and real-keyboard checks are the owner's to run.
 - **Which outline form.** Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
-  discs and bands has none and is about six times the processor renderer's time for 10,000 strokes. Fewer and
+  discs and bands has none and takes the processor renderer 394 to 407 ms for 10,000 strokes against 61 to 64. Fewer and
   straighter corners, discs only at turns, or a true union were named and not tried
   ([3a](../spike/results-3a-wasm-outlines-cut.md), [3b](../spike/results-3b-renderer.md)).
-- **WebAssembly SIMD: require it, or ship two builds.** The tile budget holds in a browser only with it, and a module
-  built with it does not load without it ([3c](../spike/results-3c-browser.md)). To be decided; sections 06 and 07.
+- **WebAssembly SIMD: require it, or ship two builds.** The tile budget holds in a browser only with it, and then only
+  for the single-path outline; a module built with it does not load without it ([3c](../spike/results-3c-browser.md)). To be decided; sections 06 and 07.
 - **The backend order.** Natively the processor renderer was faster than the GPU one for strokes, and in Chrome the
-  three took the same time. Whether the order of section 06 changes waits for other browsers and machines
+  three took the same time. Whether the order of section 06 changes waits for other browsers and machines; putting
+  the processor renderer first, like a SIMD-only module, would bear on owner decision 3 (WebGPU and WebGL2 supported,
+  the processor-only path best effort)
   ([3b](../spike/results-3b-renderer.md), [3c](../spike/results-3c-browser.md)).
-- **The storage engine.** SQLite is the design's default and the only engine the spike measured; redb and the others
-  were not ([5](../spike/results-5-storage.md)). The default stands until a measurement or the owner says otherwise.
 - **The further candidate the owner named.** Evaluated in the spike and used only if it makes sense; any question
   it raises about naming or licensing is the owner's.
 - Each section's "Questions for the owner" lists what remains for that part, for example canvas rotation and how

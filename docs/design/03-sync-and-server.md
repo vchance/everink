@@ -177,8 +177,8 @@ look like free versions, but restoring one rolls the whole database back, and it
 read-only beside the live data. Versions need both, so it does not help.
 
 The spike measured only SQLite (`../spike/results-5-storage.md`); redb and every other engine in the table were not
-tried, so the table's other cells stay as researched. SQLite stays the design's default until a measurement or the
-owner says otherwise (see [the index](README.md#still-open)).
+tried, so the table's other cells stay as researched, and "SQLite versus redb speed" stays in this section's list of
+what is not verified. Nothing measured speaks against the default.
 
 ### Wire encoding
 
@@ -928,8 +928,8 @@ the same code must give the same document, so the room has no hidden state that 
 **The room does have one: its random number generator.** It draws random numbers when it makes an order key, so a
 room opened from a snapshot gives the changes after it other keys than they got the first time, unless the state of
 the generator is saved with the snapshot. The spike saves it in the manifest, and a test shows that replay without it
-gives a different room (`../spike/results-5-storage.md`). The alternative, logging what the room did (the effects,
-with the keys it chose) and not what the client asked, was not tried; which to do is not decided here.
+gives a different room (`../spike/results-5-storage.md`). So the snapshot manifest carries the generator's state. The alternative, logging what the room did (the effects,
+with the keys it chose) and not what the client asked, was not tried.
 
 **Snapshots by cohort chunks.** The document is divided into **chunks** by creation order: chunk `c` holds the
 objects with ordinals `256·c .. 256·c + 255`, serialized as section 02's canonical `Doc::body` bytes (same state,

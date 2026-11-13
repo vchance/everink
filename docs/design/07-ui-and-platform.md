@@ -136,8 +136,8 @@ dozen widgets, and Slint's license is not MIT OR Apache-2.0 and would pass its c
   scroll containers and popover placement itself.
 - **Candidate 2: egui** (0.37.0, MIT OR Apache-2.0 [1]) with `egui-wgpu` drawing into a host render pass, behind
   `Controls`. Cost: its own text stack (not Parley), AccessKit coverage that its README lists as native Windows and
-  macOS only [2], and a hidden `<input>` text agent on the web with open issues [9]. The spike corrected three of
-  these (below): egui lays text out itself but shapes it with the libraries Parley uses; its AccessKit output carries
+  macOS only [2], and a hidden `<input>` text agent on the web with open issues [9]. The spike qualified three of
+  these (below; on the web through Everink's mirror, and natively without a screen reader): egui lays text out itself but shapes it with the libraries Parley uses; its AccessKit output carries
   container roles and names; and the text agent is not used when egui is driven through Everink's shell.
 
 What each must show in the spike, on the same fixed scope, measured and written into this section:
@@ -447,8 +447,8 @@ newest-wins when the queue is over the limit. A browser WebSocket has no other b
 | Threads inside wasm | n/a | **Not used.** They need `SharedArrayBuffer`, hence cross-origin isolation (COOP `same-origin`, COEP `require-corp`) for the whole page, which an embedder cannot accept in general |
 
 **Measured** (`../spike/results-3a-wasm-outlines-cut.md`, `../spike/results-3c-browser.md`; Apple M4): WebAssembly on
-one thread ran section 01's cut and the stroke outline 3 to 4 times slower than native (under Node 26, Chrome's
-engine), and the renderer's redraw of 10,000 strokes 1.3 to 1.4 times slower than native with SIMD and 3.0 to 3.4
+one thread ran section 01's cut 3 to 4 times slower than native and the stroke outline 2.7 times slower (under Node
+26, Chrome's engine), and the renderer's redraw of 10,000 strokes 1.3 to 1.4 times slower than native with SIMD and 3.0 to 3.4
 times without. A worker that prepares tiles was not tried.
 
 The core is single-threaded on purpose: the document, camera and controls change only inside `handle`, so there are
@@ -698,8 +698,8 @@ AccessKit 0.25.2 has no role for a toggle button and reports "checked" and "pres
 candidates used `RadioButton` with it. `parley` 0.12 has no AccessKit support, so the text field's caret and selection
 for a screen reader are Everink's to write with either candidate (egui's `TextEdit` gives the value only). egui 0.37
 lets a container carry a role and a name, and the tree it gave passed the same checks as the one written by hand. The
-display's scale has to reach the tree: the own toolkit needs the shell to give it, and egui puts it on its root node
-itself, so `AccessibilityHost` has to say who applies it.
+display's scale has to reach the tree. The shell applies it, on the tree's root node, unless the toolkit's root
+already carries it: the own toolkit's does not, and egui's does.
 
 **Native.** `accesskit_winit` (0.34.2, Apache-2.0 only [1]) connects to UI Automation, NSAccessibility and AT-SPI.
 Adapters lack rich text [4], so text objects are a plain string value with caret and selection. The tree is built
@@ -712,7 +712,8 @@ assistive technology was active, which it never was, so nothing was read back fr
    on; until then no mirror nodes exist. The embedder can force it on.
 2. The mirror root is `<div role="application" aria-label="Drawing surface">` (a deliberate choice: screen readers
    then pass keystrokes to the page; the embedder can override). Nodes become elements with ARIA roles,
-   `aria-label`, `aria-pressed/checked/expanded/valuenow/disabled`, and roving `tabindex`. **Every string is set
+   `aria-label`, `aria-pressed/checked/expanded/valuenow/disabled`, and one element in the tab order (the one
+   that has the controls' focus; see "Which side moves the focus" below). **Every string is set
    with `textContent` or an attribute setter; the shell never uses `innerHTML`**, because names include
    user-supplied text (people, text objects, file names).
 3. Elements are positioned over their controls (see the stack under "Windowing" for what that does underneath the
@@ -728,9 +729,10 @@ live regions and the objects list were not built). One mirror kept from the Acce
 field and the DOM's focus as the single focus worked with both candidates: Chrome's accessibility tree was right, and
 typing and composition were right. AccessKit's role, label, value, toggled, disabled, bounds, children and the three
 actions were all the page needed. What the design did not say:
-- **Which side decides where Tab enters and leaves.** Left to the browser, the first Tab went to the first element in
-  the mirror. In the spike the controls handle Tab and the DOM's focus follows (the design has roving `tabindex` with
-  the browser moving the focus); both end with one element in the tab order. The controls choose their entry
+- **Which side moves the focus.** The controls do, and the DOM's focus follows: the shell gives Tab and the arrows to
+  the controls and then puts the DOM's focus on the element of the control they name. (This section had the browser
+  moving the focus over a roving `tabindex`; left to the browser, the first Tab went to the first element in the
+  mirror and not to the control the toolkit starts at.) The controls choose their entry
   whichever way and from wherever Tab comes, and let go of their focus when the DOM's focus goes elsewhere in the page,
   but keep it when only the window loses the focus. A toolkit that cycles its focus (egui does) would trap the keyboard
   (WCAG 2.1.2), so the shell makes it drop the focus and lets the browser take the key.
@@ -964,8 +966,9 @@ size. The browser compiles while downloading when the file is served as `applica
 one backend: 0.36 to 0.52 MB raw and 122 to 155 KB with Brotli; all three backends 0.91 MB and 262 KB; no text and
 none of the optional shaders, so a product build is larger. The controls: 1.24 MB raw and 366 KB with Brotli for the
 own toolkit, 2.42 MB and 616 KB for egui, each without a font; with one font (the own) 1.64 MB and 513 KB, with egui's
-three 3.09 MB and 886 KB. The controls' and the renderer's figures overlap (both carry Parley's data or share its
-libraries), so they are not to be added. Loading and compiling the speed build took 45 to 68 ms from a local server.
+three 3.09 MB and 886 KB. The controls' and the renderer's figures are not to be added: the controls' leave out what draws
+them (`egui-wgpu` for egui), and a product renderer with text carries Parley again, which the own toolkit's figure
+already includes. Loading and compiling the speed build took 45 to 68 ms from a local server.
 **SIMD.** The renderer's speed in a browser depends on WebAssembly SIMD (`-C target-feature=+simd128`, not the
 `relaxed-simd` feature that section 01 bans): 2.3 to 2.6 times faster, and a module built with it does not load in a
 browser without it. A speed build with SIMD is 1.35 MB (290 KB Brotli) for all three backends; without, 1.46 MB (306
