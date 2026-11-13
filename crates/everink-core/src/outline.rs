@@ -456,8 +456,8 @@ fn turn(a: LPt, b: LPt, c: LPt) -> i128 {
 /// With `smooth`, the two sides of a run are curves, as the single path's are: at each corner inside a run the
 /// path goes from the middle of one edge to the middle of the next with the corner as control point. That takes
 /// a sliver off the outside of each turn and adds one on the inside, so a run no longer covers its pieces
-/// exactly; a corner is left sharp where the sliver would reach the stroke's own point, so the centre line
-/// stays covered. The ends of a run, the wedges and the bands across stay straight.
+/// exactly; a corner on the outside is left sharp where the sliver would reach the stroke's own point, so the
+/// centre line stays covered. The ends of a run, the wedges and the discs are as without it.
 pub fn build_runs_within(
     points: &[InkPoint],
     base_width: i32,
@@ -525,13 +525,16 @@ pub fn build_runs_within(
         for t in 1..2 * m {
             let (at, point) = corner(t);
             let to = lattice(at);
-            // Rounded only if the stroke's point is on the far side of the chord from the corner: the
-            // sliver the curve cuts off is on the corner's side, so it cannot reach the centre line.
+            // The path goes anticlockwise, so the corner juts out where it is to the right of the chord from
+            // `enter` to `leave` (the outside of a turn) and is a notch where it is to the left (the inside).
+            // Rounding a notch adds a sliver that winds the same way as the run: it can make no hole.
+            // Rounding a corner that juts out takes a sliver away, on the corner's side of the chord; that
+            // is done only if the stroke's point is on the other side, so the centre line stays covered.
             let rounded = point.and_then(|p| {
                 let enter = lattice(mid(corner(t - 1).0, at));
                 let leave = lattice(mid(at, corner((t + 1) % (2 * m)).0));
                 let (c, p) = (turn(enter, leave, to), turn(enter, leave, lattice(p)));
-                ((c > 0 && p < 0) || (c < 0 && p > 0)).then_some((enter, leave))
+                (c > 0 || (c < 0 && p > 0)).then_some((enter, leave))
             });
             if let Some((enter, leave)) = rounded {
                 if enter != from {
@@ -577,8 +580,9 @@ pub fn build_runs_within(
             run.push(m);
             continue;
         }
-        // The run ends at `k`, flat. A piece too small to be sound on the lattice is left out, and a disc is
-        // put on each of its ends.
+        // The run ends at `k`, flat. Here the piece lies between two cross-cuts square to its own direction,
+        // so it is sound unless the brush or the step is smaller than the lattice can hold. Such a piece is
+        // left out, and a disc is put on each of its ends.
         let whole = piece_is_sound(from, square);
         if whole {
             run.push(square);

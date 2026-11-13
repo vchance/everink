@@ -155,7 +155,8 @@ Decision 8 replaces part of an earlier one: the high-level design's "guest share
   measured first (spike slice 3d). Section 06's single path leaves holes (7.1% of a rough corpus's stroke points); the union of
   discs and bands has none and takes the processor renderer 394 to 407 ms for 10,000 strokes against 61 to 64
   ([3a](../spike/results-3a-wasm-outlines-cut.md), [3b](../spike/results-3b-renderer.md)). Slice 3d has since built a
-  third form, runs, which leaves no holes and takes 88.0 ms, and tried a true union, which is heavier
+  third form, runs, which leaves no holes and takes 73.9 ms (76.2 ms with its sides smoothed, where "no holes" is
+  argued up to edge slivers and tested, not proved), and tried a true union, which is heavier
   ([3d](../spike/results-3d-outline-forms.md)). The choice is now the owner's to make.
 - **WebAssembly SIMD.** Decided on 2026-11-13: **required**, one build ([results 3c](../spike/results-3c-browser.md);
   sections 06 and 07). It narrows owner decision 3: a browser with WebGL2 and without SIMD is not supported. Kept here

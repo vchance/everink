@@ -38,6 +38,7 @@ cargo fmt --manifest-path spike/text-trial/Cargo.toml --check       # its format
 cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml [strokes]   # the renderer trial (question 10)
 cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml coverage [strokes]   # what each outline form covers (slice 3d)
 cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml union [strokes]   # a true union, made by a library, drawn (slice 3d)
+cargo run --release --locked --manifest-path spike/render-trial/Cargo.toml picture <file.png> single|runs   # the forms side by side (slice 3d)
 cargo clippy --manifest-path spike/render-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/render-trial/Cargo.toml --check     # its format check
 sh spike/render-web/build.sh                                        # the browser trial: builds into www/, prints wasm sizes
@@ -95,8 +96,9 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `spike/render-trial`: the trial of `vello_gpu` and `vello_cpu` on a scene of stroke outlines (spike slice 3b).
   A package of its own with its own `Cargo.lock`, for the same reason. It builds `crates/everink-core` in, so a
   change there runs its CI job (`render-trial`) too. It has no tests; its run checks itself. Its scene is
-  `src/scene.rs`, which the browser trial builds in as well. Its `coverage` and `union` runs (slice 3d) compare
-  the outline forms; `union` alone uses the polygon-clipping library `i_overlay`.
+  `src/scene.rs`, which the browser trial builds in as well. Its `coverage`, `union` and `picture` runs (slice
+  3d) compare the outline forms; `union` alone uses the polygon-clipping library `i_overlay`, and `picture`
+  writes the two pictures `docs/spike/images/3d-forms*.png` (`single` and `runs`).
 - `spike/render-web`: the same scene in a browser (spike slice 3c): `vello_gpu` on WebGPU and on WebGL2 and
   `vello_cpu`, built to `wasm32-unknown-unknown`, with the tiles kept as textures and the view composed from
   them. Another package of its own with its own `Cargo.lock`. `build.sh` needs `wasm-bindgen` 0.2.130;

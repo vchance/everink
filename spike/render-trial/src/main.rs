@@ -5,8 +5,9 @@
 //! what each form of outline covers with what discs and bands cover (slice 3d).
 //! `cargo run --release --manifest-path spike/render-trial/Cargo.toml union [strokes]` (default 10,000) replaces
 //! each stroke's discs and bands by their true union, made by a polygon-clipping library, and draws that.
-//! `cargo run --release --manifest-path spike/render-trial/Cargo.toml picture <file.png>` draws parts of three
-//! rough strokes in four of the forms, side by side.
+//! `cargo run --release --manifest-path spike/render-trial/Cargo.toml picture <file.png> single|runs` draws parts
+//! of three rough strokes in five of the forms, side by side: the strokes that are worst for the single path, or
+//! for the smoothed runs.
 //!
 //! A scene of stroke outlines (built by `everink-core`) is spread over a 3840 x 2160 view and drawn the way
 //! section 06 has it drawn: in tiles of 512 x 512 pixels, each tile a scene of the objects that touch it, rendered
@@ -539,24 +540,60 @@ fn worst_gap(a: &BezPath, b: &BezPath) -> (f64, Point) {
     worst
 }
 
+/// The digits 1 to 5, five dots wide and seven high, a row of dots to a byte.
+const DIGITS: [[u8; 7]; 5] = [
+    [
+        0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+    ],
+    [
+        0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+    ],
+    [
+        0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+    ],
+    [
+        0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+    ],
+    [
+        0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+    ],
+];
+
 /// A picture of the forms side by side, as a PNG: parts of three rough strokes, a row each, drawn by `vello_cpu`
-/// at 4096 pixels a unit (sixteen times the scene's zoom) as discs and bands, as the single path, and as runs
-/// cut at a quarter turn, at an eighth, and at an eighth with their sides smoothed. The three are the strokes, of the first 300, where the single path
-/// leaves the longest stretch of the stroke's inside uncovered, and each row is centred on that stretch.
-fn picture(out: &str) {
+/// at 8192 pixels a unit (thirty-two times the scene's zoom). The columns carry their numbers: 1 discs and
+/// bands, 2 the single path, 3 runs cut at a quarter turn, 4 runs cut at an eighth, 5 runs cut at an eighth
+/// with their sides smoothed.
+///
+/// `worst` says which strokes, of the first 300. `single`: those where the single path leaves the longest
+/// stretch of the stroke's inside (discs and bands built three tenths thinner) uncovered, each row centred on
+/// that stretch. `runs`: those where the smoothed runs cover the least of what discs and bands cover, each row
+/// centred on the longest stretch they miss.
+fn picture(out: &str, worst: &str) {
     const CELL: usize = 300;
     const GAP: usize = 12;
     const ROWS: usize = 3;
+    const ZOOM: f64 = 8192.0;
     let rough = (true, false);
     let forms = [KINDS[0].1, KINDS[2].1, KINDS[3].1, KINDS[4].1, KINDS[5].1];
-    let paths = forms.map(|kind| scene::lone_strokes(300, kind, 4096.0, rough, 100));
-    let inside = scene::lone_strokes(300, KINDS[0].1, 4096.0, rough, 70);
-    let mut ranked: Vec<(f64, Point, usize)> = (0..300)
-        .map(|i| {
-            let (gap, at) = worst_gap(&inside[i], &paths[1][i]);
-            (gap, at, i)
-        })
-        .collect();
+    let paths = forms.map(|kind| scene::lone_strokes(300, kind, ZOOM, rough, 100));
+    let mut ranked: Vec<(f64, Point, usize)> = match worst {
+        "single" => {
+            let inside = scene::lone_strokes(300, KINDS[0].1, ZOOM, rough, 70);
+            (0..300)
+                .map(|i| {
+                    let (gap, at) = worst_gap(&inside[i], &paths[1][i]);
+                    (gap, at, i)
+                })
+                .collect()
+        }
+        "runs" => (0..300)
+            .map(|i| {
+                let s = areas(&paths[0][i], &paths[4][i]);
+                (s[2] / s[0], worst_gap(&paths[0][i], &paths[4][i]).1, i)
+            })
+            .collect(),
+        _ => panic!("picture <file.png> single|runs"),
+    };
     ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
     let (w, h) = (
         forms.len() * CELL + (forms.len() + 1) * GAP,
@@ -578,6 +615,21 @@ fn picture(out: &str) {
                 let mix = |ink: u32| ((ink * a + 255 * (255 - a)) / 255) as u8;
                 pixels[(y0 + k / CELL) * w + x0 + k % CELL] = [mix(24), mix(40), mix(72), 255];
             }
+            // The column's number in the cell's corner, on a white patch so that it reads over ink.
+            const DOT: usize = 4;
+            for y in 0..9 * DOT {
+                for x in 0..7 * DOT {
+                    let (dx, dy) = (x / DOT, y / DOT);
+                    let on = (1..6).contains(&dx)
+                        && (1..8).contains(&dy)
+                        && DIGITS[col][dy - 1] >> (5 - dx) & 1 == 1;
+                    pixels[(y0 + y) * w + x0 + x] = if on {
+                        [176, 32, 32, 255]
+                    } else {
+                        [255, 255, 255, 255]
+                    };
+                }
+            }
         }
     }
     let file = std::fs::File::create(out).expect("the picture's file can be made");
@@ -589,14 +641,21 @@ fn picture(out: &str) {
         .and_then(|mut writer| writer.write_image_data(pixels.as_flattened()))
         .expect("the picture is written");
     println!(
-        "{out}: parts of rough strokes {:?} of the first 300, one a row; columns: discs and bands, the single path, runs cut at a quarter turn, runs cut at an eighth, runs cut at an eighth with their sides smoothed",
+        "{out}: parts of rough strokes {:?} of the first 300, one a row, chosen as the worst for `{worst}`; columns: 1 discs and bands, 2 the single path, 3 runs cut at a quarter turn, 4 runs cut at an eighth, 5 runs cut at an eighth with their sides smoothed",
         ranked.iter().take(ROWS).map(|r| r.2).collect::<Vec<_>>()
+    );
+    // What they were ranked by: for `single` the stretch in pixels, for `runs` the share of the area.
+    println!(
+        "ranked by {:?}",
+        ranked.iter().take(ROWS).map(|r| r.0).collect::<Vec<_>>()
     );
 }
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("picture") {
-        picture(&std::env::args().nth(2).expect("picture <file.png>"));
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        assert_eq!(args.len(), 2, "picture <file.png> single|runs");
+        picture(&args[0], &args[1]);
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("union") {

@@ -13,24 +13,25 @@ chooses nothing: the outline form is the owner's decision.
 
 ## Answer
 
-**There is a form that leaves no holes and costs the renderer 1.2 to 1.4 times what the single path does, where
-discs and bands cost 6.5 times.** It is called *runs* here. A stretch of the stroke that turns gently is one
+**There is a form that leaves no holes and costs the renderer about 1.2 times what the single path does, where
+discs and bands cost about 6.5 times.** It is called *runs* here. A stretch of the stroke that turns gently is one
 closed path, as in the single path; where that path would fold over itself, the stretch ends and another begins.
 Its golden file, written on aarch64, passes byte for byte on wasm32 and, in CI, on x86-64.
 
-| | Single path (the design's) | Discs and bands (3a) | Runs, sides smoothed |
+| | Single path (the design's) | Discs and bands (3a) | Runs, cut at an eighth, sides smoothed |
 |---|---|---|---|
-| Holes over the stroke | yes | none | none |
-| Segments a stroke, the trial's scene | 165 | 1,485 | 259 |
-| Redraw of 10,000 strokes, natively, `vello_cpu` | 61.6 ms | 398 ms | 88.0 ms |
-| The same in Chrome, with SIMD | 80.6 ms | 536 ms | 115 ms |
-| One tile of 327 strokes in Chrome | 2.0 ms | 13.4 ms | 2.9 ms |
+| Holes over the stroke | yes | none | none found; proved for straight sides, argued and tested for smoothed ones (below) |
+| Segments a stroke, the trial's scene | 165 | 1,485 | 219 |
+| Redraw of 10,000 strokes, natively, `vello_cpu` | 61.1 ms | 393 ms | 76.2 ms |
+| The same in Chrome, with SIMD | 83.0 ms | 561 ms | 101 ms |
+| One tile of 327 strokes in Chrome | 2.1 ms | 14.0 ms | 2.5 ms |
 | Same bytes on aarch64, x86-64 and wasm32 | yes | yes | yes |
 
 - **Three variants of runs were built**: a run ended where the stroke turns a quarter turn or more, the same at an
   eighth of a turn, and the second with the sides of each run smoothed as the single path's are. They cost within
-  a quarter of one another. The picture below shows why the third is the one to look at: with straight sides a
-  stroke looks cut from card when it is magnified, and a limit of a quarter turn leaves spikes at corners.
+  6% of one another. [The pictures](#the-pictures) show why the third is the one to look at: with straight
+  sides a stroke looks cut from card when it is magnified, and a limit of a quarter turn leaves spikes at corners.
+  `build_runs` is the first of the three, the quarter turn.
 - **A true union was tried with a polygon-clipping library and is worse on every count**: 544 segments a
   stroke, 128 ms to redraw, and 1,641 microseconds to make one stroke's outline, against 7.9 for a
   longer and rougher stroke as runs.
@@ -76,11 +77,12 @@ the paths wind round it at all, and no path here can take away what another give
 bands have no holes, and it carries over.
 
 **Smoothed sides.** With `smooth`, a corner inside a run becomes a curve from the middle of one edge to the
-middle of the next, with the corner as control point; this is how the single path is smoothed. The curve takes a
-sliver off the outside of the turn, so a run no longer covers its pieces exactly, and the argument above holds
-only up to those slivers. To keep them away from the middle of the stroke, a corner stays sharp where the
+middle of the next, with the corner as control point; this is how the single path is smoothed. On the inside of
+a turn the curve adds a sliver, which winds the same way as the run and can make no hole. On the outside of a
+turn it takes a sliver off, so a run no longer covers its pieces exactly, and the argument above holds only up
+to those slivers. To keep them away from the middle of the stroke, a corner on the outside stays sharp where the
 stroke's own point is not on the far side of the chord the curve replaces. The ends of a run, the wedges and the
-discs are as before.
+discs are as before, so where a run ends there is still a small step.
 
 **What a run costs.** Two segments a point where the stroke is gentle. Seven a point (a four-cornered piece and
 a wedge) where the brush is so much wider than the step between points that the inner side folds at every
@@ -97,7 +99,7 @@ three more runs:
   coverage drawn against the shape's own area.
 - `union [strokes]` replaces each stroke's discs and bands by their true union, made by `i_overlay` 9.1.0, and
   draws the view from that. It is for this trial only, in pixels of one zoom.
-- `picture <file.png>` writes the picture below.
+- `picture <file.png> single|runs` writes the two pictures below.
 
 The browser trial keeps the tiles of the last form it drew as its cache. It used to label that check with the
 third form's name, which was right only while there were three; it now names the last.
@@ -119,7 +121,7 @@ pressure.
 | Single path | 165 | 196 | 346,997 |
 | Runs, cut at a quarter turn | 201 | 301 | 945,380 |
 | Runs, cut at an eighth | 214 | 349 | 1,015,291 |
-| Runs, cut at an eighth, sides smoothed | 259 | 390 | 1,052,764 |
+| Runs, cut at an eighth, sides smoothed | 219 | 363 | 1,046,553 |
 | True union (the trial only; all straight) | 544 | | |
 
 The test corpus is the hard case for runs: its brushes are up to 80 times as wide as the step between points,
@@ -138,15 +140,15 @@ pixel is missing.
 | The scene's | Single path | 0.34% | 0.71% | 0.010%, 106 strokes | 0.001%, 30 strokes |
 | | Runs, quarter turn | 0.16% | 0.43% | 0.011%, 127 strokes | none |
 | | Runs, eighth | 0.16% | 0.40% | 0.004%, 101 strokes | none |
-| | Runs, eighth, smoothed | 0.09% | 0.74% | 0.004%, 101 strokes | none |
+| | Runs, eighth, smoothed | 0.34% | 0.65% | 0.003%, 58 strokes | none |
 | Rough | Single path | 0.27% | 1.08% | 0.114%, 261 strokes | 0.011%, 106 strokes |
 | | Runs, quarter turn | 0.14% | 0.66% | 0.067%, 224 strokes | under 0.0005%, 4 strokes |
 | | Runs, eighth | 0.14% | 0.44% | 0.008%, 121 strokes | none |
-| | Runs, eighth, smoothed | 0.08% | 0.74% | 0.008%, 122 strokes | none |
+| | Runs, eighth, smoothed | 0.27% | 0.65% | 0.006%, 96 strokes | none |
 | Rough, steady pressure | Single path | 0.14% | 0.64% | 0.083%, 196 strokes | 0.008%, 63 strokes |
 | | Runs, quarter turn | 0.10% | 0.38% | 0.050%, 181 strokes | none |
 | | Runs, eighth | 0.10% | 0.19% | none | none |
-| | Runs, eighth, smoothed | 0.03% | 0.36% | none | none |
+| | Runs, eighth, smoothed | 0.14% | 0.31% | none | none |
 
 Reading it:
 
@@ -157,32 +159,57 @@ Reading it:
   put a whole disc on a heavy point and runs do not.
 - **A quarter turn is too loose a limit.** At a turn inside a run the outer edge is short of the round join by up
   to the radius times one minus the cosine of half the turn: 29% of the radius at a quarter turn, 7.6% at an
-  eighth. The table shows it (four rough strokes miss area three tenths inside), and so does the picture.
-- **Smoothing costs about a third of a percent of area** on these strokes, all of it at the edge.
+  eighth. With the taper on top of that, four rough strokes miss area three tenths inside (none does at a steady
+  pressure); the pictures show the corners.
+- **Smoothing moves about a quarter of a percent of area** on these strokes: off the outside of turns and onto
+  the inside, all of it at the edge.
 
 Octagons and bands are left out of this table: the trial builds them with a pressure curve that is only near the
 core's, so their area is not comparable.
 
-### The picture
+### The pictures
 
-![Parts of three rough strokes in five forms](images/3d-forms.png)
+Parts of rough strokes at 8192 pixels a unit, thirty-two times the scene's zoom, drawn by `vello_cpu`
+(`render-trial picture <file.png> single` and `... runs`). In both pictures a row is one stroke, the same part of
+it in every column, and each cell carries its column's number:
 
-Parts of three rough strokes at 4096 pixels a unit, sixteen times the scene's zoom, drawn by `vello_cpu`
-(`render-trial picture`). A row is one stroke. The columns, left to right: discs and bands; the single path;
-runs cut at a quarter turn; runs cut at an eighth; runs cut at an eighth with their sides smoothed. The three
-strokes are those, of the first 300 rough ones, where the single path leaves the longest stretch of the stroke's
-inside uncovered, and each row is centred there.
+| 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|
+| Discs and bands | Single path | Runs, cut at a quarter turn | Runs, cut at an eighth | Runs, cut at an eighth, sides smoothed |
 
-- Column 2, the single path: a hole in the second row and a notch in the third, and its outline departs from the
-  others where the stroke turns back.
-- Column 1, discs and bands: whole, and lumpy, because every point's disc shows where the pressure changes.
-- Column 3, runs cut at a quarter turn: whole, with a spike at the sharp corner of the first row and corners
-  along the others.
-- Column 4, runs cut at an eighth: whole, with straight sides.
-- Column 5, the same smoothed: whole, and as smooth as the single path.
+On this page the pictures are shown at about half their size; opened by themselves they are 1572 pixels wide.
+
+**Where the single path does worst.** The three strokes, of the first 300 rough ones, where the single path
+leaves the longest stretch of the stroke's inside uncovered; each row is centred there.
+
+![Three rough strokes, a row each, in five outline forms, columns numbered 1 to 5: discs and bands, single path, runs cut at a quarter turn, runs cut at an eighth, the same smoothed. Column 2 has a white crescent-shaped hole in the middle of the second row and a white notch at the top of the round end in the third; the other columns are filled there. Column 3 has pointed corners where columns 1, 4 and 5 are round.](images/3d-forms.png)
+
+- Column 2, the single path. Row 2: a crescent-shaped hole in the middle of the cell, where the stroke curls
+  back under itself. Row 3: a notch in the top of the round end at the left. In row 1 its outline is a different
+  shape from the others where the stroke turns back at the left.
+- Column 1, discs and bands: whole. Its edge is lumpy, because the disc of every point shows where the pressure
+  changes.
+- Column 3, runs cut at a quarter turn: whole, with a point where the others are round: the bottom corner in
+  row 1, the bottom of the round end in row 3, and a sawtooth down the left edge in row 2.
+- Column 4, runs cut at an eighth: whole. The points of column 3 are gone (row 1, row 3). Its sides are straight
+  from point to point, and where a run ends its flat end shows as a small step, as on the right-hand edge in
+  row 2.
+- Column 5, the same smoothed: whole, with curved sides on both the outside and the inside of turns. The steps
+  where runs end are still there (the right-hand edge in row 2).
+
+**Where runs do worst.** No stroke in the first picture was chosen against runs. In this one the three strokes
+are those where the smoothed runs (column 5) cover the least of what discs and bands (column 1) cover: 1.7%,
+1.7% and 1.6% less area. Each row is centred on the longest stretch they miss.
+
+![Three more rough strokes in the same five columns. In the first and third rows column 1 has a rounded, bulging edge; columns 3, 4 and 5 follow it with flatter edges that stay inside it, with corners in columns 3 and 4 and curves in column 5. No column has a hole.](images/3d-forms-runs.png)
+
+- Rows 1 and 3 show the taper. Discs and bands (column 1) bulge round each heavy point; runs go straight from
+  one width to the next and stay inside that bulge. The single path (column 2) tapers the same way.
+- Row 2 is a short stroke at its whole size: the forms differ at its turns, and none has a hole.
 
 At the scene's own zoom these strokes are 2 to 6 pixels wide and the forms cannot be told apart by eye, but for
-the holes. Everink zooms without limit, so the magnified look matters.
+the holes. Everink zooms without limit, so the magnified look matters. The pressure in these strokes changes at
+random from point to point; a real pen's changes slowly, and the taper and the lumps would both be milder.
 
 ### Redrawing the whole view, 10,000 strokes
 
@@ -190,29 +217,38 @@ Natively (`render-trial 10000`), the median of five redraws after one that is no
 
 | Form | Segments a stroke | `vello_cpu` | ... a tile | `vello_gpu` (Metal) |
 |---|---|---|---|---|
-| Discs and bands | 1,485 | 398 ms | 9.9 ms | 425 ms |
-| Octagons and bands | 889 | 264 ms | 6.6 ms | 296 ms |
-| Single path | 165 | 61.6 ms | 1.5 ms | 82.5 ms |
-| Runs, quarter turn | 201 | 71.6 ms | 1.8 ms | 93.1 ms |
-| Runs, eighth | 214 | 74.5 ms | 1.9 ms | 98.2 ms |
-| Runs, eighth, smoothed | 259 | 88.0 ms | 2.2 ms | 110 ms |
-| True union (`render-trial union`) | 544 | 128 ms | 3.2 ms | not run |
+| Discs and bands | 1,485 | 393 ms | 9.8 ms | 426 ms |
+| Octagons and bands | 889 | 262 ms | 6.6 ms | 293 ms |
+| Single path | 165 | 61.1 ms | 1.5 ms | 84.8 ms |
+| Runs, quarter turn | 201 | 72.1 ms | 1.8 ms | 92.1 ms |
+| Runs, eighth | 214 | 73.9 ms | 1.8 ms | 95.9 ms |
+| Runs, eighth, smoothed | 219 | 76.2 ms | 1.9 ms | 95.8 ms |
+| True union (`render-trial union`, an earlier session the same day) | 544 | 128 ms | 3.2 ms | not run |
 
 In Chrome 157 on the same machine, the build with WebAssembly SIMD (the web build requires it; owner decision of
 2026-11-13), one session in a fresh window with an empty profile:
 
 | Form | `vello_cpu` | WebGL2 | WebGPU | One tile, `vello_cpu` |
 |---|---|---|---|---|
-| Discs and bands | 536 ms | 540 ms | 538 ms | 13.4 ms |
-| Octagons and bands | 360 ms | 360 ms | 362 ms | 9.0 ms |
-| Single path | 80.6 ms | 77.6 ms | 78.7 ms | 2.0 ms |
-| Runs, quarter turn | 94.5 ms | 91.7 ms | 93.3 ms | 2.4 ms |
-| Runs, eighth | 98.0 ms | 96.6 ms | 97.4 ms | 2.5 ms |
-| Runs, eighth, smoothed | 115 ms | 115 ms | 115 ms | 2.9 ms |
+| Discs and bands | 561 ms | 555 ms | 553 ms | 14.0 ms |
+| Octagons and bands | 366 ms | 366 ms | 385 ms | 9.2 ms |
+| Single path | 83.0 ms | 78.1 ms | 80.5 ms | 2.1 ms |
+| Runs, quarter turn | 96.5 ms | 93.8 ms | 97.9 ms | 2.4 ms |
+| Runs, eighth | 100 ms | 96.4 ms | 103 ms | 2.5 ms |
+| Runs, eighth, smoothed | 101 ms | 98.9 ms | 101 ms | 2.5 ms |
 
-The figures of the three forms measured before agree with part 3c (540, 358 to 363 and 80 to 81 ms there). The panning part of the page was left out of this session (`pan=no`): a first session with it did not finish, most likely because the window was not being shown, and a page that is not shown gets no animation frames. A session earlier the same day, on a busier machine, did run it over the tiles of runs: a median of 16.67 ms between frames on both backends, as in part 3c.
+The three forms measured before are within 4% of part 3c's figures (540, 358 to 363 and 80 to 81 ms there);
+a session an hour earlier, before the smoothing was changed, had them at 536, 360 and 80.6 ms and the two
+straight-sided runs at 94.5 and 98.0 ms. The panning part of the page was left out of these sessions (`pan=no`):
+a session with it did not finish, most likely because the window was not being shown, and a page that is not
+shown gets no animation frames. A session earlier the same day, on a busier machine, did run it over the tiles of
+runs: a median of 16.67 ms between frames on both backends, as in part 3c.
 
-Section 06 budgets 4 ms of processor time a frame for tile raster. One tile of 327 strokes takes 2.0 ms in Chrome as the single path, 2.4 to 2.5 ms as runs with straight sides and 2.9 ms as runs with smoothed sides. So one whole tile of runs fits a 4 ms box where two of the single path's do: 40 frames (0.67 s) to redraw the whole view against 20 (0.33 s), and 135 (2.3 s) for discs and bands. Natively a tile of runs takes 1.8 to 2.2 ms and two fit.
+Section 06 budgets 4 ms of processor time a frame for tile raster. One tile of 327 strokes takes 2.0 to 2.1 ms
+in Chrome as the single path (2.0 in part 3c and in the earlier session, 2.1 in this one) and 2.4 to 2.5 ms as
+runs, of any of the three variants. So one whole tile of runs fits a 4 ms box: 40 frames (0.67 s) to redraw the
+whole view. Two tiles of the single path fit only just, or just do not: 20 frames (0.33 s) if they do. Discs
+and bands take about 140 frames (2.3 s). Natively a tile of runs takes 1.8 to 1.9 ms, and two fit the box.
 
 The three renderers drew the same pixels for every form, as in part 3c: no pixel of the busiest tile differed by
 more than an eighth of full coverage between any two.
@@ -248,13 +284,13 @@ library gives the same bytes on every machine was not looked at.
 
 ## Findings
 
-1. **Runs close the gap slice 3 found.** No holes, by construction and on every stroke tested, at 1.2 (straight sides) to 1.4 (smoothed)
-   times the single path's redraw time natively and the same in Chrome, where discs and bands are at 6.5 and
-   6.6 times.
-2. **The limit on a turn should be an eighth, not a quarter.** It costs 3 ms in 72 natively and removes the spikes
+1. **Runs close the gap slice 3 found.** No holes on any stroke tested (by construction with straight sides; see
+   Finding 3 for smoothed ones), at 1.18 to 1.25 times the single path's redraw time natively and 1.16 to 1.22
+   times in Chrome, where discs and bands are at 6.4 and 6.8 times.
+2. **The limit on a turn should be an eighth, not a quarter.** It costs 2 ms in 72 natively and removes the spikes
    and the area missing inside the stroke.
-3. **Smoothed sides are what make runs look like ink when magnified.** They cost 13.5 ms in 74.5 natively and 17 ms in 98 in Chrome, a little under a fifth. They also
-   weaken the argument for "no holes" from exact to "exact but for slivers at the outside of turns, kept away
+3. **Smoothed sides are what make runs look like ink when magnified.** They cost 2 ms in 74 natively
+   and 1 ms in 100 in Chrome. They also weaken the argument for "no holes" from exact to "exact but for slivers at the outside of turns, kept away
    from the centre line"; the tests check the centre line with the curves followed.
 4. **Runs change the shape of a stroke where the pressure changes.** They taper; discs and bands bulge. Neither
    is what section 06 specifies in so many words: its single path tapers too. If runs are chosen, the taper is
@@ -272,7 +308,8 @@ library gives the same bytes on every machine was not looked at.
 
 - **Real pen strokes.** Every stroke here is a random walk with random pressure. Real strokes are smoother and
   their pressure changes slowly, which favours runs (longer runs, less taper), but that is not measured.
-- **How it looks to a person at ordinary zoom**, beyond the one picture.
+- **How it looks to a person at ordinary zoom.** The two pictures are of six strokes, magnified, chosen as the
+  worst for one form or another.
 - **The live preview.** Section 06 wants the outline built as the stroke grows. A run can grow at its end; that
   entry point is not written.
 - **Other browsers and a slower machine**, as in part 3c.
@@ -296,12 +333,17 @@ single path, with the taper stated as the stroke's shape, and the performance bu
 
 The forms on the table, with what each means:
 
-| Form | Holes | Redraw, natively | In Chrome | Shape and look |
-|---|---|---|---|---|
-| Single path, as designed | yes | 61.6 ms | 80.6 ms | Smooth; holes where a stroke turns back or curls |
-| Discs and bands | none | 398 ms | 536 ms | Exact union; lumpy where pressure changes; drawn 10% heavy at small sizes |
-| Runs, eighth, straight sides | none | 74.5 ms | 98.0 ms | Tapers; straight edges show when magnified |
-| Runs, eighth, smoothed sides | none | 88.0 ms | 115 ms | Tapers; smooth; "no holes" argued up to edge slivers and tested on the centre line |
+| Form | Holes | Redraw, natively | In Chrome | Whole view refilled in Chrome, at 4 ms a frame | Shape and look |
+|---|---|---|---|---|---|
+| Single path, as designed | yes | 61.1 ms | 83.0 ms | 20 frames (0.33 s) if two tiles fit a frame, which at 2.0 to 2.1 ms each they only just do; 40 if not | Smooth; holes where a stroke turns back or curls |
+| Discs and bands | none | 393 ms | 561 ms | about 140 frames (2.3 s) | Exact union; lumpy where pressure changes; drawn 10% heavy at small sizes |
+| Runs, eighth, straight sides | none | 73.9 ms | 100 ms | 40 frames (0.67 s) | Tapers; straight edges and small steps show when magnified |
+| Runs, eighth, smoothed sides | none found | 76.2 ms | 101 ms | 40 frames (0.67 s) | Tapers; curved sides; "no holes" argued up to slivers at the outside of turns and tested on the centre line |
+
+The refill column is what a person would notice after a large zoom change: whole tiles that fit section 06's
+4 ms of tile raster a frame, for a view of 40 tiles of 327 strokes each. One tile of runs fits a
+frame. Two of the single path's fit only if a tile stays at 2.0 ms, so by this measure runs take between the
+same time and twice as long to refill the view, where the redraw times alone say 1.2 times.
 
 ## Kept afterwards
 

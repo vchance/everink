@@ -449,8 +449,8 @@ fn twice_area(polygon: &[LPt]) -> i128 {
 type Boxed = (Vec<LPt>, [i64; 4]);
 
 /// The closed paths of an outline with every curve followed: each quadratic curve as eight chords between
-/// points of the curve itself, in whole numbers. A chord of a curve is on the inner side of it, so a point
-/// inside these polygons is inside the outline.
+/// points of the curve itself, in whole numbers. Where a curve bulges outward its chords are inside it, and where
+/// it bends inward they are outside it by less than a sixty-fourth of the curve's own depth.
 fn fine_paths(outline: &Outline) -> Vec<Boxed> {
     let mut all: Vec<Vec<LPt>> = Vec::new();
     let mut end: Option<LPt> = None;
@@ -488,12 +488,17 @@ fn fine_paths(outline: &Outline) -> Vec<Boxed> {
         .collect()
 }
 
-/// `winding` over the polygons of `fine_paths`. A polygon does not wind round a point outside its box.
+/// `winding` over the polygons of `fine_paths`. A polygon does not wind round a point outside its box. No
+/// polygon may wind the wrong way round the point: one that did would take away what another covers.
 fn fine_winding(polygons: &[Boxed], p: LPt) -> i32 {
     polygons
         .iter()
         .filter(|(_, b)| b[0] <= p.x && p.x <= b[2] && b[1] <= p.y && p.y <= b[3])
-        .map(|(polygon, _)| winding(std::slice::from_ref(polygon), p))
+        .map(|(polygon, _)| {
+            let w = winding(std::slice::from_ref(polygon), p);
+            assert!(w >= 0, "a path winds clockwise round a point");
+            w
+        })
         .sum()
 }
 
@@ -516,7 +521,8 @@ fn runs_are_closed_cover_the_stroke_and_are_light() {
             segments += outline.segs.len();
             let polygons = fine_paths(&outline);
             paths_made += polygons.len();
-            // Every path goes the same way round, so no path takes away what another covers.
+            // Every path goes anticlockwise on the whole. (That no part of one goes the other way round a
+            // point is checked at each point below, in `fine_winding`.)
             for (polygon, _) in &polygons {
                 assert!(twice_area(polygon) > 0, "stroke {i}: a path goes clockwise");
             }
