@@ -6,6 +6,8 @@
 //! switched on, and wasm32. aarch64 always has a fused multiply-add, so the file itself was written where the
 //! compiler could have used one. Rewrite it
 //! only when an outline algorithm is meant to change: `UPDATE_GOLDEN=1 cargo test -p everink-core --test outlines`.
+//! `tests/golden/outlines_runs.txt` is the same for the runs of slice 3d, a trial form, in a file of its own so
+//! that the first is not rewritten for it.
 
 mod common;
 
@@ -15,7 +17,8 @@ use std::path::PathBuf;
 
 use common::Rng;
 use everink_core::outline::{
-    InkPoint, LPt, Outline, OutlineError, STYLE_VERSION, Seg, build, build_single_path,
+    InkPoint, LPt, Outline, OutlineError, STYLE_VERSION, Seg, build, build_runs, build_runs_within,
+    build_single_path,
 };
 
 const STROKES: usize = 1_000;
@@ -363,4 +366,247 @@ fn pressure_sets_the_width() {
         reaches.windows(2).all(|w| w[0] <= w[1]),
         "more pressure is never thinner"
     );
+}
+
+/// The runs as they are tried: cut at a quarter turn, cut at an eighth, and cut at an eighth with the sides
+/// smoothed.
+const RUNS: [(&str, f64, bool); 3] = [
+    ("cut at a quarter turn", 0.0, false),
+    ("cut at an eighth", std::f64::consts::FRAC_1_SQRT_2, false),
+    (
+        "cut at an eighth, sides smoothed",
+        std::f64::consts::FRAC_1_SQRT_2,
+        true,
+    ),
+];
+
+#[test]
+fn runs_match_their_golden_file_byte_for_byte() {
+    let mut built = String::new();
+    writeln!(
+        built,
+        "# everink-core stroke outlines as runs (spike slice 3d), style version {STYLE_VERSION}"
+    )
+    .unwrap();
+    writeln!(
+        built,
+        "# r <stroke> <points>, then <segments> <hash> for the runs {}",
+        RUNS.map(|r| r.0).join("; ")
+    )
+    .unwrap();
+    for (i, (points, width)) in corpus().iter().enumerate() {
+        write!(built, "r {i} {}", points.len()).unwrap();
+        for (_, limit, smooth) in RUNS {
+            let outline = build_runs_within(points, *width, limit, smooth).unwrap();
+            write!(built, " {} {:016x}", outline.segs.len(), hash(&outline)).unwrap();
+        }
+        writeln!(built).unwrap();
+        // `build_runs` is the first of them.
+        assert_eq!(
+            build_runs(points, *width).unwrap().segs,
+            build_runs_within(points, *width, RUNS[0].1, RUNS[0].2)
+                .unwrap()
+                .segs
+        );
+    }
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/outlines_runs.txt");
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "the golden file is never rewritten in CI: a difference between machines is the bug"
+        );
+        std::fs::write(&path, &built).unwrap();
+        return;
+    }
+    let golden = std::fs::read_to_string(&path)
+        .expect("tests/golden/outlines_runs.txt is in the repository");
+    if golden != built {
+        let first = golden
+            .lines()
+            .zip(built.lines())
+            .position(|(a, b)| a != b)
+            .unwrap_or(0);
+        panic!(
+            "runs differ from the golden file, first at line {}:\n  golden: {:?}\n  built:  {:?}",
+            first + 1,
+            golden.lines().nth(first),
+            built.lines().nth(first)
+        );
+    }
+}
+
+/// Twice the area a polygon goes round, anticlockwise counted as positive. Whole numbers only.
+fn twice_area(polygon: &[LPt]) -> i128 {
+    (0..polygon.len())
+        .map(|i| {
+            let (a, b) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+            i128::from(a.x) * i128::from(b.y) - i128::from(b.x) * i128::from(a.y)
+        })
+        .sum()
+}
+
+/// A polygon with the box it lies in: lowest x and y, highest x and y.
+type Boxed = (Vec<LPt>, [i64; 4]);
+
+/// The closed paths of an outline with every curve followed: each quadratic curve as eight chords between
+/// points of the curve itself, in whole numbers. Where a curve bulges outward its chords are inside it, and where
+/// it bends inward they are outside it by less than a sixty-fourth of the curve's own depth.
+fn fine_paths(outline: &Outline) -> Vec<Boxed> {
+    let mut all: Vec<Vec<LPt>> = Vec::new();
+    let mut end: Option<LPt> = None;
+    for seg in &outline.segs {
+        if end != Some(seg.start()) {
+            all.push(Vec::new());
+        }
+        let path = all.last_mut().unwrap();
+        path.push(seg.start());
+        if let Seg::Quad(a, c, b) = seg {
+            for k in 1..8i128 {
+                let at = |a: i64, c: i64, b: i64| {
+                    let sum = (8 - k) * (8 - k) * i128::from(a)
+                        + 2 * k * (8 - k) * i128::from(c)
+                        + k * k * i128::from(b);
+                    i64::try_from(sum / 64).unwrap()
+                };
+                path.push(LPt {
+                    x: at(a.x, c.x, b.x),
+                    y: at(a.y, c.y, b.y),
+                });
+            }
+        }
+        end = Some(seg.end());
+    }
+    all.into_iter()
+        .map(|path| {
+            let bounds = path
+                .iter()
+                .fold([i64::MAX, i64::MAX, i64::MIN, i64::MIN], |b, p| {
+                    [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)]
+                });
+            (path, bounds)
+        })
+        .collect()
+}
+
+/// `winding` over the polygons of `fine_paths`. A polygon does not wind round a point outside its box. No
+/// polygon may wind the wrong way round the point: one that did would take away what another covers.
+fn fine_winding(polygons: &[Boxed], p: LPt) -> i32 {
+    polygons
+        .iter()
+        .filter(|(_, b)| b[0] <= p.x && p.x <= b[2] && b[1] <= p.y && p.y <= b[3])
+        .map(|(polygon, _)| {
+            let w = winding(std::slice::from_ref(polygon), p);
+            assert!(w >= 0, "a path winds clockwise round a point");
+            w
+        })
+        .sum()
+}
+
+#[test]
+fn runs_are_closed_cover_the_stroke_and_are_light() {
+    let corpus = corpus();
+    let full: usize = corpus
+        .iter()
+        .map(|(points, width)| build(points, *width).unwrap().segs.len())
+        .sum();
+    let single: usize = corpus
+        .iter()
+        .map(|(points, width)| build_single_path(points, *width).unwrap().segs.len())
+        .sum();
+    for (name, limit, smooth) in RUNS {
+        let (mut checked, mut segments, mut paths_made) = (0, 0, 0);
+        for (i, (points, width)) in corpus.iter().enumerate() {
+            let outline = build_runs_within(points, *width, limit, smooth).unwrap();
+            closed_and_in_reach(i, points, *width, &outline);
+            segments += outline.segs.len();
+            let polygons = fine_paths(&outline);
+            paths_made += polygons.len();
+            // Every path goes anticlockwise on the whole. (That no part of one goes the other way round a
+            // point is checked at each point below, in `fine_winding`.)
+            for (polygon, _) in &polygons {
+                assert!(twice_area(polygon) > 0, "stroke {i}: a path goes clockwise");
+            }
+            // The points of the stroke, and the middle of the piece after each, are inside the outline.
+            // Every eighth point is checked, and the first and last; unlike the test of `build`, the
+            // curves are followed and not read as their control points.
+            let last = points.len() - 1;
+            for (k, p) in points
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| k % 8 == 0 || *k == last)
+            {
+                let at = LPt {
+                    x: to_outline(p.x),
+                    y: to_outline(p.y),
+                };
+                assert!(
+                    fine_winding(&polygons, at) > 0,
+                    "stroke {i}, runs {name}: point {k} is outside its outline"
+                );
+                if let Some(q) = points.get(k + 1) {
+                    let mid = LPt {
+                        x: (to_outline(p.x) + to_outline(q.x)) / 2,
+                        y: (to_outline(p.y) + to_outline(q.y)) / 2,
+                    };
+                    assert!(
+                        fine_winding(&polygons, mid) > 0,
+                        "stroke {i}, runs {name}: the middle after point {k} is outside its outline"
+                    );
+                }
+                checked += 2;
+            }
+        }
+        println!(
+            "runs {name}: {segments} segments in {paths_made} paths for {STROKES} strokes; discs and bands {full}, the single path {single}"
+        );
+        assert!(checked > 30_000);
+        // The corpus is rough: a sharp turn, a doubling back or a pause about every thirteenth point. Even so
+        // the runs are well under half of discs and bands.
+        assert!(segments * 2 < full, "{segments} against {full}");
+    }
+}
+
+#[test]
+fn runs_handle_the_small_cases() {
+    let at = |x: i32, y: i32| InkPoint {
+        x,
+        y,
+        pressure: 128,
+    };
+    let width = 1 << 16;
+    // One point, and a point given twice: a disc.
+    for points in [vec![at(0, 0)], vec![at(5, 5), at(5, 5)]] {
+        let outline = build_runs(&points, width).unwrap();
+        assert_eq!(paths(&outline).len(), 1);
+        assert_eq!(
+            outline.segs.len(),
+            build(&points, width).unwrap().segs.len()
+        );
+    }
+    // Two points: a disc at each end and one four-cornered run between.
+    let outline = build_runs(&[at(0, 0), at(100_000, 0)], width).unwrap();
+    assert_eq!(paths(&outline).len(), 3);
+    assert_eq!(outline.segs.len(), 16 + 4 + 16);
+    // A straight line of many points is still two discs and one run, two segments a point and two ends.
+    let line: Vec<InkPoint> = (0..50).map(|i| at(i * 10_000, i * 5_000)).collect();
+    let outline = build_runs(&line, width).unwrap();
+    assert_eq!(paths(&outline).len(), 3);
+    assert_eq!(outline.segs.len(), 16 + 2 * 50 + 16);
+    // Straight back: the run ends at the turn, under a disc, and another begins.
+    let outline = build_runs(&[at(0, 0), at(100_000, 0), at(0, 0)], width).unwrap();
+    assert_eq!(paths(&outline).len(), 5);
+    // A gentle curve under a brush far wider than its steps: the inner side folds at every point, so every
+    // piece is a run of its own, and the joints are wedges of three straight edges, not discs.
+    let curl: Vec<InkPoint> = (0..40).map(|i| at(i * 1_000, i * i * 12)).collect();
+    let outline = build_runs(&curl, 40 << 16).unwrap();
+    let curves = outline
+        .segs
+        .iter()
+        .filter(|s| matches!(s, Seg::Quad(..)))
+        .count();
+    assert_eq!(curves, 32, "only the two ends are discs");
+    assert!(outline.segs.len() <= 32 + 7 * 39, "{}", outline.segs.len());
+    // The same errors as `build`.
+    assert_eq!(build_runs(&[], width).err(), build(&[], width).err());
+    assert_eq!(build_runs(&line, 0).err(), build(&line, 0).err());
 }

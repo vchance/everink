@@ -477,7 +477,8 @@ mod webgl {
             let drawn = drawn_share(&alpha);
             keep_alpha(
                 "the canvas composed from the cache on WebGL2",
-                KINDS[2].0,
+                // The cache holds the tiles of the last form drawn.
+                KINDS[KINDS.len() - 1].0,
                 alpha,
             );
             Ok(format!(

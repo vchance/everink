@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use everink_core::Axis;
 use everink_core::cut::{BigPt, cut_quad};
-use everink_core::outline::{InkPoint, build, build_single_path};
+use everink_core::outline::{InkPoint, build, build_runs, build_single_path};
 
 const CURVES: usize = 200;
 const REPEATS: usize = 5;
@@ -154,6 +154,7 @@ fn main() {
     for (name, f) in [
         ("discs and bands (used)", build as fn(&[InkPoint], i32) -> _),
         ("single path (the design's)", build_single_path),
+        ("runs (slice 3d)", build_runs),
     ] {
         let mut times = Vec::with_capacity(2000);
         let mut segs = 0;
