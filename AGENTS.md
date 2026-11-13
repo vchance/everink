@@ -8,8 +8,8 @@ Read, in this order: (1) `.agent-rules/core.md` — the shared standard this rep
 ## This repo
 Everink: an infinite, multi-user drawing surface with one core built natively and to WebAssembly. It is at the
 spike stage: design documents (`docs/`) and the first spike code, a Rust workspace with two crates
-(`crates/everink-core`, `crates/everink-sync`) and four trial packages outside it (`spike/text-trial`,
-`spike/render-trial`, `spike/render-web`, `spike/store-trial`). Nothing is released or published.
+(`crates/everink-core`, `crates/everink-sync`) and five trial packages outside it (`spike/text-trial`,
+`spike/render-trial`, `spike/render-web`, `spike/store-trial`, `spike/controls-trial`). Nothing is released or published.
 The core language is Rust and the first app is a whiteboard (owner decisions, below). `docs/design/README.md` lists
 what is still open; those decisions are the owner's to make.
 
@@ -45,6 +45,11 @@ cargo test --locked --manifest-path spike/store-trial/Cargo.toml    # the storag
 cargo run --release --locked --manifest-path spike/store-trial/Cargo.toml [sizes] [directory]   # its timing run (question 9)
 cargo clippy --manifest-path spike/store-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
 cargo fmt --manifest-path spike/store-trial/Cargo.toml --check      # its format check
+cargo test --locked --manifest-path spike/controls-trial/Cargo.toml   # the controls trial (its own package)
+cargo run --release --locked --manifest-path spike/controls-trial/Cargo.toml --example bench_controls   # frame cost, lines of code (question 12)
+sh spike/controls-trial/size.sh                                     # each candidate's size in a wasm module
+cargo clippy --manifest-path spike/controls-trial/Cargo.toml --all-targets --locked -- -D warnings   # its lint
+cargo fmt --manifest-path spike/controls-trial/Cargo.toml --check   # its format check
 python3 -I .github/scripts/ci-lane.py --self-test                   # the scheduled lane's decision table
 UPDATE_GOLDEN=1 cargo test -p everink-core --test golden            # rewrite the cross-platform golden file
 git config core.hooksPath .githooks   # once per clone: enables the pre-push guard (core R3)
@@ -86,6 +91,10 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
 - `spike/store-trial`: one SQLite file per room (spike slice 5): a log of changes, snapshots in chunks, and the
   room opened from them. Another package of its own with its own `Cargo.lock`. It builds `crates/everink-core`
   and `crates/everink-sync` in, so a change to either runs its CI job (`store-trial`) too.
+- `spike/controls-trial`: the same toolbar and text field built with a small toolkit of Everink's own
+  (`src/own.rs`: `taffy`, `parley`, an AccessKit tree by hand) and with egui (`src/with_egui.rs`), behind one
+  trait and without a window (spike slice 4a). `tests/contract.rs` runs the same tests on both. Another package
+  of its own with its own `Cargo.lock`; it builds nothing of the workspace in.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the workspace, the locked dependencies, the pinned toolchain.
 - `.github/workflows/ci.yml`: product CI. `.github/scripts/ci-changes.sh`: its path-to-job mapping.
   `.github/scripts/ci-lane.py`: what the hourly run does (`--self-test` checks its decision table).
@@ -124,6 +133,10 @@ product job, its name in `PRODUCT_JOBS` in `.github/scripts/ci-lane.py`.
   sizes and needs about 4 GB of memory for the largest; it removes the files it made when it ends, and nothing else in that directory. On macOS
   `synchronous=FULL` does not make the drive write its cache out; only the `fullfsync=ON` rows are a durable
   commit there. Take its figures on a machine that is doing nothing else.
+- `spike/controls-trial` chooses nothing: the controls toolkit is the owner's decision. Its tests hold both
+  candidates to the same behaviour; when one fails after a version change, the library changed, and
+  `docs/spike/results-4a-controls.md` is where to say so. On a machine with no fonts the own toolkit measures
+  text by a fixed width a character, so its layout differs there; the tests do not depend on it.
 - `docs/landscape.md` is dated research. Re-check a claim before relying on it, and update the date when you do.
 
 ## Repository additions

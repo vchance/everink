@@ -1,0 +1,51 @@
+# The controls trial of spike slice 4a. A package of its own, outside the workspace, so that the two candidate
+# toolkits and what they bring in never enter the main build or the workspace's lock file. Nothing here is a
+# decision: the controls toolkit is the owner's to choose (AGENTS.md > Owner decisions).
+[package]
+name = "controls-trial"
+version = "0.0.0"
+description = "Everink spike: the same toolbar and text field built with a small toolkit of Everink's own and with egui."
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+# `egui` is the toolkit alone; `egui-fonts` adds the fonts it ships (about 1 MB), without which it draws no text.
+# The tests and the timing run use the fonts; the size run measures both.
+default = ["own", "egui-fonts"]
+own = ["dep:taffy", "dep:parley"]
+egui = ["dep:egui"]
+egui-fonts = ["egui", "egui/default_fonts"]
+
+[dependencies]
+accesskit = "=0.25.2"
+taffy = { version = "=0.15.1", optional = true }
+parley = { version = "=0.12.0", optional = true }
+egui = { version = "=0.37.0", optional = true }
+
+# The tests and the timing run compare the two, so they need both. The size probe builds with either or none.
+[[test]]
+name = "contract"
+required-features = ["own", "egui-fonts"]
+
+[[example]]
+name = "bench_controls"
+required-features = ["own", "egui-fonts"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# The size build: `--profile small`.
+[profile.small]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

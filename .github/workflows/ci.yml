@@ -28,6 +28,7 @@ jobs:
       text: ${{ steps.select.outputs.text }}
       render: ${{ steps.select.outputs.render }}
       store: ${{ steps.select.outputs.store }}
+      controls: ${{ steps.select.outputs.controls }}
       all: ${{ steps.select.outputs.all }}
       carry_failure: ${{ steps.select.outputs.carry_failure }}
     steps:
@@ -188,9 +189,40 @@ jobs:
       - name: Timing run at 10,000 and 100,000 strokes (no thresholds; the room opened must be the room written)
         run: cargo run --release --locked --manifest-path "$MANIFEST" 10000,100000
 
+  # The controls trial (spike slice 4a): a package outside the workspace, with the two candidate toolkits (egui;
+  # taffy and parley for Everink's own). It runs when the trial or the toolchain changes, and on the full runs.
+  # Nothing here opens a window; a screen reader and a real keyboard are for a person (part 4b).
+  controls-trial:
+    name: controls-trial
+    needs: [changes]
+    if: ${{ needs.changes.outputs.all == 'true' || needs.changes.outputs.controls == 'true' }}
+    runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
+    timeout-minutes: 20
+    env:
+      MANIFEST: spike/controls-trial/Cargo.toml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Format check
+        run: cargo fmt --manifest-path "$MANIFEST" --check
+      - name: Clippy with both candidates, with each alone and with neither (warnings are errors)
+        run: |
+          cargo clippy --manifest-path "$MANIFEST" --all-targets --locked -- -D warnings
+          for features in "" own egui; do
+            cargo clippy --manifest-path "$MANIFEST" --all-targets --locked --no-default-features --features "$features" -- -D warnings
+          done
+      - name: Tests (the same ten for both candidates)
+        run: cargo test --manifest-path "$MANIFEST" --locked
+      - name: Frame cost and lines of code (no thresholds)
+        run: cargo run --release --locked --manifest-path "$MANIFEST" --example bench_controls
+      - name: Size of each candidate in a WebAssembly module
+        run: sh spike/controls-trial/size.sh
+
   ci-result:
     name: ci-result
-    needs: [changes, lint, test, text-trial, render-trial, store-trial]
+    needs: [changes, lint, test, text-trial, render-trial, store-trial, controls-trial]
     if: ${{ always() }}
     runs-on: ubuntu-24.04   # public repository: GitHub-hosted (PROFILE `public: GitHub-hosted`, core D9)
     timeout-minutes: 2
