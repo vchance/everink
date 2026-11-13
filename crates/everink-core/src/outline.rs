@@ -380,3 +380,224 @@ pub fn build_single_path(points: &[InkPoint], base_width: i32) -> Result<Outline
     smooth_closed(&corners, &mut segs);
     Ok(Outline { segs })
 }
+
+/// One cross-cut of a run: the corner on the left of the centre line and the corner on the right.
+#[derive(Clone, Copy)]
+struct Cross {
+    left: V,
+    right: V,
+}
+
+/// Whether the piece between two cross-cuts is a convex quadrilateral going anticlockwise (right side forward,
+/// left side back). Worked out on the lattice in whole numbers, so the answer is exact and the same everywhere.
+fn piece_is_sound(from: Cross, to: Cross) -> bool {
+    let p = [
+        lattice(from.right),
+        lattice(to.right),
+        lattice(to.left),
+        lattice(from.left),
+    ];
+    (0..4).all(|i| {
+        let (a, b, c) = (p[i], p[(i + 1) % 4], p[(i + 2) % 4]);
+        let (ux, uy) = (i128::from(b.x - a.x), i128::from(b.y - a.y));
+        let (vx, vy) = (i128::from(c.x - b.x), i128::from(c.y - b.y));
+        ux * vy - uy * vx > 0
+    })
+}
+
+/// Fills the gap two cross-cuts of one point leave on the outside of the turn between them: the triangle of the
+/// point and their two outer corners, anticlockwise. Which side is the outer one is read from the lattice.
+fn wedge(p: V, before: Cross, after: Cross, segs: &mut Vec<Seg>) {
+    let c = lattice(p);
+    for (a, b) in [(before.right, after.right), (after.left, before.left)] {
+        let (a, b) = (lattice(a), lattice(b));
+        let (ux, uy) = (i128::from(a.x - c.x), i128::from(a.y - c.y));
+        let (vx, vy) = (i128::from(b.x - c.x), i128::from(b.y - c.y));
+        if ux * vy - uy * vx > 0 {
+            segs.extend([Seg::Line(c, a), Seg::Line(a, b), Seg::Line(b, c)]);
+        }
+    }
+}
+
+/// Builds the outline of a stroke as runs: a lighter form of `build` that also has no holes.
+///
+/// A run is a stretch of the stroke outlined as one closed path with straight edges: one corner on each side at
+/// every point, on the normal of the two pieces that meet there, as in the single path of the design. Between
+/// two points the path encloses one four-cornered piece. A run goes on only while every piece is sound
+/// (`piece_is_sound`) and the stroke turns by less than the limit; where it would not be, the run ends flat and
+/// a new one begins, square to its first piece. Where the turn between the two is under the limit, a `wedge`
+/// fills the gap on its outside; at any other turn, and on the stroke's two ends, there is a disc as in `build`.
+///
+/// A run's path is the sum of the edges of its pieces (the cross-cuts between them cancel), so it winds once
+/// round every point of every piece, and never the other way. The wedges and the discs go the same way round.
+/// So the non-zero rule leaves no hole, for the reason it leaves none in `build`. A gentle stretch costs two
+/// straight segments a point, and seven where the brush is so wide that the inner side folds at every point;
+/// `build` costs twenty, sixteen of them curves.
+///
+/// What it gives up: at a turn inside a run, and at a wedge, the outer edge is a chord of the round join
+/// `build` draws there. The edge is short of the true one by at most the radius times one minus the cosine of
+/// half the turn: 29% at the quarter turn this function allows. And where the pressure changes, the width
+/// between two points is a straight taper; the disc `build` puts on the heavier point is not there.
+pub fn build_runs(points: &[InkPoint], base_width: i32) -> Result<Outline, OutlineError> {
+    build_runs_within(points, base_width, 0.0, false)
+}
+
+/// Twice the area of the triangle `a`, `b`, `c`: above zero where they go anticlockwise. Whole numbers.
+fn turn(a: LPt, b: LPt, c: LPt) -> i128 {
+    let (ux, uy) = (i128::from(b.x - a.x), i128::from(b.y - a.y));
+    let (vx, vy) = (i128::from(c.x - a.x), i128::from(c.y - a.y));
+    ux * vy - uy * vx
+}
+
+/// `build_runs` with the limit on a turn given as its cosine: a turn is gentle while the directions of the two
+/// pieces have a dot product above `min_cos`. Zero is a quarter turn; `FRAC_1_SQRT_2` is an eighth, where the
+/// edge is short by at most 7.6% of the radius.
+///
+/// With `smooth`, the two sides of a run are curves, as the single path's are: at each corner inside a run the
+/// path goes from the middle of one edge to the middle of the next with the corner as control point. That takes
+/// a sliver off the outside of each turn and adds one on the inside, so a run no longer covers its pieces
+/// exactly; a corner is left sharp where the sliver would reach the stroke's own point, so the centre line
+/// stays covered. The ends of a run, the wedges and the bands across stay straight.
+pub fn build_runs_within(
+    points: &[InkPoint],
+    base_width: i32,
+    min_cos: f64,
+    smooth: bool,
+) -> Result<Outline, OutlineError> {
+    let centre = centre_line(points, base_width)?;
+    let n = centre.len();
+    let mut segs = Vec::with_capacity(n * 3 + 32);
+    let mut corners: Vec<V> = Vec::with_capacity(16);
+    let mut emit_disc = |i: usize, segs: &mut Vec<Seg>| {
+        corners.clear();
+        disc(centre[i].0, centre[i].1, &mut corners);
+        smooth_closed(&corners, segs);
+    };
+    emit_disc(0, &mut segs);
+    if n == 1 {
+        return Ok(Outline { segs });
+    }
+    let dirs: Vec<V> = centre
+        .windows(2)
+        .map(|w| w[1].0.sub(w[0].0).unit().expect("two different points"))
+        .collect();
+    // The cross-cut at point `i` square to a direction, and the one on the normal of two pieces taken together.
+    let plain = |i: usize, d: V| {
+        let (p, r) = centre[i];
+        let m = d.left().scale(r);
+        Cross {
+            left: p.add(m),
+            right: p.sub(m),
+        }
+    };
+    let mitre = |i: usize| {
+        let (p, r) = centre[i];
+        let (na, nb) = (dirs[i - 1].left(), dirs[i].left());
+        let m = na.add(nb).unit().unwrap_or(na).scale(r);
+        Cross {
+            left: p.add(m),
+            right: p.sub(m),
+        }
+    };
+    // Closes the run, whose first cross-cut is at point `first`, as one path, anticlockwise like the discs: the
+    // right side forward, the left side back.
+    let close = |run: &[Cross], first: usize, segs: &mut Vec<Seg>| {
+        let m = run.len();
+        if m < 2 {
+            return;
+        }
+        // The corners in order, each with the stroke's point it belongs to if it may be rounded: one inside
+        // the run, not one of the four at its ends.
+        let corner = |t: usize| {
+            let i = if t < m { t } else { 2 * m - 1 - t };
+            let at = if t < m { run[i].right } else { run[i].left };
+            (
+                at,
+                (smooth && i > 0 && i + 1 < m).then(|| centre[first + i].0),
+            )
+        };
+        let mid = |a: V, b: V| V {
+            x: (a.x + b.x) / 2.0,
+            y: (a.y + b.y) / 2.0,
+        };
+        let start = lattice(corner(0).0);
+        let mut from = start;
+        for t in 1..2 * m {
+            let (at, point) = corner(t);
+            let to = lattice(at);
+            // Rounded only if the stroke's point is on the far side of the chord from the corner: the
+            // sliver the curve cuts off is on the corner's side, so it cannot reach the centre line.
+            let rounded = point.and_then(|p| {
+                let enter = lattice(mid(corner(t - 1).0, at));
+                let leave = lattice(mid(at, corner((t + 1) % (2 * m)).0));
+                let (c, p) = (turn(enter, leave, to), turn(enter, leave, lattice(p)));
+                ((c > 0 && p < 0) || (c < 0 && p > 0)).then_some((enter, leave))
+            });
+            if let Some((enter, leave)) = rounded {
+                if enter != from {
+                    segs.push(Seg::Line(from, enter));
+                }
+                segs.push(Seg::Quad(enter, to, leave));
+                from = leave;
+            } else if to != from {
+                segs.push(Seg::Line(from, to));
+                from = to;
+            }
+        }
+        if from != start {
+            segs.push(Seg::Line(from, start));
+        }
+    };
+
+    let mut first = 0usize;
+    let mut run: Vec<Cross> = vec![plain(0, dirs[0])];
+    for j in 0..n - 1 {
+        let k = j + 1;
+        let gentle = k < n - 1 && dirs[j].dot(dirs[k]) > min_cos;
+        let square = plain(k, dirs[j]);
+        let mut from = *run.last().expect("a run has a cross-cut");
+        // The leaning cross-cut at `k`, where the turn there is gentle; and it again, if the piece up to it
+        // is sound.
+        let lean = gentle.then(|| mitre(k));
+        let mut on = lean.filter(|m| piece_is_sound(from, *m));
+        if run.len() >= 2 && on.is_none() && !piece_is_sound(from, square) {
+            // Nothing sound follows the run's last cross-cut, which leans with the gentle turn at `j` (under
+            // a wide brush its inner corner is already past this piece). End the run there and begin again,
+            // square to this piece, with a wedge between the two.
+            close(&run, first, &mut segs);
+            let begin = plain(j, dirs[j]);
+            wedge(centre[j].0, from, begin, &mut segs);
+            from = begin;
+            run.clear();
+            run.push(from);
+            first = j;
+            on = lean.filter(|m| piece_is_sound(from, *m));
+        }
+        if let Some(m) = on {
+            run.push(m);
+            continue;
+        }
+        // The run ends at `k`, flat. A piece too small to be sound on the lattice is left out, and a disc is
+        // put on each of its ends.
+        let whole = piece_is_sound(from, square);
+        if whole {
+            run.push(square);
+        } else {
+            emit_disc(j, &mut segs);
+        }
+        close(&run, first, &mut segs);
+        if k < n - 1 {
+            let begin = plain(k, dirs[k]);
+            if gentle && whole {
+                wedge(centre[k].0, square, begin, &mut segs);
+            } else {
+                emit_disc(k, &mut segs);
+            }
+            run.clear();
+            run.push(begin);
+            first = k;
+        }
+    }
+    emit_disc(n - 1, &mut segs);
+    Ok(Outline { segs })
+}

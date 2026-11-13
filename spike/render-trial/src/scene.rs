@@ -4,20 +4,32 @@
 
 use std::f64::consts::FRAC_1_SQRT_2;
 
-use everink_core::outline::{InkPoint, Outline, Seg, build, build_single_path};
+use everink_core::outline::{
+    InkPoint, Outline, Seg, build, build_runs, build_runs_within, build_single_path,
+};
 use vello_common::kurbo::{BezPath, Point, Rect, Shape};
 use vello_common::peniko::Color;
 
 pub const VIEW: (u32, u32) = (3840, 2160);
 pub const TILE: u16 = 512;
 
-/// The three forms of outline, with the names the runs print.
-pub const KINDS: [(&str, Kind); 3] = [
+/// The forms of outline, with the names the runs print. The first is what the others are compared with, and
+/// the browser trial keeps the tiles of the last as its cache.
+pub const KINDS: [(&str, Kind); 6] = [
     ("discs and bands (slice 3a's builder)", Kind::DiscsAndBands),
     ("octagons and bands (this trial only)", Kind::Octagons),
     (
         "single path (the design's, which leaves holes)",
         Kind::SinglePath,
+    ),
+    ("runs, cut at a quarter turn (slice 3d)", Kind::Runs),
+    (
+        "runs, cut at an eighth of a turn (slice 3d)",
+        Kind::RunsEighth,
+    ),
+    (
+        "runs, cut at an eighth of a turn, sides smoothed (slice 3d)",
+        Kind::RunsSmooth,
     ),
 ];
 
@@ -78,6 +90,13 @@ pub enum Kind {
     DiscsAndBands,
     /// `everink_core::outline::build_single_path`: the design's one path, which leaves holes.
     SinglePath,
+    /// `everink_core::outline::build_runs`: one straight-edged path for each stretch that turns gently, and a
+    /// disc where one ends. No holes.
+    Runs,
+    /// The same with a run ended at an eighth of a turn and not a quarter.
+    RunsEighth,
+    /// That with the sides of each run smoothed, as the single path's are.
+    RunsSmooth,
     /// For this trial only: the same union with straight edges, an octagon at every point and a band between.
     /// It is built in plain floats here, so it is a figure for the renderer's cost and not a builder to keep.
     Octagons,
@@ -133,48 +152,80 @@ fn octagons(points: &[InkPoint], width: i32, scale: f64, at: (f64, f64)) -> BezP
     path
 }
 
-/// A scene of pen strokes: each a random walk of 30 to 120 points, about 60 to 250 pixels long, 2 to 6 pixels
-/// wide, somewhere in the view.
+/// One stroke of the scene before it is outlined.
+struct Stroke {
+    points: Vec<InkPoint>,
+    width: i32,
+    at: (f64, f64),
+    colour: u64,
+}
+
+/// A pen stroke: a random walk of 30 to 120 points, about 60 to 250 pixels long at 256 pixels a unit, 2 to 6
+/// pixels wide, somewhere in the view. A rough one also turns sharply, doubles back or pauses at about one
+/// point in fifteen, as the corpus of the core's tests does. (A stroke that is not rough draws the same numbers
+/// as it did before roughness was added, so the scene of slices 3b and 3c is unchanged.)
+fn stroke(rng: &mut Rng, rough: bool) -> Stroke {
+    let n = 30 + rng.below(91) as usize;
+    let (mut x, mut y) = (0i32, 0i32);
+    let (mut dx, mut dy) = (rng.below(801) as i32 - 400, rng.below(801) as i32 - 400);
+    let points: Vec<InkPoint> = (0..n)
+        .map(|_| {
+            if rough && rng.below(15) == 0 {
+                (dx, dy) = match rng.below(4) {
+                    0 => (-dx, -dy),                   // straight back
+                    1 => (-dy, dx),                    // a right angle
+                    2 => (-dx + dy / 8, -dy - dx / 8), // a hairpin
+                    _ => (0, 0),                       // a pause
+                };
+            }
+            dx = (dx + rng.below(201) as i32 - 100).clamp(-600, 600);
+            dy = (dy + rng.below(201) as i32 - 100).clamp(-600, 600);
+            x += dx;
+            y += dy;
+            InkPoint {
+                x,
+                y,
+                pressure: 120 + rng.below(100) as u8,
+            }
+        })
+        .collect();
+    // A point lattice unit is 2^-16 of an object unit; 400 of them a sample is 0.006 units. At 256
+    // pixels a unit a sample moves about 1.5 pixels and the stroke is 2 to 6 pixels wide.
+    let width = ((2 + rng.below(5)) as i32) << 8; // 2 to 6 pixels at 256 pixels a unit
+    let at = (
+        rng.below(u64::from(VIEW.0)) as f64,
+        rng.below(u64::from(VIEW.1)) as f64,
+    );
+    Stroke {
+        points,
+        width,
+        at,
+        colour: rng.next(),
+    }
+}
+
+/// The outline of a stroke in one of the forms, as a path at `scale` pixels a unit, moved to `at`.
+fn outlined(kind: Kind, points: &[InkPoint], width: i32, scale: f64, at: (f64, f64)) -> BezPath {
+    let outline = match kind {
+        Kind::DiscsAndBands => build(points, width),
+        Kind::SinglePath => build_single_path(points, width),
+        Kind::Runs => build_runs(points, width),
+        Kind::RunsEighth => build_runs_within(points, width, FRAC_1_SQRT_2, false),
+        Kind::RunsSmooth => build_runs_within(points, width, FRAC_1_SQRT_2, true),
+        Kind::Octagons => return octagons(points, width, scale, at),
+    };
+    to_path(&outline.expect("a stroke"), scale, at)
+}
+
+/// A scene of pen strokes spread over the view, at 256 pixels a unit.
 pub fn scene(objects: usize, kind: Kind) -> Vec<Object> {
     let mut rng = Rng(7);
     (0..objects)
         .map(|_| {
-            let n = 30 + rng.below(91) as usize;
-            let (mut x, mut y) = (0i32, 0i32);
-            let (mut dx, mut dy) = (rng.below(801) as i32 - 400, rng.below(801) as i32 - 400);
-            let points: Vec<InkPoint> = (0..n)
-                .map(|_| {
-                    dx = (dx + rng.below(201) as i32 - 100).clamp(-600, 600);
-                    dy = (dy + rng.below(201) as i32 - 100).clamp(-600, 600);
-                    x += dx;
-                    y += dy;
-                    InkPoint {
-                        x,
-                        y,
-                        pressure: 120 + rng.below(100) as u8,
-                    }
-                })
-                .collect();
-            // A point lattice unit is 2^-16 of an object unit; 400 of them a sample is 0.006 units. At 256
-            // pixels a unit a sample moves about 1.5 pixels and the stroke is 2 to 6 pixels wide.
-            let width = ((2 + rng.below(5)) as i32) << 8; // 2 to 6 pixels at 256 pixels a unit
-            let at = (
-                rng.below(u64::from(VIEW.0)) as f64,
-                rng.below(u64::from(VIEW.1)) as f64,
-            );
-            let path = match kind {
-                Kind::DiscsAndBands => {
-                    to_path(&build(&points, width).expect("a stroke"), 256.0, at)
-                }
-                Kind::SinglePath => to_path(
-                    &build_single_path(&points, width).expect("a stroke"),
-                    256.0,
-                    at,
-                ),
-                Kind::Octagons => octagons(&points, width, 256.0, at),
-            };
+            let s = stroke(&mut rng, false);
+            let path = outlined(kind, &s.points, s.width, 256.0, s.at);
             let bounds = path.bounding_box();
-            let c = rng.next();
+            let c = s.colour;
             Object {
                 segments: path.segments().count(),
                 path,
@@ -186,6 +237,29 @@ pub fn scene(objects: usize, kind: Kind) -> Vec<Object> {
                     255,
                 ),
             }
+        })
+        .collect()
+}
+
+/// The same strokes one by one, each at the origin, for comparing what two forms of outline cover. `share` is
+/// the brush's width in hundredths of the stroke's own: under 100 the stroke is built thinner. A steady stroke
+/// has one pressure all along; the scene's changes at random from point to point, which no pen does.
+#[allow(dead_code)] // the browser trial builds this file in and does not compare the forms
+pub fn lone_strokes(
+    count: usize,
+    kind: Kind,
+    scale: f64,
+    (rough, steady): (bool, bool),
+    share: i32,
+) -> Vec<BezPath> {
+    let mut rng = Rng(7);
+    (0..count)
+        .map(|_| {
+            let mut s = stroke(&mut rng, rough);
+            if steady {
+                s.points.iter_mut().for_each(|p| p.pressure = 170);
+            }
+            outlined(kind, &s.points, s.width * share / 100, scale, (0.0, 0.0))
         })
         .collect()
 }

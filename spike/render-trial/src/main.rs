@@ -1,6 +1,12 @@
 //! Spike question 10, native part: does the renderer carry the load?
 //!
 //! `cargo run --release --manifest-path spike/render-trial/Cargo.toml [objects]` (default 10,000).
+//! `cargo run --release --manifest-path spike/render-trial/Cargo.toml coverage [strokes]` (default 300) compares
+//! what each form of outline covers with what discs and bands cover (slice 3d).
+//! `cargo run --release --manifest-path spike/render-trial/Cargo.toml union [strokes]` (default 10,000) replaces
+//! each stroke's discs and bands by their true union, made by a polygon-clipping library, and draws that.
+//! `cargo run --release --manifest-path spike/render-trial/Cargo.toml picture <file.png>` draws parts of three
+//! rough strokes in four of the forms, side by side.
 //!
 //! A scene of stroke outlines (built by `everink-core`) is spread over a 3840 x 2160 view and drawn the way
 //! section 06 has it drawn: in tiles of 512 x 512 pixels, each tile a scene of the objects that touch it, rendered
@@ -9,7 +15,10 @@
 
 use std::time::Instant;
 
-use vello_common::kurbo::Affine;
+use i_overlay::core::fill_rule::FillRule;
+use i_overlay::float::simplify::SimplifyShape;
+use vello_common::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, flatten};
+use vello_common::peniko::Color;
 use vello_common::pixmap::Pixmap;
 
 mod scene;
@@ -250,7 +259,362 @@ fn drawn_share(alpha: &[u8]) -> f64 {
     alpha.iter().filter(|a| **a != 0).count() as f64 / alpha.len() as f64
 }
 
+/// One path alone, filled, as the alpha of a pixmap that holds `bounds`.
+fn alone(path: &BezPath, bounds: Rect) -> Vec<u8> {
+    let (w, h) = (bounds.width() as u16, bounds.height() as u16);
+    let mut ctx = vello_cpu::RenderContext::new(w, h);
+    let mut resources = vello_cpu::Resources::new();
+    let mut pixmap = Pixmap::new(w, h);
+    ctx.set_transform(Affine::translate((-bounds.x0, -bounds.y0)));
+    ctx.set_paint(Color::from_rgba8(0, 0, 0, 255));
+    ctx.fill_path(path);
+    ctx.flush();
+    ctx.render(&mut pixmap, &mut resources);
+    pixmap
+        .data_as_u8_slice()
+        .chunks_exact(4)
+        .map(|p| p[3])
+        .collect()
+}
+
+/// How many sample rows a pixel has in `rows`.
+const ROWS_A_PIXEL: f64 = 8.0;
+
+/// Where the edges of a path cross each sample row: for every row, the crossings as (x, +1 going down or -1
+/// going up). The path is flattened to a thousandth of a pixel first. Row `i` is at `y0 + (i + 0.5) / 8`.
+fn rows(path: &BezPath, y0: f64, count: usize) -> Vec<Vec<(f64, i32)>> {
+    let mut rows = vec![Vec::new(); count];
+    let (mut start, mut at) = (Point::ZERO, Point::ZERO);
+    let mut edge = |a: Point, b: Point| {
+        if a.y == b.y {
+            return;
+        }
+        let (top, bottom, way) = if a.y < b.y { (a, b, 1) } else { (b, a, -1) };
+        // The rows whose line is at or below the top end and above the bottom end.
+        let first = ((top.y - y0) * ROWS_A_PIXEL - 0.5).ceil().max(0.0) as usize;
+        let end = (((bottom.y - y0) * ROWS_A_PIXEL - 0.5).ceil().max(0.0) as usize).min(count);
+        for (i, row) in rows.iter_mut().enumerate().take(end).skip(first) {
+            let y = y0 + (i as f64 + 0.5) / ROWS_A_PIXEL;
+            row.push((
+                top.x + (bottom.x - top.x) * (y - top.y) / (bottom.y - top.y),
+                way,
+            ));
+        }
+    };
+    flatten(path, 0.001, |el| match el {
+        PathEl::MoveTo(p) => {
+            edge(at, start);
+            (start, at) = (p, p);
+        }
+        PathEl::LineTo(p) => {
+            edge(at, p);
+            at = p;
+        }
+        PathEl::ClosePath => {
+            edge(at, start);
+            at = start;
+        }
+        _ => unreachable!("a flattened path has only lines"),
+    });
+    edge(at, start);
+    rows
+}
+
+/// The areas of two paths along the sample rows, in pixels: of the first, of the second, of what the first
+/// covers and the second does not, and of what the second covers and the first does not. A point is covered
+/// where the non-zero rule says so; no renderer is used.
+fn areas(a: &BezPath, b: &BezPath) -> [f64; 4] {
+    let bounds = a
+        .bounding_box()
+        .union(b.bounding_box())
+        .inflate(2.0, 2.0)
+        .expand();
+    let count = (bounds.height() * ROWS_A_PIXEL) as usize;
+    let (ra, rb) = (rows(a, bounds.y0, count), rows(b, bounds.y0, count));
+    let mut sum = [0.0f64; 4];
+    for (xa, xb) in ra.iter().zip(&rb) {
+        // Sweep the row: the winding of each path between one crossing and the next.
+        let mut all: Vec<(f64, usize, i32)> = xa
+            .iter()
+            .map(|c| (c.0, 0, c.1))
+            .chain(xb.iter().map(|c| (c.0, 1, c.1)))
+            .collect();
+        all.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap());
+        let mut w = [0i32; 2];
+        let mut from = 0.0f64;
+        for (x, which, way) in all {
+            let len = (x - from) / ROWS_A_PIXEL;
+            for (k, inside) in [
+                w[0] != 0,
+                w[1] != 0,
+                w[0] != 0 && w[1] == 0,
+                w[0] == 0 && w[1] != 0,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if inside {
+                    sum[k] += len;
+                }
+            }
+            w[which] += way;
+            from = x;
+        }
+        assert_eq!(w, [0, 0], "a row ends outside both paths");
+    }
+    sum
+}
+
+/// What each form of outline covers, against discs and bands, stroke by stroke (`areas`). A form may be a
+/// little short of the reference at its edge without having a hole, so each is also held against the reference
+/// built a tenth and three tenths thinner: what is missing of those is missing well inside the stroke.
+/// Then how heavily `vello_cpu` draws each form: the coverage it gives a stroke drawn alone, over the form's
+/// own area.
+fn coverage(count: usize) {
+    println!(
+        "\n== what each form covers, against discs and bands: {count} strokes, one at a time, at 256 pixels a unit =="
+    );
+    for (label, rough) in [
+        ("the scene's strokes", (false, false)),
+        ("rough strokes", (true, false)),
+        ("rough strokes at a steady pressure", (true, true)),
+    ] {
+        let reference = scene::lone_strokes(count, KINDS[0].1, 256.0, rough, 100);
+        let thinner =
+            [90, 70].map(|share| scene::lone_strokes(count, KINDS[0].1, 256.0, rough, share));
+        for (name, kind) in KINDS {
+            let paths = scene::lone_strokes(count, kind, 256.0, rough, 100);
+            let (mut area, mut own, mut missing, mut extra) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let mut inside = [(0.0f64, 0.0f64, 0usize); 2];
+            let (mut segments, mut drawn, mut drawn_big) = (0usize, 0.0f64, 0.0f64);
+            for (i, (a, b)) in reference.iter().zip(&paths).enumerate() {
+                segments += b.segments().count();
+                let s = areas(a, b);
+                area += s[0];
+                own += s[1];
+                missing += s[2];
+                extra += s[3];
+                for (thin, sums) in thinner.iter().zip(&mut inside) {
+                    let s = areas(&thin[i], b);
+                    sums.0 += s[0];
+                    sums.1 += s[2];
+                    // A thousandth of a square pixel: more than the flattening can account for.
+                    sums.2 += usize::from(s[2] > 0.001);
+                }
+                let sum = |alpha: Vec<u8>| alpha.iter().map(|v| f64::from(*v) / 255.0).sum::<f64>();
+                let bounds = b.bounding_box().inflate(2.0, 2.0).expand();
+                drawn += sum(alone(b, bounds));
+                // The same stroke eight times as large, in pixels of this zoom.
+                let big = Affine::scale(8.0) * b.clone();
+                let big_bounds = big.bounding_box().inflate(2.0, 2.0).expand();
+                drawn_big += sum(alone(&big, big_bounds)) / 64.0;
+            }
+            println!(
+                "{label}; {name}: {} segments a stroke; covers {:.2}% of the reference's area more and {:.2}% less; of the reference a tenth thinner {:.3}% is missing, in {} strokes; of it three tenths thinner {:.3}%, in {} strokes; drawn by vello_cpu at {:.1}% of its own area, and at {:.1}% eight times as large",
+                segments / count,
+                extra * 100.0 / area,
+                missing * 100.0 / area,
+                inside[0].1 * 100.0 / inside[0].0,
+                inside[0].2,
+                inside[1].1 * 100.0 / inside[1].0,
+                inside[1].2,
+                drawn * 100.0 / own,
+                drawn_big * 100.0 / own,
+            );
+        }
+    }
+}
+
+/// The true union of a path's parts as one outline: the path flattened to a hundredth of a pixel and its
+/// overlaps removed by `i_overlay`. For this trial only, in pixels of one zoom: a figure for what a union costs
+/// to make and to draw, not a builder to keep.
+fn union_of(path: &BezPath) -> BezPath {
+    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
+    flatten(path, 0.01, |el| match el {
+        PathEl::MoveTo(p) => contours.push(vec![[p.x, p.y]]),
+        PathEl::LineTo(p) => contours
+            .last_mut()
+            .expect("a path begins with a move")
+            .push([p.x, p.y]),
+        PathEl::ClosePath => {}
+        _ => unreachable!("a flattened path has only lines"),
+    });
+    let mut out = BezPath::new();
+    for contour in contours.simplify_shape(FillRule::NonZero).iter().flatten() {
+        let mut points = contour.iter().map(|p| Point::new(p[0], p[1]));
+        if let Some(first) = points.next() {
+            out.move_to(first);
+            points.for_each(|p| out.line_to(p));
+            out.close_path();
+        }
+    }
+    out
+}
+
+/// The scene with every stroke's discs and bands replaced by their true union: how long the unions take to
+/// make, how many segments they have, whether they cover what discs and bands cover, and how long `vello_cpu`
+/// takes to draw the view from them.
+fn union(count: usize) {
+    let mut objects = scene(count, KINDS[0].1);
+    let before: usize = objects.iter().map(|o| o.segments).sum();
+    let (mut area, mut missing, mut extra, mut holes) = (0.0f64, 0.0f64, 0.0f64, 0usize);
+    let mut took = 0.0f64;
+    for (i, object) in objects.iter_mut().enumerate() {
+        let t = Instant::now();
+        let joined = union_of(&object.path);
+        took += t.elapsed().as_secs_f64() * 1e3;
+        // The first few hundred are held against what they were made from.
+        if i < 300 {
+            let s = areas(&object.path, &joined);
+            area += s[0];
+            missing += s[2];
+            extra += s[3];
+        }
+        let contours = joined
+            .elements()
+            .iter()
+            .filter(|el| matches!(el, PathEl::MoveTo(_)))
+            .count();
+        holes += contours.saturating_sub(1);
+        object.segments = joined.segments().count();
+        object.path = joined;
+    }
+    let segments: usize = objects.iter().map(|o| o.segments).sum();
+    println!(
+        "\n== {count} strokes, each the true union of its discs and bands (this trial only, by i_overlay) =="
+    );
+    println!(
+        "making the unions: {took:.0} ms in all, {:.0} us a stroke; {} segments a stroke, all straight, from {}; {holes} contours in all beyond one for each stroke",
+        took * 1e3 / count as f64,
+        segments / count,
+        before / count
+    );
+    println!(
+        "against discs and bands, over the first 300 strokes: covers {:.3}% of the area more and {:.3}% less",
+        extra * 100.0 / area,
+        missing * 100.0 / area
+    );
+    let tiles = buckets(&objects);
+    let check = (0..tiles.len())
+        .max_by_key(|i| tiles[*i].1.len())
+        .expect("a view has tiles");
+    let (runs, alpha) = cpu_tiles(&objects, &tiles, check);
+    let total: Vec<f64> = runs[1..].iter().map(|r| r[0] + r[1]).collect();
+    let (med, min, max) = spread(total);
+    println!(
+        "vello_cpu: whole view {med:7.1} ms (min {min:.1}, max {max:.1}); {:.2} ms a tile; {:.0}% of the busiest tile drawn on",
+        med / tiles.len() as f64,
+        drawn_share(&alpha) * 100.0
+    );
+}
+
+/// The middle of the longest stretch along a sample row that the first path covers and the second does not.
+fn worst_gap(a: &BezPath, b: &BezPath) -> (f64, Point) {
+    let bounds = a
+        .bounding_box()
+        .union(b.bounding_box())
+        .inflate(2.0, 2.0)
+        .expand();
+    let count = (bounds.height() * ROWS_A_PIXEL) as usize;
+    let (ra, rb) = (rows(a, bounds.y0, count), rows(b, bounds.y0, count));
+    let mut worst = (0.0f64, bounds.center());
+    for (row, (xa, xb)) in ra.iter().zip(&rb).enumerate() {
+        let mut all: Vec<(f64, usize, i32)> = xa
+            .iter()
+            .map(|c| (c.0, 0, c.1))
+            .chain(xb.iter().map(|c| (c.0, 1, c.1)))
+            .collect();
+        all.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap());
+        let mut w = [0i32; 2];
+        let mut from = 0.0f64;
+        for (x, which, way) in all {
+            if w[0] != 0 && w[1] == 0 && x - from > worst.0 {
+                let y = bounds.y0 + (row as f64 + 0.5) / ROWS_A_PIXEL;
+                worst = (x - from, Point::new((x + from) / 2.0, y));
+            }
+            w[which] += way;
+            from = x;
+        }
+    }
+    worst
+}
+
+/// A picture of the forms side by side, as a PNG: parts of three rough strokes, a row each, drawn by `vello_cpu`
+/// at 4096 pixels a unit (sixteen times the scene's zoom) as discs and bands, as the single path, and as runs
+/// cut at a quarter turn, at an eighth, and at an eighth with their sides smoothed. The three are the strokes, of the first 300, where the single path
+/// leaves the longest stretch of the stroke's inside uncovered, and each row is centred on that stretch.
+fn picture(out: &str) {
+    const CELL: usize = 300;
+    const GAP: usize = 12;
+    const ROWS: usize = 3;
+    let rough = (true, false);
+    let forms = [KINDS[0].1, KINDS[2].1, KINDS[3].1, KINDS[4].1, KINDS[5].1];
+    let paths = forms.map(|kind| scene::lone_strokes(300, kind, 4096.0, rough, 100));
+    let inside = scene::lone_strokes(300, KINDS[0].1, 4096.0, rough, 70);
+    let mut ranked: Vec<(f64, Point, usize)> = (0..300)
+        .map(|i| {
+            let (gap, at) = worst_gap(&inside[i], &paths[1][i]);
+            (gap, at, i)
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    let (w, h) = (
+        forms.len() * CELL + (forms.len() + 1) * GAP,
+        ROWS * CELL + (ROWS + 1) * GAP,
+    );
+    // Light grey between the cells, white in them, and the stroke in one dark colour by its coverage.
+    let mut pixels = vec![[226u8, 228, 232, 255]; w * h];
+    for (row, (_, at, i)) in ranked.iter().take(ROWS).enumerate() {
+        let half = CELL as f64 / 2.0;
+        // On whole pixels, so that the window is a cell wide exactly.
+        let (cx, cy) = (at.x.floor(), at.y.floor());
+        let window = Rect::new(cx - half, cy - half, cx + half, cy + half);
+        for (col, form) in paths.iter().enumerate() {
+            let alpha = alone(&form[*i], window);
+            assert_eq!(alpha.len(), CELL * CELL);
+            let (x0, y0) = (GAP + col * (CELL + GAP), GAP + row * (CELL + GAP));
+            for (k, a) in alpha.iter().enumerate() {
+                let a = u32::from(*a);
+                let mix = |ink: u32| ((ink * a + 255 * (255 - a)) / 255) as u8;
+                pixels[(y0 + k / CELL) * w + x0 + k % CELL] = [mix(24), mix(40), mix(72), 255];
+            }
+        }
+    }
+    let file = std::fs::File::create(out).expect("the picture's file can be made");
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(pixels.as_flattened()))
+        .expect("the picture is written");
+    println!(
+        "{out}: parts of rough strokes {:?} of the first 300, one a row; columns: discs and bands, the single path, runs cut at a quarter turn, runs cut at an eighth, runs cut at an eighth with their sides smoothed",
+        ranked.iter().take(ROWS).map(|r| r.2).collect::<Vec<_>>()
+    );
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("picture") {
+        picture(&std::env::args().nth(2).expect("picture <file.png>"));
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("union") {
+        let count = std::env::args()
+            .nth(2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10_000);
+        union(count);
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("coverage") {
+        let count = std::env::args()
+            .nth(2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300);
+        coverage(count);
+        return;
+    }
     let count: usize = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
