@@ -425,6 +425,8 @@ fn the_small_cases() {
     let line: Vec<InkPoint> = (0..50).map(|i| at(i * 10_000, i * 5_000)).collect();
     let outline = build(&line, width).unwrap();
     assert_eq!(paths(&outline).len(), 3);
+    // Its corners are in line, so none is rounded: two segments a point and the run's two ends.
+    assert_eq!(outline.segs.len(), 16 + 2 * 50 + 16);
     // Straight back: the run ends at the turn, under a disc, and another begins.
     let outline = build(&[at(0, 0), at(100_000, 0), at(0, 0)], width).unwrap();
     assert_eq!(paths(&outline).len(), 5);

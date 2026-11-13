@@ -306,8 +306,9 @@ fn turn(a: LPt, b: LPt, c: LPt) -> i128 {
 }
 
 /// A turn is gentle while the directions of the two pieces that meet have a dot product above this: the cosine
-/// of an eighth of a turn. At a gentle turn the outer edge is a chord of the round join, short of it by at most
-/// the radius times one minus the cosine of half the turn: 7.6% of the radius.
+/// of an eighth of a turn. At a gentle turn the outer corner is on the round join and the straight edges to it
+/// are chords, short of it by at most the radius times one minus the cosine of half the turn: 7.6% of the
+/// radius. (That is before the sides are smoothed; see `build` for what the smoothing takes off.)
 const GENTLE_COS: f64 = FRAC_1_SQRT_2;
 
 /// Builds the outline of a stroke. `base_width` is the brush's full width in 16.16 fixed point object units.
@@ -326,9 +327,11 @@ const GENTLE_COS: f64 = FRAC_1_SQRT_2;
 /// corner inside a run the path goes from the middle of one edge to the middle of the next with the corner as
 /// control point. On the inside of a turn that adds a sliver, which winds the same way and can make no hole. On
 /// the outside it takes a sliver off, so a run covers its pieces only up to those slivers; a corner there is
-/// left sharp where the sliver would reach the stroke's own point, so the centre line stays covered. The ends
-/// of a run, the wedges and the discs are not smoothed, so a small notch is left in the edge where one run ends
-/// and the next begins.
+/// left sharp where the sliver would reach the stroke's own point, so the centre line stays covered. That is
+/// the only limit on it: where the steps are long against the width, the smoothed edge at a turn can be as
+/// little as about half a radius from the point. The four corners at a run's ends and the wedges are not
+/// smoothed (the discs are curves anyway), so a small notch is left in the edge where one run ends and the next
+/// begins.
 ///
 /// The shape: where the pressure changes, the width between two points is a straight taper. A gentle stretch
 /// costs two segments a point, and seven where the brush is so wide that the inner side folds at every point.

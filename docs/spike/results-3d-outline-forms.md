@@ -329,6 +329,12 @@ library gives the same bytes on every machine was not looked at.
   entry point is not written.
 - **Other browsers and a slower machine**, as in part 3c.
 - **Sub-pixel and very large strokes**, and strokes cut by the eraser.
+- **How far smoothing pulls the edge in at a turn.** Found in review after the owner's choice, and not in the
+  tables above: the 7.6% is for straight sides. With smoothed sides the curve at an outer corner passes halfway
+  between the corner and the chord of its two neighbouring edge midpoints, so on a thin stroke with long steps
+  the edge at a turn can come in much further: 44% of the radius at a 40 degree turn between steps of five
+  radii, and up to about half the radius before the guard stops it. The single path does the same. On the
+  trial's strokes, whose steps are about as long as the stroke is wide, the area figures above include it.
 - **A proof for the smoothed variant.** The argument is given above with its limit; the test covers the centre
   line of 1,000 rough strokes at every eighth point, not every point of every stroke.
 
